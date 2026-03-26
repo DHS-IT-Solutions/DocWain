@@ -1,0 +1,20 @@
+{
+  "_deprecated": "This manifest is superseded by teams-app/manifest.json (v1.16). Use that file for packaging and deployment.",
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.1.0",
+  "id": "fd5d5c9d-12b9-441f-b72f-4e94a50da1af",
+  "packageName": "ai.docwain.app",
+  "name": { "short": "DocWain", "full": "DocWain AI Assistant" },
+  "description": { "short": "Deprecated. See teams-app/manifest.json.", "full": "Deprecated. See teams-app/manifest.json." },
+  "icons": { "color": "color.png", "outline": "outline.png" },
+  "accentColor": "#1487c9",
+  "bots": [],
+  "validDomains": [],
+  "developer": {
+    "name": "DocWain",
+    "websiteUrl": "https://www.docwain.ai",
+    "privacyUrl": "https://www.docwain.ai/privacy",
+    "termsOfUseUrl": "https://www.docwain.ai/terms"
+  }
+}
