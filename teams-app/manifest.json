@@ -1,0 +1,62 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "2.9.0",
+  "id": "384893f8-3cd6-4b9d-bdfe-038c64387a43",
+  "developer": {
+    "name": "DocWain",
+    "websiteUrl": "https://www.docwain.ai",
+    "privacyUrl": "https://www.docwain.ai/privacy",
+    "termsOfUseUrl": "https://www.docwain.ai/terms"
+  },
+  "name": {
+    "short": "DocWain",
+    "full": "DocWain AI Assistant"
+  },
+  "description": {
+    "short": "Ask questions and upload documents to DocWain directly from Teams.",
+    "full": "DocWain connects your Teams workspace to DocWain's document AI so you can upload files, train them, and ask questions in personal, group, or team chats."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#1487c9",
+  "bots": [
+    {
+      "botId": "384893f8-3cd6-4b9d-bdfe-038c64387a43",
+      "scopes": [
+        "personal",
+        "team"
+      ],
+      "supportsFiles": true,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": [
+            "personal",
+            "team"
+          ],
+          "commands": [
+            {
+              "title": "Ask",
+              "description": "Ask a question about your documents."
+            },
+            {
+              "title": "Upload",
+              "description": "Upload a file and make it searchable."
+            },
+            {
+              "title": "Help",
+              "description": "Get usage tips and available commands."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "validDomains": [
+    "www.docwain.ai",
+    "dhs-docwain-api.azure-api.net"
+  ]
+}
