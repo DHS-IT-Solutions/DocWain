@@ -3071,10 +3071,16 @@ def _normalize_intent_hint(value: Optional[str]) -> Optional[str]:
     normalized = str(value).strip().lower()
     if normalized in {"summary", "contact", "rank", "compare", "candidate_list"}:
         return normalized
+    if normalized in {"ranking", "rate", "order", "sort"}:
+        return "rank"
+    if normalized in {"comparison", "versus", "contrast"}:
+        return "compare"
     if normalized in {"list", "listing"}:
         return "candidate_list"
     if normalized in {"qa", "answer", "facts", "factual"}:
         return "factual"
+    if normalized in {"cross_document", "aggregate", "across"}:
+        return "facts"
     return None
 
 def _split_list(text: str) -> List[str]:

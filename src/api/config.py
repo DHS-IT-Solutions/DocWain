@@ -4,7 +4,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_REDIS_CONNECTION_STRING = os.getenv(
+try:
+    from src.vault.vault import get_secret as _secret
+except ImportError:
+    _secret = lambda key, default="": os.getenv(key, default)
+
+DEFAULT_REDIS_CONNECTION_STRING = _secret(
     "REDIS_CONNECTION_STRING",
     "",
 )
@@ -57,12 +62,12 @@ class Config:
 
     class Qdrant:
         URL = os.getenv("QDRANT_URL", "")
-        API = os.getenv("QDRANT_API_KEY", "")
+        API = _secret("QDRANT_API_KEY", "")
 
     class Neo4j:
         URI = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
         USER = os.getenv("NEO4J_USER", "neo4j")
-        PASSWORD = os.getenv("NEO4J_PASSWORD", "")
+        PASSWORD = _secret("NEO4J_PASSWORD", "")
         DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
     class KnowledgeGraph:
@@ -90,7 +95,7 @@ class Config:
         VERIFY_CONFIDENCE_THRESHOLD = float(os.getenv("DWX_VERIFY_CONFIDENCE_THRESHOLD", "0.8"))
 
     class Gemini:
-        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+        GEMINI_API_KEY = _secret("GEMINI_API_KEY", "")
         # GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta
 
     class Model:
@@ -106,11 +111,11 @@ class Config:
         RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
         OCR_ENGINE = os.getenv("OCR_ENGINE", "pytesseract")
         AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-        AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+        AZURE_OPENAI_API_KEY = _secret("AZURE_OPENAI_API_KEY", "")
         AZURE_DEPLOYMENT_NAME = os.getenv("AZURE_DEPLOYMENT_NAME", "")
         AZURE_VERSION = os.getenv("AZURE_OPENAI_VERSION", "")
         # ✅ Gemini 2.5 Flash configs
-        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+        GEMINI_API_KEY = _secret("GEMINI_API_KEY", "")
         # GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
         GEMINI_MODEL_NAME = "gemini-2.5-flash"
         HF_HUB_READ_TIMEOUT = int(os.getenv("HF_HUB_READ_TIMEOUT", "30"))
@@ -134,16 +139,16 @@ class Config:
         AZURE_RESOURCE_GROUP = os.getenv("AZURE_RESOURCE_GROUP", "rg-docwain-dev")
         AZURE_PROJECT_NAME = os.getenv("AZURE_PROJECT_NAME", "dhs-ai-competency")
         AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT", "")
-        AZURE_AI_KEY = os.getenv("AZURE_AI_KEY", "")
+        AZURE_AI_KEY = _secret("AZURE_AI_KEY", "")
 
     class AzureGpt4o:
         AZUREGPT4O_ENDPOINT = os.getenv("AZUREGPT4O_ENDPOINT", "")
         AZUREGPT4O_DEPLOYMENT = os.getenv("AZUREGPT4O_DEPLOYMENT", "dw-dev1-gpt-4o")
-        AZUREGPT4O_API_KEY = os.getenv("AZUREGPT4O_API_KEY", "")
+        AZUREGPT4O_API_KEY = _secret("AZUREGPT4O_API_KEY", "")
         AZUREGPT4O_Version = os.getenv("AZUREGPT4O_VERSION", "2024-05-01-preview")
 
     class MongoDB:
-        DEFAULT_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+        DEFAULT_URI = _secret("MONGODB_URI", "mongodb://localhost:27017")
         URI = DEFAULT_URI
         FALLBACK_URI = os.getenv("MONGODB_FALLBACK_URI", "mongodb://localhost:27017")
         DB = os.getenv("MONGODB_DB", 'test')
@@ -155,18 +160,18 @@ class Config:
         SUBSCRIPTIONS = os.getenv("MONGODB_SUBSCRIPTIONS_COLLECTION", "subscriptions")
 
     class Encryption:
-        ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
+        ENCRYPTION_KEY = _secret("ENCRYPTION_KEY", "")
 
     class AWS:
         PROFILE = os.getenv("AWS_PROFILE", "DHS")
-        ACCESS_KEY = os.getenv("AWS_ACCESS_KEY", "")
-        SECRET_KEY = os.getenv("AWS_SECRET_KEY", "")
+        ACCESS_KEY = _secret("AWS_ACCESS_KEY", "")
+        SECRET_KEY = _secret("AWS_SECRET_KEY", "")
         REGION = os.getenv("AWS_REGION", "eu-west-2")
         BUCKET_NAME = os.getenv("AWS_BUCKET_NAME", "docwain-chat-history")
 
     class AzureBlob:
-        CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
-        AZURE_BLOB_KEY = os.getenv("AZURE_BLOB_KEY", "")
+        CONNECTION_STRING = _secret("AZURE_STORAGE_CONNECTION_STRING", "")
+        AZURE_BLOB_KEY = _secret("AZURE_BLOB_KEY", "")
         AZURE_BLOB_ACCOUNT_NAME = os.getenv("AZURE_BLOB_ACCOUNT_NAME", "docwainuploads")
         CONTAINER_NAME = os.getenv("AZURE_BLOB_CONTAINER_NAME", "chat-history")
         DOCUMENT_CONTAINER_NAME = os.getenv("AZURE_BLOB_DOCUMENT_CONTAINER", "document-content")
@@ -183,7 +188,7 @@ class Config:
         CONNECTION_STRING = DEFAULT_REDIS_CONNECTION_STRING
         HOST = os.getenv("REDIS_HOST", "localhost")
         PORT = int(os.getenv("REDIS_PORT", "6380"))
-        PASSWORD = os.getenv("REDIS_PASSWORD", "")
+        PASSWORD = _secret("REDIS_PASSWORD", "")
         DB = int(os.getenv("REDIS_DB", "0"))
         SSL = os.getenv("REDIS_SSL", "true").lower() in {"1", "true", "yes", "on"}
         ABORT_CONNECT = False
@@ -193,14 +198,14 @@ class Config:
         CLEAR_MAX_KEYS = int(os.getenv("REDIS_CLEAR_MAX_KEYS", "5000"))
 
     class Teams:
-        SHARED_SECRET = os.getenv("TEAMS_SHARED_SECRET", "")
+        SHARED_SECRET = _secret("TEAMS_SHARED_SECRET", "")
         SIGNATURE_ENABLED = os.getenv("TEAMS_SIGNATURE_ENABLED", "false").lower() == "true"
         DEFAULT_PROFILE = os.getenv("TEAMS_DEFAULT_PROFILE", "default")
         DEFAULT_SUBSCRIPTION = os.getenv("TEAMS_DEFAULT_SUBSCRIPTION") or "15e0c724-4de0-492e-9861-9e637b3f9076"
         DEFAULT_MODEL = os.getenv("TEAMS_DEFAULT_MODEL", "DHS/DocWain")
         DEFAULT_PERSONA = os.getenv("TEAMS_DEFAULT_PERSONA", "Document Assistant")
         UPLOAD_DIR = os.getenv("TEAMS_UPLOAD_DIR", "/tmp")
-        BLOB_CONNECTION_STRING = os.getenv("TEAMS_BLOB_CONNECTION_STRING", "")
+        BLOB_CONNECTION_STRING = _secret("TEAMS_BLOB_CONNECTION_STRING", "")
         BLOB_CONTAINER = os.getenv("TEAMS_BLOB_CONTAINER", "local-uploads")
         BLOB_PATH_PREFIX = os.getenv("TEAMS_BLOB_PATH_PREFIX", "teams")
         SESSION_AS_SUBSCRIPTION = os.getenv("TEAMS_SESSION_AS_SUBSCRIPTION", "true").lower() == "true"
@@ -208,10 +213,10 @@ class Config:
         MAX_ATTACHMENT_MB = int(os.getenv("TEAMS_MAX_ATTACHMENT_MB", "50"))
         HTTP_TIMEOUT_SEC = float(os.getenv("TEAMS_HTTP_TIMEOUT_SEC", "20"))
         HTTP_RETRIES = int(os.getenv("TEAMS_HTTP_RETRIES", "2"))
-        BOT_ACCESS_TOKEN = os.getenv("TEAMS_BOT_ACCESS_TOKEN", "")
+        BOT_ACCESS_TOKEN = _secret("TEAMS_BOT_ACCESS_TOKEN", "")
         # Support common Azure Bot env var spellings; defaults intentionally blank to force explicit configuration
         BOT_APP_ID = os.getenv("MICROSOFT_APP_ID")
-        BOT_APP_PASSWORD = os.getenv("MICROSOFT_APP_PASSWORD") or os.getenv("MICROSOFT_APP_PWD")
+        BOT_APP_PASSWORD = _secret("MICROSOFT_APP_PASSWORD") or _secret("MICROSOFT_APP_PWD")
         BOT_APP_TENANT_ID = os.getenv("MICROSOFT_APP_TENANT_ID") or os.getenv("MSA_APP_TENANT_ID")
         BOT_APP_TYPE = os.getenv("MICROSOFT_APP_TYPE", "SingleTenant")  # SingleTenant | MultiTenant | UserAssignedMSI
         WEB_APP_URL = os.getenv("DOCWAIN_WEB_URL", os.getenv("TEAMS_WEB_APP_URL", "https://www.docwain.ai"))
@@ -341,7 +346,7 @@ class Config:
         ENABLED = os.getenv("VLLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         ENDPOINT = os.getenv("VLLM_ENDPOINT", "http://localhost:8001/v1/chat/completions")
         MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen3-14B-AWQ")
-        API_KEY = os.getenv("VLLM_API_KEY", "")
+        API_KEY = _secret("VLLM_API_KEY", "")
         TIMEOUT = float(os.getenv("VLLM_TIMEOUT", "30"))
 
     class DocumentProfiler:
@@ -434,7 +439,7 @@ class Config:
         AGENT_TIMEOUT_S = int(os.getenv("FINETUNE_AGENT_TIMEOUT_S", "900"))
         AGENT_FALLBACK_TO_LEGACY = os.getenv("FINETUNE_AGENT_FALLBACK_TO_LEGACY", "true").lower() == "true"
         OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        OLLAMA_API = os.getenv("OLLAMA_API", "")
+        OLLAMA_API = _secret("OLLAMA_API", "")
 
     class Evolve:
         ENABLED = os.getenv("EVOLVE_ENABLED", "false").lower() == "true"
@@ -469,7 +474,7 @@ class Config:
     class WebSearch:
         ENABLED = os.getenv("WEB_SEARCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         ENGINE = os.getenv("WEB_SEARCH_ENGINE", "duckduckgo")
-        TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+        TAVILY_API_KEY = _secret("TAVILY_API_KEY", "")
         MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
         TIMEOUT = float(os.getenv("WEB_SEARCH_TIMEOUT", "30.0"))
         MAX_URL_FETCH_CHARS = int(os.getenv("WEB_SEARCH_MAX_URL_FETCH_CHARS", "6000"))
@@ -496,12 +501,12 @@ class Config:
     class CloudLLM:
         ENABLED = os.getenv("DOCWAIN_CLOUD_LLM_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-        AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+        AZURE_OPENAI_API_KEY = _secret("AZURE_OPENAI_API_KEY", "")
         AZURE_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
         AZURE_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
-        CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+        CLAUDE_API_KEY = _secret("CLAUDE_API_KEY", "")
         CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
-        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+        GEMINI_API_KEY = _secret("GEMINI_API_KEY", "")
         COMPLEXITY_THRESHOLD_T2 = float(os.getenv("CLOUD_THRESHOLD_T2", "0.4"))
         COMPLEXITY_THRESHOLD_T3 = float(os.getenv("CLOUD_THRESHOLD_T3", "0.7"))
         CIRCUIT_BREAKER_FAILURES = int(os.getenv("CLOUD_CIRCUIT_BREAKER_FAILURES", "3"))
@@ -591,4 +596,4 @@ class Config:
         SHAREPOINT_ENABLED = os.getenv("DOCWAIN_SHAREPOINT_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
         SHAREPOINT_TENANT_ID = os.getenv("DOCWAIN_SHAREPOINT_TENANT_ID", "")
         SHAREPOINT_CLIENT_ID = os.getenv("DOCWAIN_SHAREPOINT_CLIENT_ID", "")
-        SHAREPOINT_CLIENT_SECRET = os.getenv("DOCWAIN_SHAREPOINT_CLIENT_SECRET", "")
+        SHAREPOINT_CLIENT_SECRET = _secret("DOCWAIN_SHAREPOINT_CLIENT_SECRET", "")

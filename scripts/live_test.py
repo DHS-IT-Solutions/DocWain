@@ -12,15 +12,15 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 BASE_URL = "http://localhost:8000"
-# Collection 67fde0754e36c00b14cea7f5: HR profile (18 resumes, 100 chunks) + medical profile
-SUBSCRIPTION_ID = "67fde0754e36c00b14cea7f5"
-PROFILE_ID = "6994620d6034385742e45abe"  # HR profile with 18 resumes
-MEDICAL_PROFILE_ID = "699467806034385742e45b9f"  # Medical + invoice profile
-# Collection 67fde0754e36c00b14cea7f5: invoice profile (24 invoices: INV, PO, QUT)
-INVOICE_SUBSCRIPTION_ID = "67fde0754e36c00b14cea7f5"
-INVOICE_PROFILE_ID = "699c8f9c1aed615c51b0a4dc"  # 24 invoices, vendors: WADE, PERRY, DUNCAN
-# Insurance profile
-INSURANCE_PROFILE_ID = "6995a20b2f85f720e96fa486"  # 2 docs: car + bike insurance
+# HR resume profiles — verified against Qdrant embeddings 2026-03-26
+SUBSCRIPTION_ID = "67e6920588f8ff4644d2dfb1"
+PROFILE_ID = "69babd2d92d3364cc477d1ed"  # "Recruit" — 20 resumes, 174 chunks
+# Invoice profile
+INVOICE_SUBSCRIPTION_ID = "67e6920588f8ff4644d2dfb1"
+INVOICE_PROFILE_ID = "69bd2c345f03e6f10885f9ed"  # "INV" — 10 invoice PDFs, 135 chunks
+# Legal/Contract profile
+CONTRACT_SUBSCRIPTION_ID = "67fde0754e36c00b14cea7f5"
+CONTRACT_PROFILE_ID = "69c2b3017525343b065a49d2"  # "Contract" — 33 legal docs, 441 chunks
 TIMEOUT = 300.0
 
 # --------------------------------------------------------------------------
@@ -78,22 +78,24 @@ QUERIES: List[Dict[str, Any]] = [
         "expect": ["education", "candidate"],
         "domain": "hr",
     },
-    # ── Medical queries (small profile, fast) ─────────────────────
+    # ── Legal/Contract queries (Contract profile, 441 chunks) ────
     {
-        "id": "MED-1",
-        "query": "What are the patient diagnoses?",
-        "tools": ["medical"],
-        "expect": ["patient", "diagnos"],
-        "domain": "medical",
-        "profile_id": MEDICAL_PROFILE_ID,
+        "id": "LEG-1",
+        "query": "What are the key payment terms in the contracts?",
+        "tools": None,
+        "expect": ["payment", "term"],
+        "domain": "legal",
+        "profile_id": CONTRACT_PROFILE_ID,
+        "subscription_id": CONTRACT_SUBSCRIPTION_ID,
     },
     {
-        "id": "MED-2",
-        "query": "List all medications prescribed across all patient records",
-        "tools": ["medical"],
-        "expect": ["medication"],
-        "domain": "medical",
-        "profile_id": MEDICAL_PROFILE_ID,
+        "id": "LEG-2",
+        "query": "What liability clauses are present across the contracts?",
+        "tools": None,
+        "expect": ["liabilit", "clause"],
+        "domain": "legal",
+        "profile_id": CONTRACT_PROFILE_ID,
+        "subscription_id": CONTRACT_SUBSCRIPTION_ID,
     },
     # ── Invoice queries (small profile) ───────────────────────────
     {
@@ -114,22 +116,24 @@ QUERIES: List[Dict[str, Any]] = [
         "profile_id": INVOICE_PROFILE_ID,
         "subscription_id": INVOICE_SUBSCRIPTION_ID,
     },
-    # ── Insurance/Policy queries ────────────────────────────────────
+    # ── Contract comparison queries ─────────────────────────────────
     {
-        "id": "INS-POL-1",
-        "query": "What is covered under the car insurance policy?",
+        "id": "CON-1",
+        "query": "What are the termination conditions in the contracts?",
         "tools": None,
-        "expect": ["cover", "car"],
-        "domain": "insurance",
-        "profile_id": INSURANCE_PROFILE_ID,
+        "expect": ["terminat", "contract"],
+        "domain": "legal",
+        "profile_id": CONTRACT_PROFILE_ID,
+        "subscription_id": CONTRACT_SUBSCRIPTION_ID,
     },
     {
-        "id": "INS-POL-2",
-        "query": "Compare the car and bike insurance policies",
+        "id": "CON-2",
+        "query": "Compare the indemnification clauses across contracts",
         "tools": None,
-        "expect": ["car", "bike"],
-        "domain": "insurance",
-        "profile_id": INSURANCE_PROFILE_ID,
+        "expect": ["indemnif", "contract"],
+        "domain": "legal",
+        "profile_id": CONTRACT_PROFILE_ID,
+        "subscription_id": CONTRACT_SUBSCRIPTION_ID,
     },
     # ── No-tool factual query ─────────────────────────────────────
     {
