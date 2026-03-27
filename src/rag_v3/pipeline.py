@@ -269,11 +269,16 @@ _ENTITY_HINT_STOP_PHRASES = frozenset({
     "premium", "monthly premium", "premium amount",
     "deductible", "copay", "copayment",
     "beneficiary", "policyholder", "insured",
-    "candidate", "applicant", "employee", "employer",
+    "candidate", "candidates", "applicant", "employee", "employer",
     "contract", "agreement", "terms and conditions",
     "total", "amount", "balance", "due date", "expiry date",
     "diagnosis", "treatment", "medication", "prescription",
     "document", "file", "report", "summary", "information",
+    # Resume/HR field names — query concepts, not entity names
+    "education", "education level", "qualification", "degree",
+    "skill", "skills", "experience", "certification", "certifications",
+    "programming", "programming languages", "languages", "technologies",
+    "resume", "resumes", "profile", "profiles",
     # Generic business/org nouns — not entity names for scoping
     "company", "organization", "department", "team", "project",
     "revenue", "profit", "budget", "cost", "price",
@@ -2080,10 +2085,80 @@ def _run_all_profile_analysis(
     # extraction groups by doc_id anyway.  Bi-encoder scores from Qdrant
     # are sufficient for per-document chunk selection.
     _CHUNKS_PER_DOC = 5
+    # Query-aware chunk selection: detect which section(s) the query targets
+    # (e.g., "education", "skills_technical") and ensure chunks from those
+    # sections are included per document.  Without this, the top-5-by-score
+    # selection (where score=0.0 for scrolled chunks) is arbitrary and may
+    # exclude the exact sections the query asks about.
+    from .retrieve import _infer_query_section_kind
+    _target_section = _infer_query_section_kind(query)
+    # Also detect broader section keywords for cross-document queries
+    # that ask about specific attributes (e.g., "programming languages")
+    _ql_ap = (query or "").lower()
+    _extra_sections: set = set()
+    if _target_section:
+        _extra_sections.add(_target_section)
+    # "programming languages" -> skills_technical
+    if any(kw in _ql_ap for kw in ("programming", "language", "languages", "technologies", "tech stack")):
+        _extra_sections.add("skills_technical")
+        _extra_sections.add("skills")
+    if any(kw in _ql_ap for kw in ("education", "degree", "university", "academic", "qualification")):
+        _extra_sections.add("education")
     quality_chunks: List[Chunk] = []
     for _doc_id, _doc_chunk_list in doc_chunks.items():
-        _doc_chunk_list.sort(key=lambda c: -c.score)
-        quality_chunks.extend(_doc_chunk_list[:_CHUNKS_PER_DOC])
+        if _extra_sections:
+            # Split into section-matching and other chunks
+            _section_matched = []
+            _section_other = []
+            # Build content-matching keywords from target sections
+            _SECTION_CONTENT_KEYWORDS = {
+                "education": {"education", "degree", "university", "bachelor", "master",
+                              "phd", "diploma", "academic", "b.tech", "m.tech", "b.e.", "m.e."},
+                "skills_technical": {"python", "java", "javascript", "c++", "sql", "react",
+                                     "programming", "framework", "technology", "docker",
+                                     "kubernetes", "aws", "azure", "node", "typescript"},
+                "skills": {"skill", "proficien", "competenc", "expert"},
+                "certifications": {"certif", "credential", "licensed", "pmp", "aws certified"},
+                "experience": {"experience", "worked at", "employment", "position", "role"},
+            }
+            _content_keywords: set = set()
+            for _sec in _extra_sections:
+                _content_keywords.update(_SECTION_CONTENT_KEYWORDS.get(_sec, set()))
+            for _ch in _doc_chunk_list:
+                _ch_meta = getattr(_ch, "meta", None) or {}
+                _ch_section = str(
+                    _ch_meta.get("section_kind") or _ch_meta.get("chunk_kind")
+                    or _ch_meta.get("chunk_type") or ""
+                ).lower().strip()
+                _ch_title = str(_ch_meta.get("section_title") or "").lower()
+                _matched = any(
+                    sec in _ch_section or sec in _ch_title
+                    for sec in _extra_sections
+                )
+                # Fallback: match by content keywords when metadata is missing
+                if not _matched and _content_keywords and not _ch_section:
+                    _ch_text = (getattr(_ch, "text", "") or "").lower()[:500]
+                    if any(kw in _ch_text for kw in _content_keywords):
+                        _matched = True
+                if _matched:
+                    _section_matched.append(_ch)
+                else:
+                    _section_other.append(_ch)
+            # Guarantee at least 2 section-relevant chunks per doc (if available),
+            # fill the rest with highest-scored other chunks.
+            _section_matched.sort(key=lambda c: -c.score)
+            _section_other.sort(key=lambda c: -c.score)
+            _keep_section = min(len(_section_matched), 2)
+            _keep_other = _CHUNKS_PER_DOC - _keep_section
+            _selected = _section_matched[:_keep_section] + _section_other[:_keep_other]
+            # If we still have room and more section chunks, add them
+            if len(_selected) < _CHUNKS_PER_DOC and len(_section_matched) > _keep_section:
+                _remaining = _CHUNKS_PER_DOC - len(_selected)
+                _selected.extend(_section_matched[_keep_section:_keep_section + _remaining])
+            quality_chunks.extend(_selected[:_CHUNKS_PER_DOC])
+        else:
+            _doc_chunk_list.sort(key=lambda c: -c.score)
+            quality_chunks.extend(_doc_chunk_list[:_CHUNKS_PER_DOC])
     quality_chunks = deduplicate_by_content(quality_chunks)
     reranked = quality_chunks
     logger.info(

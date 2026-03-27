@@ -1095,6 +1095,8 @@ _DOMAIN_SYNONYMS: Dict[str, List[str]] = {
     "education": ["degree", "academic", "university"],
     "salary": ["compensation", "pay", "remuneration"],
     "candidate": ["applicant", "prospect"],
+    "programming": ["skills", "languages", "technologies"],
+    "languages": ["programming", "technologies", "frameworks"],
     # Invoice/Financial
     "invoice": ["bill", "statement"],
     "payment": ["remittance", "disbursement"],

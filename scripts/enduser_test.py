@@ -7,21 +7,19 @@ import requests
 from dataclasses import dataclass, field
 
 BASE = "http://localhost:8000"
-SUB_ID = "67fde0754e36c00b14cea7f5"
 
-# Profile mappings
-RESUME_PROFILE_1 = "69a6e13623d47adc8e7eeadd"  # Gokul, Philip, Rahul, Rajeshkumar, Prudhvi
-RESUME_PROFILE_2 = "69a6dddc23d47adc8e7ee7e4"  # Angel, Khan, Adarsh, Hemanth, Keerthana, Anuj, Kaviya, Aleena
-RESUME_PROFILE_3 = "69a553ab23d47adc8e7ee37c"  # Darshan, Jayakumar, Balaji, Khaja, Vijayalakshmi
-INVOICE_PROFILE = "69a6de9e23d47adc8e7ee90a"   # sample_invoice 3,4,5
-INVOICE_PROFILE_2 = "69a5523423d47adc8e7ee20e"  # sample_invoice, invoice 0-4, 1, 2
-MEDICAL_PROFILE = "69a552ac23d47adc8e7ee27a"     # patient 2 report
-QUOTATION_PROFILES = {
-    "duncan1": "69a5945e23d47adc8e7ee5be",  # DUNCAN QUT128300
-    "duncan2": "69a5945e23d47adc8e7ee5bd",  # DUNCAN QUT128234
-    "perry1": "69a5945e23d47adc8e7ee5bf",   # PERRY QUT136586
-    "wade1": "69a5945e23d47adc8e7ee5c2",    # WADE QUT30789
-}
+# Subscription IDs
+HR_SUB_ID = "67e6920588f8ff4644d2dfb1"        # HR resumes + invoices
+LEGAL_SUB_ID = "67fde0754e36c00b14cea7f5"      # Legal contracts
+SUB_ID = HR_SUB_ID  # Default for most tests
+
+# Profile mappings — verified against Qdrant embeddings 2026-03-26
+RESUME_PROFILE_1 = "69babd2d92d3364cc477d1ed"  # "Recruit" — 20 resumes, 174 chunks
+RESUME_PROFILE_2 = "69bb7f4a92d3364cc477d913"  # "Recruit-Pavan" — 27 resumes, 129 chunks
+RESUME_PROFILE_3 = "69babd2d92d3364cc477d1ed"  # Same as PROFILE_1 (no third resume profile)
+INVOICE_PROFILE = "69bd2c345f03e6f10885f9ed"   # "INV" — 10 invoice PDFs, 135 chunks
+INVOICE_PROFILE_2 = "69bb944092d3364cc477df48"  # "Invoices" — 10 invoice PDFs, 74 chunks
+CONTRACT_PROFILE = "69c2b3017525343b065a49d2"   # "Contract" — 33 legal docs, 441 chunks
 
 @dataclass
 class TestResult:
@@ -38,11 +36,11 @@ class TestResult:
     issues: list = field(default_factory=list)
 
 
-def ask_query(profile_id: str, query: str, timeout: int = 120) -> dict:
+def ask_query(profile_id: str, query: str, sub_id: str = None, timeout: int = 120) -> dict:
     """Send a query via /api/profiles/{profile_id}/query"""
     url = f"{BASE}/api/profiles/{profile_id}/query"
     payload = {
-        "subscription_id": SUB_ID,
+        "subscription_id": sub_id or SUB_ID,
         "query": query,
         "top_k": 10,
     }
@@ -59,13 +57,13 @@ def ask_query(profile_id: str, query: str, timeout: int = 120) -> dict:
         return {"data": None, "latency_ms": (time.time() - start) * 1000, "error": str(e)}
 
 
-def ask_main(profile_id: str, query: str, debug: bool = True, timeout: int = 120) -> dict:
+def ask_main(profile_id: str, query: str, sub_id: str = None, debug: bool = True, timeout: int = 120) -> dict:
     """Send a query via /api/ask"""
     url = f"{BASE}/api/ask"
     payload = {
         "query": query,
         "profile_id": profile_id,
-        "subscription_id": SUB_ID,
+        "subscription_id": sub_id or SUB_ID,
         "debug": debug,
         "new_session": True,
     }
@@ -115,19 +113,22 @@ TEST_CASES = [
     {
         "category": "factual",
         "profile": RESUME_PROFILE_1,
-        "query": "What is Gokul's educational qualification?",
+        "sub_id": HR_SUB_ID,
+        "query": "What is Srianish Rameshwaran's educational qualification?",
         "expect": "specific degree/university info",
     },
     {
         "category": "factual",
         "profile": RESUME_PROFILE_1,
-        "query": "What are Philip Simon Derock's skills?",
+        "sub_id": HR_SUB_ID,
+        "query": "What are Manoj Prabakaran's skills?",
         "expect": "list of technical/professional skills",
     },
     {
         "category": "factual",
         "profile": RESUME_PROFILE_2,
-        "query": "What is Angel's work experience?",
+        "sub_id": HR_SUB_ID,
+        "query": "What is Dhanush P's work experience?",
         "expect": "job titles, companies, durations",
     },
 
@@ -135,13 +136,15 @@ TEST_CASES = [
     {
         "category": "contact",
         "profile": RESUME_PROFILE_1,
-        "query": "What is Rahul Deshbhratar's email and phone number?",
+        "sub_id": HR_SUB_ID,
+        "query": "What is Navin E's email and phone number?",
         "expect": "email address and phone number",
     },
     {
         "category": "contact",
         "profile": RESUME_PROFILE_2,
-        "query": "Provide contact details for Khan Mohammad Sharif",
+        "sub_id": HR_SUB_ID,
+        "query": "Provide contact details for Harini S",
         "expect": "email, phone, address if available",
     },
 
@@ -149,13 +152,15 @@ TEST_CASES = [
     {
         "category": "comparison",
         "profile": RESUME_PROFILE_1,
-        "query": "Compare Gokul and Rajeshkumar's skills and experience",
+        "sub_id": HR_SUB_ID,
+        "query": "Compare Srianish Rameshwaran and Kavipriya's skills and experience",
         "expect": "side-by-side comparison, structured format",
     },
     {
         "category": "comparison",
         "profile": RESUME_PROFILE_2,
-        "query": "Compare Angel and Aleena's qualifications",
+        "sub_id": HR_SUB_ID,
+        "query": "Compare Dhanush P and Aruna T's qualifications",
         "expect": "structured comparison",
     },
 
@@ -163,12 +168,14 @@ TEST_CASES = [
     {
         "category": "ranking",
         "profile": RESUME_PROFILE_1,
+        "sub_id": HR_SUB_ID,
         "query": "Rank all candidates by years of experience",
         "expect": "ordered list with experience years",
     },
     {
         "category": "ranking",
         "profile": RESUME_PROFILE_2,
+        "sub_id": HR_SUB_ID,
         "query": "Who is the most qualified candidate for a data science role?",
         "expect": "ranked recommendation with reasoning",
     },
@@ -177,32 +184,37 @@ TEST_CASES = [
     {
         "category": "summary",
         "profile": RESUME_PROFILE_1,
+        "sub_id": HR_SUB_ID,
         "query": "Give me a summary of all candidates in this profile",
         "expect": "brief overview of each candidate",
     },
     {
         "category": "summary",
-        "profile": MEDICAL_PROFILE,
-        "query": "Summarize the patient report",
-        "expect": "medical summary with key findings",
+        "profile": CONTRACT_PROFILE,
+        "sub_id": LEGAL_SUB_ID,
+        "query": "Summarize the key terms across all contracts",
+        "expect": "summary of contract terms and conditions",
     },
 
     # --- INVOICE ---
     {
         "category": "factual_invoice",
         "profile": INVOICE_PROFILE,
-        "query": "What is the total amount on invoice 3?",
+        "sub_id": HR_SUB_ID,
+        "query": "What is the total amount on the Fresh Foods Co invoice?",
         "expect": "specific monetary amount",
     },
     {
         "category": "factual_invoice",
         "profile": INVOICE_PROFILE,
-        "query": "List all line items from the invoices",
+        "sub_id": HR_SUB_ID,
+        "query": "List all line items from the Stellar Retail invoices",
         "expect": "itemized list with quantities and prices",
     },
     {
         "category": "comparison_invoice",
         "profile": INVOICE_PROFILE,
+        "sub_id": HR_SUB_ID,
         "query": "Compare the totals across all invoices",
         "expect": "comparison table/list of invoice totals",
     },
@@ -211,12 +223,14 @@ TEST_CASES = [
     {
         "category": "cross_document",
         "profile": RESUME_PROFILE_1,
+        "sub_id": HR_SUB_ID,
         "query": "Which candidates have Python experience?",
         "expect": "list from multiple resumes",
     },
     {
         "category": "cross_document",
-        "profile": RESUME_PROFILE_3,
+        "profile": RESUME_PROFILE_2,
+        "sub_id": HR_SUB_ID,
         "query": "What technologies are common across all candidates?",
         "expect": "aggregated tech skills from multiple docs",
     },
@@ -225,6 +239,7 @@ TEST_CASES = [
     {
         "category": "analytics",
         "profile": RESUME_PROFILE_2,
+        "sub_id": HR_SUB_ID,
         "query": "How many candidates have more than 3 years of experience?",
         "expect": "count with names",
     },
@@ -233,7 +248,8 @@ TEST_CASES = [
     {
         "category": "generate",
         "profile": RESUME_PROFILE_1,
-        "query": "Write a professional summary for Gokul based on his resume",
+        "sub_id": HR_SUB_ID,
+        "query": "Write a professional summary for Srianish Rameshwaran based on his resume",
         "expect": "well-written paragraph summarizing candidate",
     },
 
@@ -241,19 +257,22 @@ TEST_CASES = [
     {
         "category": "edge_no_info",
         "profile": RESUME_PROFILE_1,
+        "sub_id": HR_SUB_ID,
         "query": "What is the company's revenue?",
         "expect": "graceful not-found message, not hallucinated",
     },
     {
         "category": "edge_ambiguous",
         "profile": RESUME_PROFILE_2,
+        "sub_id": HR_SUB_ID,
         "query": "Tell me about the candidate",
         "expect": "clarification or list all candidates",
     },
     {
         "category": "edge_typo",
         "profile": RESUME_PROFILE_1,
-        "query": "Wht is Gokuls educaton?",
+        "sub_id": HR_SUB_ID,
+        "query": "Wht is Srianish's educaton?",
         "expect": "should still understand and answer about education",
     },
 
@@ -261,28 +280,32 @@ TEST_CASES = [
     {
         "category": "conversational",
         "profile": RESUME_PROFILE_1,
+        "sub_id": HR_SUB_ID,
         "query": "Hello",
         "expect": "greeting response, not a document search",
     },
     {
         "category": "conversational",
         "profile": RESUME_PROFILE_1,
+        "sub_id": HR_SUB_ID,
         "query": "What can you do?",
         "expect": "capability description",
     },
 
-    # --- MEDICAL ---
+    # --- LEGAL/CONTRACT (replaces medical — no medical data available) ---
     {
-        "category": "medical",
-        "profile": MEDICAL_PROFILE,
-        "query": "What are the patient's vital signs?",
-        "expect": "specific vital signs from report",
+        "category": "legal",
+        "profile": CONTRACT_PROFILE,
+        "sub_id": LEGAL_SUB_ID,
+        "query": "What are the payment terms in the US Healthcare contracts?",
+        "expect": "specific payment terms from contract documents",
     },
     {
-        "category": "medical",
-        "profile": MEDICAL_PROFILE,
-        "query": "What medications were prescribed?",
-        "expect": "medication list or appropriate not-found",
+        "category": "legal",
+        "profile": CONTRACT_PROFILE,
+        "sub_id": LEGAL_SUB_ID,
+        "query": "What liability clauses are specified across the contracts?",
+        "expect": "liability terms or appropriate not-found",
     },
 ]
 
@@ -381,7 +404,8 @@ def run_tests():
         print(f"\n[{i+1}/{len(TEST_CASES)}] {test['category'].upper()}: {test['query'][:60]}...")
 
         # Use /api/ask for main pipeline testing
-        result = ask_main(test["profile"], test["query"], debug=True, timeout=180)
+        result = ask_main(test["profile"], test["query"],
+                          sub_id=test.get("sub_id"), debug=True, timeout=180)
 
         answer, sources, grounded, context_found = extract_answer(result)
         latency = result["latency_ms"]

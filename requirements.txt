@@ -7,7 +7,6 @@ botframework_connector==4.17.0
 botframework_streaming==4.17.0
 boto3==1.42.15
 datasets==4.3.0
-deepspeed
 easyocr
 fastapi
 httpx
@@ -35,14 +34,11 @@ Requests
 scikit_learn
 sentence_transformers
 spacy
-timm>=0.9.0
 torch
-torchvision>=0.16.0
 transformers
 unsloth
 uvicorn
 vllm
-wandb
 whisper
 zai
 
