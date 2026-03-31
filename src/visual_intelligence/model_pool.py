@@ -190,6 +190,14 @@ class ModelPool:
                     model_id, local_files_only=True,
                 )
 
+            # Use half precision on high-memory GPUs for faster inference.
+            if device.type == "cuda":
+                try:
+                    from src.utils.gpu import detect_gpu
+                    if detect_gpu().bf16_supported:
+                        model = model.to(torch.bfloat16)
+                except Exception:
+                    pass
             model = model.to(device).eval()
             logger.info("Loaded %s (%s) from cache on %s", model_key, model_id, device)
             return model
@@ -213,6 +221,13 @@ class ModelPool:
                     model_id, force_download=True,
                 )
 
+            if device.type == "cuda":
+                try:
+                    from src.utils.gpu import detect_gpu
+                    if detect_gpu().bf16_supported:
+                        model = model.to(torch.bfloat16)
+                except Exception:
+                    pass
             model = model.to(device).eval()
             logger.info("Downloaded and loaded %s (%s) on %s", model_key, model_id, device)
             return model

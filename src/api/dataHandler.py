@@ -293,7 +293,15 @@ def _preferred_embedding_device() -> str:
     env_device = (os.getenv("EMBEDDING_DEVICE") or "").strip().lower()
     if env_device:
         return env_device
-    return "cuda" if _torch_cuda_available() else "cpu"
+    # Auto-detect: use GPU on high-memory cards (A100+), CPU otherwise.
+    try:
+        from src.utils.gpu import detect_gpu
+        caps = detect_gpu()
+        if caps.is_high_memory:
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
 
 def _is_meta_tensor_error(exc: Exception) -> bool:
     msg = str(exc).lower()
@@ -331,7 +339,16 @@ def _resolve_torch_dtype(device: str):
         return torch.bfloat16
     if raw in {"fp32", "float32", "full"}:
         return torch.float32
-    # Default to float32 for robustness unless explicitly overridden.
+    # Auto-detect: use bf16 on Ampere+ GPUs for better throughput,
+    # fp32 on CPU / older GPUs for robustness.
+    if device != "cpu":
+        try:
+            from src.utils.gpu import detect_gpu
+            caps = detect_gpu()
+            if caps.bf16_supported:
+                return torch.bfloat16
+        except Exception:
+            pass
     return torch.float32
 
 def _model_kwargs_for_device(device: str) -> Dict[str, Any]:

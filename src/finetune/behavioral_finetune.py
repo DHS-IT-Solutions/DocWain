@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.utils.gpu import training_precision_flags as _training_precision
 from src.utils.logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -302,12 +303,17 @@ def _train_model(
 
     from unsloth import FastLanguageModel
 
-    log.info("Loading base model: %s", BASE_MODEL_ID)
+    try:
+        from src.utils.gpu import detect_gpu
+        _use_4bit = detect_gpu().use_4bit_quantization
+    except Exception:
+        _use_4bit = True
+    log.info("Loading base model: %s (4bit=%s)", BASE_MODEL_ID, _use_4bit)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=BASE_MODEL_ID,
         max_seq_length=MAX_SEQ_LENGTH,
         dtype=None,
-        load_in_4bit=True,
+        load_in_4bit=_use_4bit,
     )
 
     log.info("Applying LoRA (r=%d, alpha=%d, modules=%s)", lora_r, lora_alpha, target_modules)
@@ -362,7 +368,7 @@ def _train_model(
         "save_strategy": "epoch",
         "seed": 42,
         "report_to": "none",
-        "fp16": True,  # T4 doesn't support bf16
+        **_training_precision(),
     }
 
     if eval_dataset:

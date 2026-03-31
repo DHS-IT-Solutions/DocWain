@@ -14,6 +14,7 @@ class GPUInfo:
     total_mb: Optional[int]
     free_mb: Optional[int]
     method: str
+    device_name: Optional[str] = None
 
 
 def _try_pynvml() -> Optional[GPUInfo]:
@@ -28,16 +29,25 @@ def _try_pynvml() -> Optional[GPUInfo]:
             return None
         free_list = []
         total_list = []
+        gpu_name = None
         for idx in range(device_count):
             handle = pynvml.nvmlDeviceGetHandleByIndex(idx)
             info = pynvml.nvmlDeviceGetMemoryInfo(handle)
             total_list.append(int(info.total / (1024 * 1024)))
             free_list.append(int(info.free / (1024 * 1024)))
+            if gpu_name is None:
+                try:
+                    gpu_name = pynvml.nvmlDeviceGetName(handle)
+                    if isinstance(gpu_name, bytes):
+                        gpu_name = gpu_name.decode("utf-8")
+                except Exception:
+                    pass
         return GPUInfo(
             available=True,
             total_mb=max(total_list) if total_list else None,
             free_mb=max(free_list) if free_list else None,
             method="pynvml",
+            device_name=gpu_name,
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("pynvml GPU query failed: %s", exc)

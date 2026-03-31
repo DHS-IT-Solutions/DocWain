@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -47,10 +48,16 @@ class UnifiedRetriever:
     # Score threshold for "high quality" dense result
     _HIGH_QUALITY_THRESHOLD = 0.5
 
+    # Negative cache entries expire after this many seconds so that
+    # collections created by the embedding pipeline become visible
+    # without requiring a server restart.
+    _NEGATIVE_CACHE_TTL = 30
+
     def __init__(self, qdrant_client, embedder):
         self.qdrant_client = qdrant_client
         self.embedder = embedder
-        self._collection_exists_cache: dict[str, bool] = {}
+        # Maps collection_name → (exists: bool, checked_at: float)
+        self._collection_exists_cache: dict[str, tuple[bool, float]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -73,19 +80,26 @@ class UnifiedRetriever:
         collection_name = build_collection_name(subscription_id)
 
         # Guard: verify collection exists before querying Qdrant.
-        # Cache the result to avoid repeated round-trips.
-        if collection_name not in self._collection_exists_cache:
+        # Positive results are cached permanently; negative results expire
+        # after _NEGATIVE_CACHE_TTL seconds so newly-created collections
+        # (from the embedding pipeline) become visible without a restart.
+        now = time.monotonic()
+        cached = self._collection_exists_cache.get(collection_name)
+        need_check = (
+            cached is None
+            or (not cached[0] and (now - cached[1]) > self._NEGATIVE_CACHE_TTL)
+        )
+        if need_check:
             try:
-                self._collection_exists_cache[collection_name] = (
-                    self.qdrant_client.collection_exists(collection_name)
-                )
+                exists = self.qdrant_client.collection_exists(collection_name)
+                self._collection_exists_cache[collection_name] = (exists, now)
             except Exception:
                 logger.warning(
                     "Could not verify collection existence: %s", collection_name,
                 )
-                self._collection_exists_cache[collection_name] = False
+                self._collection_exists_cache[collection_name] = (False, now)
 
-        if not self._collection_exists_cache.get(collection_name):
+        if not self._collection_exists_cache[collection_name][0]:
             logger.warning(
                 "Collection %s does not exist — returning empty results for subscription=%s",
                 collection_name, subscription_id,

@@ -55,10 +55,20 @@ def embed_request_context(request_id: Optional[str]):
             delattr(_REQUEST_CONTEXT, "embed_request_id")
 
 def _preferred_device() -> str:
-    # Always default to CPU for embeddings — GPU is reserved for the LLM (DocWain-Agent).
-    # bge-large-en-v1.5 (335M params) runs efficiently on CPU.
-    env_device = (os.getenv("EMBEDDING_DEVICE") or "cpu").strip().lower()
-    return env_device
+    # Respect explicit override first.
+    env_device = (os.getenv("EMBEDDING_DEVICE") or "").strip().lower()
+    if env_device:
+        return env_device
+    # Auto-detect: use GPU on high-memory cards (A100+) where the LLM and
+    # embeddings comfortably coexist; default to CPU on smaller GPUs.
+    try:
+        from src.utils.gpu import detect_gpu
+        caps = detect_gpu()
+        if caps.is_high_memory:
+            return f"cuda:{torch.cuda.current_device()}" if caps.available else "cpu"
+    except Exception:
+        pass
+    return "cpu"
 
 def _is_meta_tensor_error(exc: Exception) -> bool:
     msg = str(exc).lower()
@@ -287,10 +297,19 @@ def get_embedding_model(
     raise RuntimeError("No embedding models available")
 
 def _optimal_batch_size(device: str, requested: Optional[int], num_texts: int) -> int:
-    """Select batch size based on device and workload."""
+    """Select batch size based on device, GPU tier, and workload."""
     if requested:
         return requested
-    default = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+    env_batch = os.getenv("EMBEDDING_BATCH_SIZE")
+    if env_batch:
+        default = int(env_batch)
+    else:
+        # Auto-scale batch size based on detected GPU capability.
+        try:
+            from src.utils.gpu import detect_gpu
+            default = detect_gpu().recommended_embedding_batch_size
+        except Exception:
+            default = 32
     if device == "cpu":
         # Smaller batches improve CPU cache locality — 2-3x faster
         return min(default, 16)

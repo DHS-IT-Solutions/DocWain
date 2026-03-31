@@ -55,8 +55,13 @@ class VisionGraftedModel:
 
     def load_text_model(self):
         from unsloth import FastLanguageModel
+        try:
+            from src.utils.gpu import detect_gpu
+            _use_4bit = detect_gpu().use_4bit_quantization
+        except Exception:
+            _use_4bit = True
         self._text_model, self._tokenizer = FastLanguageModel.from_pretrained(
-            model_name=self._config.text_model, max_seq_length=4096, dtype=None, load_in_4bit=True,
+            model_name=self._config.text_model, max_seq_length=4096, dtype=None, load_in_4bit=_use_4bit,
         )
         return self
 
