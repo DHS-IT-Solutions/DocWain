@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.utils.gpu import training_precision_flags as _training_precision
 from src.utils.logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -175,12 +176,17 @@ def _run_sft_training(config: VizFinetuneConfig, dataset_path: str) -> Dict[str,
     from datasets import load_dataset
     from trl import SFTTrainer, SFTConfig
 
-    log.info("Loading base model for SFT: %s", config.base_model)
+    try:
+        from src.utils.gpu import detect_gpu
+        _use_4bit = detect_gpu().use_4bit_quantization
+    except Exception:
+        _use_4bit = True
+    log.info("Loading base model for SFT: %s (4bit=%s)", config.base_model, _use_4bit)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=config.base_model,
         max_seq_length=4096,
         dtype=None,
-        load_in_4bit=True,
+        load_in_4bit=_use_4bit,
     )
 
     model = FastLanguageModel.get_peft_model(
@@ -220,7 +226,7 @@ def _run_sft_training(config: VizFinetuneConfig, dataset_path: str) -> Dict[str,
             warmup_steps=5,
             logging_steps=1,
             save_strategy="epoch",
-            fp16=True,
+            **_training_precision(),
             report_to="none",
             seed=42,
             max_seq_length=4096,
@@ -236,7 +242,7 @@ def _run_sft_training(config: VizFinetuneConfig, dataset_path: str) -> Dict[str,
             warmup_steps=5,
             logging_steps=1,
             save_strategy="epoch",
-            fp16=True,
+            **_training_precision(),
             report_to="none",
             seed=42,
         )

@@ -81,10 +81,16 @@ class FinetuneRunner:
         load_kwargs = {"device_map": "auto"}
         if torch.cuda.is_available():
             try:
-                import bitsandbytes  # noqa: F401
-                load_kwargs.update({"load_in_4bit": True})
+                from src.utils.gpu import detect_gpu
+                _use_4bit = detect_gpu().use_4bit_quantization
             except Exception:
-                pass
+                _use_4bit = True
+            if _use_4bit:
+                try:
+                    import bitsandbytes  # noqa: F401
+                    load_kwargs.update({"load_in_4bit": True})
+                except Exception:
+                    pass
         model = AutoModelForCausalLM.from_pretrained(self.config.base_model, **load_kwargs)
 
         lora_config = LoraConfig(

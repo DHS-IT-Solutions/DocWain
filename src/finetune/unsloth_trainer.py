@@ -623,7 +623,13 @@ class UnslothFinetuneManager:
             target_device = self._preferred_device()
             load_kwargs["device_map"] = {"": target_device}
             load_kwargs["low_cpu_mem_usage"] = False
-            load_kwargs["torch_dtype"] = torch.float16 if torch.cuda.is_available() else torch.float32
+            # Use bf16 on Ampere+ for better training stability, fp16 otherwise.
+            try:
+                from src.utils.gpu import detect_gpu
+                _caps = detect_gpu()
+                load_kwargs["torch_dtype"] = torch.bfloat16 if _caps.bf16_supported else (torch.float16 if _caps.available else torch.float32)
+            except Exception:
+                load_kwargs["torch_dtype"] = torch.float16 if torch.cuda.is_available() else torch.float32
 
         load_kwargs.update(overrides)
 

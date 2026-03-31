@@ -205,6 +205,8 @@ class CoreAgent:
         # Launch intent analysis (LLM, ~20s) and a broad retrieval (vector search, ~2s)
         # concurrently so the retrieval result is ready by the time intent finishes.
         prefetch_result = None
+        _intent_future = None
+        _prefetch_future = None
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _par_executor:
                 # Thread 1: Intent analysis (LLM call)
@@ -237,12 +239,33 @@ class CoreAgent:
                 "Parallel UNDERSTAND+RETRIEVE failed (%s) — falling back to sequential",
                 _par_exc,
             )
-            # Sequential fallback
-            understanding = self._intent_analyzer.analyze(
-                query, subscription_id, profile_id, trimmed_intel, conversation_history,
-                kg_hints=kg_hints,
-            )
-            prefetch_result = None
+            # Salvage any future that already completed to avoid re-running it.
+            understanding = None
+            if _intent_future is not None and _intent_future.done() and not _intent_future.cancelled():
+                try:
+                    understanding = _intent_future.result(timeout=0)
+                except Exception:
+                    pass
+            if _prefetch_future is not None and _prefetch_future.done() and not _prefetch_future.cancelled():
+                try:
+                    prefetch_result = _prefetch_future.result(timeout=0)
+                except Exception:
+                    prefetch_result = None
+
+            if understanding is None:
+                # If intent timed out, use safe defaults instead of re-running
+                # the same slow LLM call (which would double total latency).
+                if isinstance(_par_exc, (concurrent.futures.TimeoutError, TimeoutError)):
+                    logger.warning("Intent analysis timed out — using safe defaults")
+                    understanding = self._intent_analyzer._safe_defaults(query)
+                    self._intent_analyzer._enrich_relevant_documents(
+                        understanding, query, trimmed_intel, kg_hints,
+                    )
+                else:
+                    understanding = self._intent_analyzer.analyze(
+                        query, subscription_id, profile_id, trimmed_intel,
+                        conversation_history, kg_hints=kg_hints,
+                    )
 
         timing["understand_ms"] = round((time.monotonic() - t0) * 1000, 1)
 
@@ -560,7 +583,17 @@ class CoreAgent:
                     len(_prioritized), min(len(_others), _max_others),
                 )
             else:
-                doc_context["doc_intelligence_summaries"] = doc_intelligence_entries
+                # When retrieval found 0 evidence chunks, sending all summaries
+                # creates an enormous prompt that makes the reasoner slow.
+                # Cap to a reasonable number to keep latency under control.
+                if not evidence:
+                    doc_context["doc_intelligence_summaries"] = doc_intelligence_entries[:8]
+                    logger.info(
+                        "[DOC_INDEX] Capped doc_intelligence to %d/%d (no evidence chunks)",
+                        min(8, len(doc_intelligence_entries)), len(doc_intelligence_entries),
+                    )
+                else:
+                    doc_context["doc_intelligence_summaries"] = doc_intelligence_entries
 
         # --- REASON ---
         t0 = time.monotonic()

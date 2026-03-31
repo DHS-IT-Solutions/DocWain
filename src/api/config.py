@@ -563,7 +563,7 @@ class Config:
         ENABLED = os.getenv("VISUAL_INTELLIGENCE_ENABLED", "true")
         GPU_DEVICE = os.getenv("VISUAL_INTELLIGENCE_GPU_DEVICE", "cuda:0")
         CPU_FALLBACK = os.getenv("VISUAL_INTELLIGENCE_CPU_FALLBACK", "true")
-        MAX_CONCURRENT_PAGES = int(os.getenv("VISUAL_INTELLIGENCE_MAX_CONCURRENT_PAGES", "4"))
+        MAX_CONCURRENT_PAGES = int(os.getenv("VISUAL_INTELLIGENCE_MAX_CONCURRENT_PAGES", "8"))
         TIER1_MODELS = os.getenv("VISUAL_INTELLIGENCE_TIER1_MODELS", "dit").split(",")
         TIER2_MODELS = os.getenv("VISUAL_INTELLIGENCE_TIER2_MODELS", "dit,table_transformer,trocr,layoutlmv3").split(",")
         DIT_MODEL = os.getenv("VISUAL_INTELLIGENCE_DIT_MODEL", "microsoft/dit-large-finetuned-publaynet")

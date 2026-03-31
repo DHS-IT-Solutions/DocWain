@@ -21,9 +21,16 @@ class UnslothLLMClient:
             return
         logger.info("Loading Unsloth model from %s", self.model_path)
         tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        # Use bf16 on Ampere+ GPUs for better throughput and precision.
+        try:
+            from src.utils.gpu import detect_gpu
+            _caps = detect_gpu()
+            _dtype = torch.bfloat16 if _caps.bf16_supported else (torch.float16 if _caps.available else torch.float32)
+        except Exception:
+            _dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         model = AutoModelForCausalLM.from_pretrained(
             self.model_path,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            torch_dtype=_dtype,
             device_map="auto",
         )
         self._pipeline = pipeline(

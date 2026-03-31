@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.utils.gpu import training_precision_flags as _training_precision
+
 from src.utils.logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -66,12 +68,17 @@ def run_dpo_training(
     # Step 2: Load model
     from unsloth import FastLanguageModel
 
-    log.info("Loading base model: %s", base_model)
+    try:
+        from src.utils.gpu import detect_gpu
+        _use_4bit = detect_gpu().use_4bit_quantization
+    except Exception:
+        _use_4bit = True
+    log.info("Loading base model: %s (4bit=%s)", base_model, _use_4bit)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=base_model,
         max_seq_length=MAX_SEQ_LENGTH,
         dtype=None,
-        load_in_4bit=True,
+        load_in_4bit=_use_4bit,
     )
 
     model = FastLanguageModel.get_peft_model(
@@ -125,7 +132,7 @@ def run_dpo_training(
             logging_steps=1,
             save_strategy="epoch",
             beta=beta,
-            fp16=True,
+            **_training_precision(),
             report_to="none",
             seed=42,
             max_length=MAX_SEQ_LENGTH,
@@ -142,7 +149,7 @@ def run_dpo_training(
             warmup_steps=5,
             logging_steps=1,
             save_strategy="epoch",
-            fp16=True,
+            **_training_precision(),
             report_to="none",
             seed=42,
         )
