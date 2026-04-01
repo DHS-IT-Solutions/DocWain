@@ -1,7 +1,35 @@
 """Extraction pipeline data models."""
 
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Dict
+
+
+@dataclass
+class TriageResult:
+    """Output of DocumentTriager.triage() — routing decision for a document."""
+    document_type: str                          # clean_digital | scanned | handwritten | mixed | table_heavy
+    engine_weights: Dict[str, float]            # structural, semantic, vision, v2
+    preprocessing_directives: List[str]         # upscale | denoise | deskew | contrast
+    page_types: Dict[str, str]                  # per-page classification keyed by page identifier
+    confidence: float = 0.0                    # 0.0 – 1.0
+
+
+@dataclass
+class ValidationResult:
+    """Result of post-extraction validation checks."""
+    passed: bool
+    failed_checks: List[str]
+    field_confidences: Dict[str, float]
+    retry_recommended: bool = False
+
+
+@dataclass
+class QualityScorecard:
+    """Aggregated quality metrics across extraction engines."""
+    overall_confidence: float
+    engine_contributions: Dict[str, float]
+    conflict_count: int = 0
+    conflict_log: List[str] = field(default_factory=list)
 
 
 @dataclass

@@ -191,6 +191,8 @@ def get_new_capability_criteria() -> Dict[str, float]:
         "tool_call_accuracy": 80.0,
         "tool_arg_correctness": 85.0,
         "layout_detection_map": 65.0,
+        "insight_precision": 0.80,
+        "confidence_calibration_ece": 0.10,
     }
 
 

@@ -487,6 +487,49 @@ def _strip_viz_directive(answer: Dict[str, Any]) -> None:
                 answer["response"] = cleaned
 
 
+def parse_viz_directives(text: str) -> tuple[list[dict], str]:
+    """Parse all <viz attr1="val1" attr2="val2" /> self-closing tags from text.
+
+    Finds every ``<viz ... />`` tag, extracts its attributes into a dict, and
+    returns both the list of attribute dicts and a clean version of the text
+    with all matched tags removed (collapsing any resulting double spaces or
+    double blank lines).
+
+    Args:
+        text: Raw text that may contain one or more ``<viz ... />`` tags.
+
+    Returns:
+        A tuple of:
+        - list of dicts, one per matched tag, with attribute names as keys
+          and attribute values (strings) as values.
+        - cleaned text with all ``<viz ... />`` tags removed and whitespace
+          normalised (double spaces collapsed, double blank lines collapsed).
+    """
+    import re as _viz_re
+
+    _VIZ_TAG_RE = _viz_re.compile(r"<viz\s([^>]*?)\s*/>", _viz_re.IGNORECASE | _viz_re.DOTALL)
+    _ATTR_RE = _viz_re.compile(r'(\w[\w-]*)\s*=\s*"([^"]*)"')
+
+    directives: list[dict] = []
+    for tag_match in _VIZ_TAG_RE.finditer(text):
+        attrs_str = tag_match.group(1)
+        attrs: dict = {}
+        for attr_match in _ATTR_RE.finditer(attrs_str):
+            attrs[attr_match.group(1)] = attr_match.group(2)
+        directives.append(attrs)
+
+    # Remove all <viz ... /> tags from the text
+    clean = _VIZ_TAG_RE.sub("", text)
+
+    # Collapse double (or more) spaces on each line
+    clean = _viz_re.sub(r"  +", " ", clean)
+    # Collapse three or more consecutive newlines into two
+    clean = _viz_re.sub(r"\n{3,}", "\n\n", clean)
+    clean = clean.strip()
+
+    return directives, clean
+
+
 def _set_response_text(answer: Dict[str, Any], note: str) -> None:
     """Append a visualization note to the response text."""
     separator = "\n\n---\n**Visualization Note:** "

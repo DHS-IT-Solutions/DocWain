@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 PHASE_MARKERS: Dict[str, str] = {
     "phase1": "projection.pt",
     "phase2": "phase2_config.json",
+    "phase2_5": ".phase2_5_complete",
     "phase3": "phase3_config.json",
+    "phase3_5": ".phase3_5_complete",
     "phase4": "phase4_plan.json",
 }
 
@@ -27,7 +29,7 @@ class V2Pipeline:
         Defaults to ``finetune_artifacts/v2``.
     """
 
-    phases: List[str] = ["phase1", "phase2", "phase3", "phase4"]
+    phases: List[str] = ["phase1", "phase2", "phase2_5", "phase3", "phase3_5", "phase4"]
 
     def __init__(self, base_dir: Optional[Path] = None) -> None:
         self.base_dir = Path(base_dir) if base_dir else Path("finetune_artifacts/v2")
