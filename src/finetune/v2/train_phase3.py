@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .tool_data_generator import build_tool_calling_dataset
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -30,19 +32,29 @@ class Phase3Config:
     """Hyperparameters for Phase 3 tool-calling SFT."""
 
     # LoRA
-    lora_r: int = 16
-    lora_alpha: int = 16
+    lora_r: int = 64
+    lora_alpha: int = 128
     lora_dropout: float = 0.0
+    lora_target_modules: List[str] = field(default_factory=lambda: [
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ])
 
     # Training
-    learning_rate: float = 1e-4
-    epochs: int = 2
-    batch_size: int = 8
+    learning_rate: float = 1e-5
+    epochs: int = 5
+    per_device_batch_size: int = 4
     max_seq_length: int = 4096
-    warmup_ratio: float = 0.05
+    warmup_ratio: float = 0.10
     weight_decay: float = 0.01
     gradient_accumulation_steps: int = 8
     max_grad_norm: float = 1.0
+    bf16: bool = True
+    lr_scheduler_type: str = "cosine"
+    checkpoint_steps: int = 200
+
+    # Projection freeze flag
+    freeze_projection: bool = True
 
     # Data sources
     data_sources: List[str] = field(default_factory=lambda: [
@@ -52,7 +64,7 @@ class Phase3Config:
         "nexusraven",
     ])
     data_dir: Path = Path("finetune_data/v2/tool_calling")
-    phase2_dir: Path = Path("finetune_artifacts/v2/phase2")
+    phase2_dir: Path = Path("finetune_artifacts/v2/phase2.5")
 
     # Output
     output_dir: Path = Path("finetune_artifacts/v2/phase3")
@@ -65,13 +77,55 @@ class Phase3Config:
     gate_arg_correctness: float = 0.90
     gate_false_positive_rate: float = 0.10
 
-    # Source weights for mixing
+    # Source weights for mixing — must sum to 1.0
     source_weights: Dict[str, float] = field(default_factory=lambda: {
         "synthetic": 0.40,
         "toolbench": 0.25,
         "gorilla": 0.20,
         "nexusraven": 0.15,
     })
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_training_args(config: Phase3Config, output_dir: Path) -> Dict:
+    """Build a SFTTrainer-compatible training arguments dictionary.
+
+    Parameters
+    ----------
+    config:
+        Phase 3 training configuration.
+    output_dir:
+        Directory where checkpoints and final model are written.
+
+    Returns
+    -------
+    dict suitable for unpacking into ``trl.SFTConfig`` or
+    ``transformers.TrainingArguments``.
+    """
+    return {
+        "output_dir": str(output_dir),
+        "num_train_epochs": config.epochs,
+        "per_device_train_batch_size": config.per_device_batch_size,
+        "gradient_accumulation_steps": config.gradient_accumulation_steps,
+        "learning_rate": config.learning_rate,
+        "lr_scheduler_type": config.lr_scheduler_type,
+        "warmup_ratio": config.warmup_ratio,
+        "weight_decay": config.weight_decay,
+        "max_grad_norm": config.max_grad_norm,
+        "bf16": config.bf16,
+        "fp16": False,
+        "logging_steps": config.logging_steps,
+        "save_steps": config.checkpoint_steps,
+        "eval_steps": config.eval_steps,
+        "max_seq_length": config.max_seq_length,
+        "dataset_text_field": "text",
+        "report_to": "none",
+        "seed": 42,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +140,7 @@ def run_phase3(
 ) -> Path:
     """Execute Phase 3 tool-calling SFT.
 
-    1. Loads the vision encoder + projection + LoRA from Phase 2.
+    1. Loads the vision encoder + projection + LoRA from Phase 2.5 checkpoint.
     2. Freezes the projection (keep doc-intel alignment).
     3. Continues LoRA training on tool-calling data.
     4. Evaluates tool accuracy, argument correctness, and false-positive rate.
@@ -97,7 +151,7 @@ def run_phase3(
     config:
         Training configuration. Uses defaults if ``None``.
     phase2_dir:
-        Override path to the Phase 2 output directory.
+        Override path to the Phase 2.5 output directory.
 
     Returns
     -------
@@ -110,11 +164,17 @@ def run_phase3(
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=== Phase 3: Tool-Calling SFT ===")
-    logger.info("LoRA r=%d  LR=%s  epochs=%d  batch=%d",
-                config.lora_r, config.learning_rate, config.epochs, config.batch_size)
-    logger.info("Data sources: %s", config.data_sources)
+    logger.info(
+        "LoRA r=%d  alpha=%d  LR=%s  epochs=%d  batch=%d",
+        config.lora_r,
+        config.lora_alpha,
+        config.learning_rate,
+        config.epochs,
+        config.per_device_batch_size,
+    )
+    logger.info("Data sources: %s  weights: %s", config.data_sources, config.source_weights)
 
-    # --- Load model from Phase 2 output ---------------------------------------
+    # --- Load model from Phase 2.5 checkpoint --------------------------------
     from .vision_graft import GraftConfig, VisionGraftedModel
 
     graft_cfg = GraftConfig(freeze_vision=True, freeze_text=False)
@@ -124,39 +184,73 @@ def run_phase3(
     proj_ckpt = p2_dir / "projection.pt"
     model.load_projection(checkpoint=proj_ckpt)
 
-    # Freeze projection — we only want LoRA to learn tool-calling patterns
-    if model._projection is not None:
+    # Freeze projection — only LoRA should learn tool-calling patterns
+    if config.freeze_projection and model._projection is not None:
         for p in model._projection.parameters():
             p.requires_grad = False
+        logger.info("Projection MLP frozen for Phase 3 training.")
 
     model.load_text_model()
     model.add_lora(r=config.lora_r, lora_alpha=config.lora_alpha)
 
-    # --- Build tool-calling dataset -------------------------------------------
+    # --- Load tool-calling dataset -------------------------------------------
     logger.info("Building tool-calling dataset from sources: %s", config.data_sources)
 
-    # In production, this would:
-    # 1. Load synthetic tool-call traces from data_dir/synthetic.jsonl
-    # 2. Load & adapt external benchmarks (toolbench, gorilla, nexusraven)
-    # 3. Remap external function schemas to DocWain's 9 core tools
-    # 4. Mix according to source_weights
-    # 5. Convert via dataset_preprocess.format_tool_call_sft()
+    dataset_path = config.data_dir / "tool_calling_sft.jsonl"
+    build_tool_calling_dataset(dataset_path)
+    logger.info("Tool-calling dataset written to %s", dataset_path)
 
     from .tool_schemas import format_tools_for_prompt
     tools_json = format_tools_for_prompt()
-    logger.info("Embedding %d tool schemas in training prompts",
-                len(tools_json.split('"name"')) - 1)
+    logger.info(
+        "Embedding %d tool schemas in training prompts",
+        len(tools_json.split('"name"')) - 1,
+    )
+
+    try:
+        from datasets import load_dataset  # type: ignore
+        dataset = load_dataset("json", data_files=str(dataset_path), split="train")
+        logger.info("Loaded %d tool-calling training examples.", len(dataset))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to load tool-calling dataset (%s) — skipping training.", exc)
+        dataset = None
 
     # --- Training loop (SFTTrainer) -------------------------------------------
     logger.info("Starting tool-calling SFT training...")
 
-    # In production this would use trl.SFTTrainer or equivalent.
-    # The training loop would:
-    # 1. Forward pass (vision frozen, projection frozen, LoRA active)
-    # 2. Cross-entropy loss on assistant turns (tool_call blocks + final answer)
-    # 3. Backprop through LoRA only
+    try:
+        from trl import SFTConfig, SFTTrainer  # type: ignore
+    except ImportError:
+        logger.error("trl is not installed. Install with: pip install trl>=0.8")
+        raise
+
+    if dataset is not None:
+        training_args_dict = _build_training_args(config, config.output_dir)
+        sft_cfg = SFTConfig(**training_args_dict)
+
+        trainer = SFTTrainer(
+            model=model._text_model,
+            tokenizer=model._tokenizer,
+            train_dataset=dataset,
+            args=sft_cfg,
+        )
+
+        logger.info("Training Phase 3 for %d epochs...", config.epochs)
+        trainer.train()
+
+        final_ckpt = config.output_dir / "checkpoint_final"
+        model._text_model.save_pretrained(str(final_ckpt))
+        if model._tokenizer is not None:
+            model._tokenizer.save_pretrained(str(final_ckpt))
+        logger.info("Final checkpoint saved to %s", final_ckpt)
+    else:
+        logger.warning("No dataset available — skipping SFTTrainer run.")
 
     # --- Save outputs ---------------------------------------------------------
     model.save_all(config.output_dir)
+
+    marker = config.output_dir / ".phase3_complete"
+    marker.touch()
     logger.info("Phase 3 complete — artifacts saved to %s", config.output_dir)
+
     return config.output_dir

@@ -552,6 +552,11 @@ def ingest_graph_payload(store: Neo4jStore, payload: GraphIngestPayload) -> None
                 doc_id_for_tl,
             )
 
+def should_run_cross_doc_inference(doc_count: int, interval: int = 10) -> bool:
+    """Check if cross-document inference should run based on ingestion count."""
+    return doc_count > 0 and doc_count % interval == 0
+
+
 def _extract_evidence_span(text: str, name: str, window: int = 48) -> Optional[str]:
     if not text or not name:
         return None
@@ -597,4 +602,5 @@ __all__ = [
     "build_graph_payload",
     "get_graph_ingest_queue",
     "ingest_graph_payload",
+    "should_run_cross_doc_inference",
 ]

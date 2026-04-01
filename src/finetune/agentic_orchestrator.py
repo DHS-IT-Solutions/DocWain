@@ -20,6 +20,36 @@ from src.utils.payload_utils import get_source_name
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Daily fine-tune retarget policy (Task 28)
+# ---------------------------------------------------------------------------
+
+_TARGET_MODEL: str = "docwain:v2"
+
+_BLOCKED_SOURCES: set = {"document_content", "raw_text", "embedding_vector"}
+
+
+def get_target_model() -> str:
+    """Return the canonical target model for the daily fine-tune loop."""
+    return _TARGET_MODEL
+
+
+def enforce_data_policy(pair: dict) -> bool:
+    """Return True if the training pair passes data-policy checks, False to reject.
+
+    Rejects the pair when:
+    - ``pair["source"]`` is in _BLOCKED_SOURCES, OR
+    - the ``answer`` field exceeds 2000 characters.
+    """
+    source = pair.get("source", "")
+    if source in _BLOCKED_SOURCES:
+        return False
+    answer = pair.get("answer", "") or ""
+    if len(answer) > 2000:
+        return False
+    return True
+
+
 class OllamaModelMissing(Exception):
     """Raised when the required Ollama model is not available locally."""
 
