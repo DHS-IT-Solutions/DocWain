@@ -15,7 +15,11 @@ PHASE_MARKERS: Dict[str, str] = {
     "phase2_5": ".phase2_5_complete",
     "phase3": "phase3_config.json",
     "phase3_5": ".phase3_5_complete",
+    "phase3_7": ".phase3_7_complete",
     "phase4": "phase4_plan.json",
+    "round1": ".round1_complete",
+    "round2": ".round2_complete",
+    "round3": ".round3_complete",
 }
 
 
@@ -29,7 +33,10 @@ class V2Pipeline:
         Defaults to ``finetune_artifacts/v2``.
     """
 
-    phases: List[str] = ["phase1", "phase2", "phase2_5", "phase3", "phase3_5", "phase4"]
+    phases: List[str] = [
+        "phase1", "phase2", "phase2_5", "phase3", "phase3_5",
+        "phase3_7", "phase4", "round1", "round2", "round3",
+    ]
 
     def __init__(self, base_dir: Optional[Path] = None) -> None:
         self.base_dir = Path(base_dir) if base_dir else Path("finetune_artifacts/v2")

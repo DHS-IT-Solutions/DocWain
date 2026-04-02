@@ -27,7 +27,7 @@ class Phase4Config:
     """Configuration for the merge-and-promote step."""
 
     # Input paths
-    phase3_dir: Path = Path("finetune_artifacts/v2/phase3")
+    phase3_dir: Path = Path("finetune_artifacts/v2/phase3_7")
     base_model: str = "unsloth/Qwen3-14B-bnb-4bit"
 
     # Quantisation
@@ -193,6 +193,9 @@ def get_new_capability_criteria() -> Dict[str, float]:
         "layout_detection_map": 65.0,
         "insight_precision": 0.80,
         "confidence_calibration_ece": 0.10,
+        "synthesis_coherence": 0.80,
+        "intent_alignment": 0.85,
+        "depth_calibration": 0.75,
     }
 
 
