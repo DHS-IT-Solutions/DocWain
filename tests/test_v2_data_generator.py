@@ -167,5 +167,93 @@ class TestBaseGenerator(unittest.TestCase):
         self.assertEqual(len(DOC_TYPES), 18)
 
 
+class TestPhase2Generator(unittest.TestCase):
+    """Tests for Phase 2 document intelligence data generator."""
+
+    def test_generate_table_examples(self):
+        from src.finetune.v2.data_generator.phase2_doc_intelligence import (
+            generate_table_examples,
+        )
+
+        examples = generate_table_examples(count=10)
+        self.assertEqual(len(examples), 10)
+        for ex in examples:
+            self.assertIn("text", ex)
+            self.assertIn("<think>", ex["text"])
+            self.assertIn("</think>", ex["text"])
+            self.assertIn("<|im_start|>", ex["text"])
+
+    def test_generate_layout_examples(self):
+        from src.finetune.v2.data_generator.phase2_doc_intelligence import (
+            generate_layout_examples,
+        )
+
+        examples = generate_layout_examples(count=10)
+        self.assertEqual(len(examples), 10)
+        for ex in examples:
+            self.assertIn("text", ex)
+            self.assertIn("<think>", ex["text"])
+            self.assertIn("</think>", ex["text"])
+
+    def test_generate_ocr_examples(self):
+        from src.finetune.v2.data_generator.phase2_doc_intelligence import (
+            generate_ocr_examples,
+        )
+
+        examples = generate_ocr_examples(count=10)
+        self.assertEqual(len(examples), 10)
+        for ex in examples:
+            self.assertIn("text", ex)
+            self.assertIn("<think>", ex["text"])
+            self.assertIn("</think>", ex["text"])
+
+    def test_generate_cross_ref_examples(self):
+        from src.finetune.v2.data_generator.phase2_doc_intelligence import (
+            generate_cross_ref_examples,
+        )
+
+        examples = generate_cross_ref_examples(count=10)
+        self.assertEqual(len(examples), 10)
+        for ex in examples:
+            self.assertIn("text", ex)
+            self.assertIn("<think>", ex["text"])
+            self.assertIn("</think>", ex["text"])
+
+    def test_generate_all_phase2_data(self):
+        from src.finetune.v2.data_generator.phase2_doc_intelligence import (
+            generate_phase2_data,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            stats = generate_phase2_data(td, scale=0.01)
+
+            self.assertIn("table_understanding", stats)
+            self.assertIn("layout_comprehension", stats)
+            self.assertIn("ocr_correction", stats)
+            self.assertIn("cross_document_reasoning", stats)
+
+            for name, count in stats.items():
+                self.assertGreater(count, 0)
+                fpath = os.path.join(td, f"phase2_{name}.jsonl")
+                self.assertTrue(os.path.isfile(fpath), f"Missing file: {fpath}")
+                with open(fpath) as f:
+                    lines = f.readlines()
+                self.assertGreater(len(lines), 0)
+
+    def test_table_tiers_distribution(self):
+        from src.finetune.v2.data_generator.phase2_doc_intelligence import (
+            generate_table_examples,
+        )
+
+        examples = generate_table_examples(count=100)
+        self.assertEqual(len(examples), 100)
+
+        # Verify there is variation in the generated examples
+        texts = [ex["text"] for ex in examples]
+        unique_texts = set(texts)
+        # With 100 examples and random variation, we should get significant uniqueness
+        self.assertGreater(len(unique_texts), 50, "Expected diverse examples")
+
+
 if __name__ == "__main__":
     unittest.main()
