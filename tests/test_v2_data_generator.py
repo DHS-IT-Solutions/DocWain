@@ -255,5 +255,193 @@ class TestPhase2Generator(unittest.TestCase):
         self.assertGreater(len(unique_texts), 50, "Expected diverse examples")
 
 
+class TestPhase25DPOGenerator(unittest.TestCase):
+    """Tests for Phase 2.5 DPO preference pair generator."""
+
+    def test_generate_dpo_pairs(self):
+        from src.finetune.v2.data_generator.phase2_5_dpo_pairs import (
+            generate_dpo_pairs,
+        )
+
+        pairs = generate_dpo_pairs(count=10)
+        self.assertEqual(len(pairs), 10)
+        for pair in pairs:
+            self.assertIn("prompt", pair)
+            self.assertIn("chosen", pair)
+            self.assertIn("rejected", pair)
+            self.assertIn("<think>", pair["chosen"])
+            self.assertIn("<think>", pair["rejected"])
+
+    def test_corruption_types_present(self):
+        from src.finetune.v2.data_generator.phase2_5_dpo_pairs import (
+            generate_dpo_pairs,
+            CORRUPTION_TYPES,
+        )
+
+        pairs = generate_dpo_pairs(count=50)
+        self.assertEqual(len(pairs), 50)
+        # With 10 templates and 50 examples, we get good variety
+        # Verify all 5 corruption types are defined
+        self.assertEqual(len(CORRUPTION_TYPES), 5)
+        self.assertIn("reasoning_corruption", CORRUPTION_TYPES)
+        self.assertIn("hallucination_injection", CORRUPTION_TYPES)
+        self.assertIn("over_confidence", CORRUPTION_TYPES)
+        self.assertIn("omission_corruption", CORRUPTION_TYPES)
+        self.assertIn("structure_corruption", CORRUPTION_TYPES)
+
+    def test_generate_phase25_data(self):
+        from src.finetune.v2.data_generator.phase2_5_dpo_pairs import (
+            generate_phase25_data,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            count = generate_phase25_data(td, scale=0.01)
+            self.assertGreater(count, 0)
+            fpath = os.path.join(td, "phase25_dpo_pairs.jsonl")
+            self.assertTrue(os.path.isfile(fpath))
+            with open(fpath) as f:
+                lines = f.readlines()
+            self.assertGreater(len(lines), 0)
+
+
+class TestPhase35InsightGenerator(unittest.TestCase):
+    """Tests for Phase 3.5 insight data generator."""
+
+    def test_generate_insight_examples(self):
+        from src.finetune.v2.data_generator.phase3_5_insights import (
+            generate_insight_examples,
+        )
+
+        examples = generate_insight_examples(count=20)
+        self.assertEqual(len(examples), 20)
+        for ex in examples:
+            self.assertIn("text", ex)
+            self.assertIn("<think>", ex["text"])
+            self.assertIn("</think>", ex["text"])
+            self.assertIn("<insight", ex["text"])
+
+    def test_all_7_categories_covered(self):
+        from src.finetune.v2.data_generator.phase3_5_insights import (
+            INSIGHT_CATEGORIES,
+        )
+
+        self.assertEqual(len(INSIGHT_CATEGORIES), 7)
+        self.assertIn("holistic_synthesis", INSIGHT_CATEGORIES)
+        self.assertIn("risk_assessment", INSIGHT_CATEGORIES)
+        self.assertIn("pattern_recognition", INSIGHT_CATEGORIES)
+        self.assertIn("anomaly_detection", INSIGHT_CATEGORIES)
+        self.assertIn("trend_analysis", INSIGHT_CATEGORIES)
+        self.assertIn("comparative_analysis", INSIGHT_CATEGORIES)
+        self.assertIn("gap_analysis", INSIGHT_CATEGORIES)
+
+    def test_generate_phase35_data(self):
+        from src.finetune.v2.data_generator.phase3_5_insights import (
+            generate_phase35_data,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            count = generate_phase35_data(td, scale=0.01)
+            self.assertGreater(count, 0)
+            fpath = os.path.join(td, "phase35_insights.jsonl")
+            self.assertTrue(os.path.isfile(fpath))
+
+
+class TestPhase37HolisticGenerator(unittest.TestCase):
+    """Tests for Phase 3.7 holistic reasoning data generator."""
+
+    def test_generate_holistic_examples(self):
+        from src.finetune.v2.data_generator.phase3_7_holistic import (
+            generate_holistic_examples,
+        )
+
+        examples = generate_holistic_examples(count=20)
+        self.assertEqual(len(examples), 20)
+        for ex in examples:
+            self.assertIn("text", ex)
+            self.assertIn("<think>", ex["text"])
+            self.assertIn("</think>", ex["text"])
+
+    def test_all_4_modes_covered(self):
+        from src.finetune.v2.data_generator.phase3_7_holistic import (
+            REASONING_MODES,
+        )
+
+        self.assertEqual(len(REASONING_MODES), 4)
+        self.assertIn("intent_decomposition", REASONING_MODES)
+        self.assertIn("evidence_synthesis", REASONING_MODES)
+        self.assertIn("depth_calibration", REASONING_MODES)
+        self.assertIn("domain_reasoning", REASONING_MODES)
+
+    def test_generate_phase37_data(self):
+        from src.finetune.v2.data_generator.phase3_7_holistic import (
+            generate_phase37_data,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            count = generate_phase37_data(td, scale=0.01)
+            self.assertGreater(count, 0)
+            fpath = os.path.join(td, "phase37_holistic.jsonl")
+            self.assertTrue(os.path.isfile(fpath))
+
+
+class TestPostTrainingGenerators(unittest.TestCase):
+    """Tests for post-training data generators and eval suite."""
+
+    def test_conversational_dpo(self):
+        from src.finetune.v2.data_generator.post_conversational import (
+            generate_conversational_dpo,
+        )
+
+        pairs = generate_conversational_dpo(count=10)
+        self.assertEqual(len(pairs), 10)
+        for pair in pairs:
+            self.assertIn("prompt", pair)
+            self.assertIn("chosen", pair)
+            self.assertIn("rejected", pair)
+
+    def test_confidence_calibration(self):
+        from src.finetune.v2.data_generator.post_confidence import (
+            generate_confidence_examples,
+        )
+
+        examples = generate_confidence_examples(count=10)
+        self.assertEqual(len(examples), 10)
+        for ex in examples:
+            self.assertIn("text", ex)
+            text_lower = ex["text"].lower()
+            self.assertTrue(
+                "confidence" in text_lower,
+                "Expected 'confidence' in example text",
+            )
+
+    def test_eval_suite(self):
+        from src.finetune.v2.data_generator.eval_suite import (
+            generate_eval_suite,
+            BENCHMARKS,
+        )
+
+        suite = generate_eval_suite()
+        self.assertEqual(len(suite), 500)
+
+        benchmarks_found = {ex["benchmark"] for ex in suite}
+        self.assertIn("TableBench", benchmarks_found)
+        self.assertIn("HalluBench", benchmarks_found)
+        self.assertIn("SynthesisEval", benchmarks_found)
+
+        # Verify counts match
+        for name, expected_count in BENCHMARKS.items():
+            actual = sum(1 for ex in suite if ex["benchmark"] == name)
+            self.assertEqual(actual, expected_count, f"{name} count mismatch")
+
+    def test_eval_suite_frozen(self):
+        from src.finetune.v2.data_generator.eval_suite import generate_eval_suite
+
+        run1 = generate_eval_suite()
+        run2 = generate_eval_suite()
+        self.assertEqual(len(run1), len(run2))
+        for a, b in zip(run1, run2):
+            self.assertEqual(a, b, "Eval suite is not deterministic")
+
+
 if __name__ == "__main__":
     unittest.main()
