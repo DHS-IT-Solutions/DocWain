@@ -17,6 +17,13 @@ Usage::
 
 from __future__ import annotations
 
+# Patch llm_blender compatibility with latest transformers (TRANSFORMERS_CACHE removed)
+import transformers.utils.hub as _hub
+if not hasattr(_hub, "TRANSFORMERS_CACHE"):
+    _hub.TRANSFORMERS_CACHE = __import__("os").path.join(
+        __import__("os").path.expanduser("~"), ".cache", "huggingface", "hub"
+    )
+
 import glob
 import json
 import logging
@@ -311,7 +318,11 @@ def _run_dpo(
     Returns dict with DPO metrics.
     """
     from datasets import load_dataset
-    from trl import DPOTrainer, DPOConfig
+    try:
+        from trl import DPOTrainer, DPOConfig
+    except (ImportError, RuntimeError) as exc:
+        logger.warning("DPO trainer not available (%s), skipping DPO", exc)
+        return {"skipped": True, "reason": str(exc)}
 
     if not config.dpo_path or not Path(config.dpo_path).exists():
         logger.info("No DPO data at %s, skipping DPO", config.dpo_path)
