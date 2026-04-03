@@ -426,10 +426,15 @@ def _merge_and_export(model, tokenizer, config: TrackTrainingConfig) -> str:
     except Exception as exc:
         logger.warning("GGUF export failed: %s", exc)
 
-    # Find the GGUF file
+    # Find the GGUF file (Unsloth may save in a subdirectory like gguf_gguf/)
     gguf_files = sorted(glob.glob(str(gguf_dir / "*.gguf")))
     if not gguf_files:
-        logger.warning("No GGUF file found after export")
+        gguf_files = sorted(glob.glob(str(gguf_dir / "**" / "*.gguf"), recursive=True))
+    if not gguf_files:
+        # Also check parent directory variations
+        gguf_files = sorted(glob.glob(str(gguf_dir.parent / "**" / "*.gguf"), recursive=True))
+    if not gguf_files:
+        logger.warning("No GGUF file found after export in %s or subdirectories", gguf_dir)
         return str(merged_dir)
 
     gguf_path = gguf_files[-1]
