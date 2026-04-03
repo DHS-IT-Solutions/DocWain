@@ -45,6 +45,46 @@ OLLAMA_TIMEOUT = 120  # seconds
 
 
 # ---------------------------------------------------------------------------
+# Standalone query helper (used by autonomous_trainer)
+# ---------------------------------------------------------------------------
+
+
+def query_ollama(
+    prompt: str,
+    *,
+    model: str = "DHS/DocWain",
+    system: Optional[str] = None,
+    timeout: int = OLLAMA_TIMEOUT,
+) -> str:
+    """Query Ollama and return the response text.
+
+    Convenience function for callers that don't need a full TrackEvaluator.
+    Returns empty string on any error.
+    """
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "system": system or DOCWAIN_SYSTEM_PROMPT,
+        "stream": False,
+        "options": {"temperature": 0.3, "num_predict": 4096},
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = Request(
+        OLLAMA_URL,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            return body.get("response", "")
+    except Exception as exc:
+        logger.warning("query_ollama failed (model=%s): %s", model, exc)
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Model query
 # ---------------------------------------------------------------------------
 
