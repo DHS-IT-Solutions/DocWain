@@ -1,7 +1,7 @@
 """Round 1 — Conversational DPO.
 
-Full-model fine-tuning using Direct Preference Optimisation on conversational
-preference pairs.  Operates on the merged model weights (not VisionGraftedModel)
+LoRA fine-tuning using Direct Preference Optimisation on conversational
+preference pairs.  Operates on the merged model weights (loaded in 4-bit)
 to refine conversational quality after the main training phases.
 
 Data source: ``conversational_dpo.jsonl`` with chosen/rejected response pairs.
@@ -43,9 +43,13 @@ class Round1Config:
     # Precision
     bf16: bool = True
 
-    # Model strategy — full fine-tuning (no LoRA)
-    use_lora: bool = False
+    # Model strategy — LoRA + 4-bit for memory efficiency
     use_gradient_checkpointing: bool = True
+
+    # LoRA
+    lora_r: int = 32
+    lora_alpha: int = 64
+    lora_dropout: float = 0.0
 
     # Paths
     data_path: Path = Path("finetune_data/v2/post_training/conversational_dpo.jsonl")
@@ -62,19 +66,7 @@ class Round1Config:
 
 
 def _build_training_args(config: Round1Config, output_dir: Path) -> Dict[str, Any]:
-    """Build a DPOConfig-compatible training arguments dictionary.
-
-    Parameters
-    ----------
-    config:
-        Round 1 DPO training configuration.
-    output_dir:
-        Directory where checkpoints and the final model are written.
-
-    Returns
-    -------
-    dict suitable for unpacking into ``trl.DPOConfig``.
-    """
+    """Build a DPOConfig-compatible training arguments dictionary."""
     return {
         "output_dir": str(output_dir),
         "num_train_epochs": config.epochs,
@@ -130,10 +122,10 @@ def run_round1(
 ) -> Path:
     """Execute Round 1 conversational DPO.
 
-    1. Loads the merged model from ``AutoModelForCausalLM.from_pretrained``.
+    1. Loads the merged model in 4-bit with LoRA via Unsloth.
     2. Loads the conversational DPO dataset.
-    3. Trains with ``trl.DPOTrainer`` using full model fine-tuning.
-    4. Saves the final checkpoint and writes a ``.round1_complete`` marker.
+    3. Trains with ``trl.DPOTrainer``.
+    4. Saves the merged checkpoint and writes a ``.round1_complete`` marker.
 
     Parameters
     ----------
@@ -154,26 +146,39 @@ def run_round1(
 
     logger.info("=== Round 1: Conversational DPO ===")
     logger.info(
-        "LR=%s  beta=%s  epochs=%d  batch=%d  grad_accum=%d  use_lora=%s",
+        "LR=%s  beta=%s  epochs=%d  batch=%d  grad_accum=%d  lora_r=%d",
         config.learning_rate,
         config.beta,
         config.epochs,
         config.per_device_batch_size,
         config.gradient_accumulation_steps,
-        config.use_lora,
+        config.lora_r,
     )
 
-    # --- Load merged model ---------------------------------------------------
-    from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+    # --- Load merged model in 4-bit with LoRA ---------------------------------
+    from unsloth import FastLanguageModel  # type: ignore
 
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
-    model = AutoModelForCausalLM.from_pretrained(
-        str(model_dir),
-        torch_dtype="auto",
+    max_seq = config.max_prompt_length + config.max_response_length
+
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=str(model_dir),
+        dtype=None,
+        load_in_4bit=True,
+        max_seq_length=max_seq,
     )
 
-    if config.use_gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=config.lora_r,
+        lora_alpha=config.lora_alpha,
+        lora_dropout=config.lora_dropout,
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ],
+        use_gradient_checkpointing="unsloth",
+        max_seq_length=max_seq,
+    )
 
     # --- Load DPO dataset ----------------------------------------------------
     dataset = _load_dpo_dataset(config.data_path)
@@ -192,7 +197,7 @@ def run_round1(
         model=model,
         args=dpo_cfg,
         train_dataset=dataset,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
 
     logger.info(
@@ -202,11 +207,15 @@ def run_round1(
     )
     trainer.train()
 
-    # --- Save checkpoint and completion marker --------------------------------
+    # --- Save merged checkpoint -----------------------------------------------
     checkpoint_dir = config.output_dir / "checkpoint_final"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(str(checkpoint_dir))
-    tokenizer.save_pretrained(str(checkpoint_dir))
+    logger.info("Merging LoRA and saving to %s", checkpoint_dir)
+    model.save_pretrained_merged(
+        str(checkpoint_dir),
+        tokenizer,
+        save_method="merged_16bit",
+    )
 
     marker = config.output_dir / ".round1_complete"
     marker.touch()

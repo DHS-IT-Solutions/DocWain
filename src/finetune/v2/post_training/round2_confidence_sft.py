@@ -1,7 +1,8 @@
 """Round 2 — Confidence Calibration SFT.
 
-SFT fine-tuning on confidence-calibrated examples so the model learns to
-express appropriate uncertainty.  Operates on the Round 1 output model.
+LoRA SFT fine-tuning on confidence-calibrated examples so the model learns to
+express appropriate uncertainty.  Operates on the Round 1 output model
+loaded in 4-bit.
 
 Data source: ``confidence_sft.jsonl`` with calibrated confidence examples.
 
@@ -43,6 +44,11 @@ class Round2Config:
     # Gradient checkpointing
     use_gradient_checkpointing: bool = True
 
+    # LoRA
+    lora_r: int = 32
+    lora_alpha: int = 64
+    lora_dropout: float = 0.0
+
     # Paths
     data_path: Path = Path("finetune_data/v2/post_training/confidence_sft.jsonl")
     round1_dir: Path = Path("finetune_artifacts/v2/post_round1")
@@ -58,19 +64,7 @@ class Round2Config:
 
 
 def _build_training_args(config: Round2Config, output_dir: Path) -> Dict[str, Any]:
-    """Build an SFTConfig-compatible training arguments dictionary.
-
-    Parameters
-    ----------
-    config:
-        Round 2 confidence SFT training configuration.
-    output_dir:
-        Directory where checkpoints and the final model are written.
-
-    Returns
-    -------
-    dict suitable for unpacking into ``trl.SFTConfig``.
-    """
+    """Build an SFTConfig-compatible training arguments dictionary."""
     return {
         "output_dir": str(output_dir),
         "num_train_epochs": config.epochs,
@@ -83,6 +77,7 @@ def _build_training_args(config: Round2Config, output_dir: Path) -> Dict[str, An
         "gradient_checkpointing": config.use_gradient_checkpointing,
         "logging_steps": 25,
         "save_steps": 200,
+        "dataset_text_field": "text",
         "report_to": "none",
         "seed": 42,
     }
@@ -127,10 +122,10 @@ def run_round2(
 ) -> Path:
     """Execute Round 2 confidence calibration SFT.
 
-    1. Loads the model from Round 1 output via ``AutoModelForCausalLM``.
+    1. Loads the model from Round 1 output in 4-bit with LoRA via Unsloth.
     2. Loads the confidence calibration SFT dataset.
     3. Trains with ``trl.SFTTrainer``.
-    4. Saves the final checkpoint and writes a ``.round2_complete`` marker.
+    4. Saves the merged checkpoint and writes a ``.round2_complete`` marker.
 
     Parameters
     ----------
@@ -151,25 +146,37 @@ def run_round2(
 
     logger.info("=== Round 2: Confidence Calibration SFT ===")
     logger.info(
-        "LR=%s  epochs=%d  batch=%d  grad_accum=%d",
+        "LR=%s  epochs=%d  batch=%d  grad_accum=%d  lora_r=%d",
         config.learning_rate,
         config.epochs,
         config.per_device_batch_size,
         config.gradient_accumulation_steps,
+        config.lora_r,
     )
 
-    # --- Load model from Round 1 output --------------------------------------
-    from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+    # --- Load model from Round 1 output in 4-bit with LoRA -------------------
+    from unsloth import FastLanguageModel  # type: ignore
 
     model_path = r1_dir / "checkpoint_final"
-    tokenizer = AutoTokenizer.from_pretrained(str(model_path))
-    model = AutoModelForCausalLM.from_pretrained(
-        str(model_path),
-        torch_dtype="auto",
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=str(model_path),
+        dtype=None,
+        load_in_4bit=True,
+        max_seq_length=config.max_seq_length,
     )
 
-    if config.use_gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=config.lora_r,
+        lora_alpha=config.lora_alpha,
+        lora_dropout=config.lora_dropout,
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ],
+        use_gradient_checkpointing="unsloth",
+        max_seq_length=config.max_seq_length,
+    )
 
     # --- Load confidence dataset ---------------------------------------------
     dataset = _load_confidence_dataset(config.data_path)
@@ -188,7 +195,7 @@ def run_round2(
         model=model,
         args=sft_cfg,
         train_dataset=dataset,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
 
     logger.info(
@@ -197,11 +204,15 @@ def run_round2(
     )
     trainer.train()
 
-    # --- Save checkpoint and completion marker --------------------------------
+    # --- Save merged checkpoint -----------------------------------------------
     checkpoint_dir = config.output_dir / "checkpoint_final"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(str(checkpoint_dir))
-    tokenizer.save_pretrained(str(checkpoint_dir))
+    logger.info("Merging LoRA and saving to %s", checkpoint_dir)
+    model.save_pretrained_merged(
+        str(checkpoint_dir),
+        tokenizer,
+        save_method="merged_16bit",
+    )
 
     marker = config.output_dir / ".round2_complete"
     marker.touch()

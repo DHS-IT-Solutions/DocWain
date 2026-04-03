@@ -108,32 +108,32 @@ def _run_phase(
         generate_all(data_dir, scale)
 
     elif phase == "phase1":
-        from .phase1_vision_graft import run_phase1
+        from .train_phase1 import run_phase1
 
         run_phase1()
 
     elif phase == "phase2":
-        from .phase2_doc_sft import run_phase2
+        from .train_phase2 import run_phase2
 
         run_phase2()
 
     elif phase == "phase2_5":
-        from .phase2_5_dpo import run_phase2_5
+        from .train_phase2_5_dpo import run_phase2_5
 
         run_phase2_5()
 
     elif phase == "phase3":
-        from .phase3_tool_sft import run_phase3
+        from .train_phase3 import run_phase3
 
         run_phase3()
 
     elif phase == "phase3_5":
-        from .phase3_5_insight_sft import run_phase3_5
+        from .train_phase3_5_insights import run_phase3_5
 
         run_phase3_5()
 
     elif phase == "phase3_7":
-        from .phase3_7_holistic import run_phase3_7
+        from .train_phase3_7_holistic import run_phase3_7
 
         run_phase3_7()
 
@@ -143,25 +143,24 @@ def _run_phase(
         run_phase4()
 
     elif phase == "round1":
-        from .post_round1 import run_round1
+        from .post_training.round1_conversational_dpo import run_round1
 
         run_round1()
 
     elif phase == "round2":
-        from .post_round2 import run_round2
+        from .post_training.round2_confidence_sft import run_round2
 
         run_round2()
 
     elif phase == "round3":
-        from .post_round3 import run_round3
+        from .post_training.round3_distillation import run_round3
 
         run_round3()
 
     elif phase == "final_promote":
-        from .merge_promote import run_phase4, Phase4Config
+        from .merge_promote import run_final_promote
 
-        config = Phase4Config()
-        run_phase4(config=config, skip_regression=False)
+        run_final_promote()
 
     else:
         raise ValueError(f"Unknown phase: {phase}")
