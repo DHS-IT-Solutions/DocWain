@@ -13,6 +13,14 @@ Usage::
 
 from __future__ import annotations
 
+# Patch llm_blender compatibility with latest transformers (TRANSFORMERS_CACHE removed)
+import transformers.utils.hub as _hub
+if not hasattr(_hub, "TRANSFORMERS_CACHE"):
+    import os as _os
+    _hub.TRANSFORMERS_CACHE = _os.path.join(
+        _os.path.expanduser("~"), ".cache", "huggingface", "hub"
+    )
+
 import importlib
 import json
 import logging
