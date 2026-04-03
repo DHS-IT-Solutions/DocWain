@@ -1,102 +1,101 @@
-"""Alert digest formatting and storage for DocWain V2.
+"""Alert Digest — aggregation, formatting, and storage of alert batches.
 
-Takes a list of alerts and profile intelligence, produces a structured
-digest suitable for delivery via Teams, email, or the UI alert banner.
-
-Usage::
-
-    digest_builder = AlertDigest()
-    digest = digest_builder.format_digest(alerts, intelligence)
-    digest_builder.store_digest(digest, profile_id, mongo_client)
+Consumes a list of :class:`Alert` instances together with the corresponding
+:class:`ProfileIntelligence` and produces a structured digest suitable for
+API responses, email notifications, or dashboard display.
 """
-
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+from src.utils.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class AlertDigest:
-    """Formats and stores alert digests."""
+    """Formats and persists alert digests for a profile."""
+
+    # ------------------------------------------------------------------
+    # Formatting
+    # ------------------------------------------------------------------
 
     def format_digest(
         self,
         alerts: List[Any],
         profile_intelligence: Any,
     ) -> Dict[str, Any]:
-        """Format alerts into a structured digest.
+        """Build a structured digest from alerts and profile intelligence.
 
-        Parameters
-        ----------
-        alerts:
-            List of Alert objects or dicts with severity/category/title/detail/action/source.
-        profile_intelligence:
-            ProfileIntelligence object with profile metadata.
+        Args:
+            alerts: List of :class:`Alert` dataclass instances (or dicts).
+            profile_intelligence: A :class:`ProfileIntelligence` instance.
 
-        Returns
-        -------
-        Structured digest dict.
+        Returns:
+            A dict with keys: ``summary``, ``critical_count``, ``warning_count``,
+            ``info_count``, ``alerts``, ``profile_summary``, ``timestamp``.
         """
-        # Normalise alerts to dicts
-        alert_dicts = []
-        for a in alerts:
-            if hasattr(a, "severity"):
-                alert_dicts.append({
-                    "severity": a.severity,
-                    "category": a.category,
-                    "title": a.title,
-                    "detail": a.detail,
-                    "action": a.action,
-                    "source": a.source,
-                })
-            elif isinstance(a, dict):
-                alert_dicts.append(a)
+        alert_dicts = self._normalise_alerts(alerts)
 
-        # Count by severity
-        critical = [a for a in alert_dicts if a.get("severity") == "critical"]
-        warning = [a for a in alert_dicts if a.get("severity") == "warning"]
-        info = [a for a in alert_dicts if a.get("severity") == "info"]
+        critical = [a for a in alert_dicts if a["severity"] == "critical"]
+        warnings = [a for a in alert_dicts if a["severity"] == "warning"]
+        infos = [a for a in alert_dicts if a["severity"] == "info"]
 
-        # Build summary line
-        parts = []
+        # Build human-readable summary
+        profile_id = getattr(profile_intelligence, "profile_id", "unknown")
+        profile_type = getattr(profile_intelligence, "profile_type", "generic")
+        doc_count = getattr(profile_intelligence, "document_count", 0)
+
+        summary_parts: List[str] = []
         if critical:
-            parts.append(f"{len(critical)} critical")
-        if warning:
-            parts.append(f"{len(warning)} warning")
-        if info:
-            parts.append(f"{len(info)} informational")
-        summary = ", ".join(parts) if parts else "No alerts"
+            summary_parts.append(f"{len(critical)} critical")
+        if warnings:
+            summary_parts.append(f"{len(warnings)} warning(s)")
+        if infos:
+            summary_parts.append(f"{len(infos)} informational")
+        summary_line = (
+            f"Profile '{profile_id}' ({profile_type}, {doc_count} docs): "
+            + (", ".join(summary_parts) if summary_parts else "no alerts")
+            + "."
+        )
 
-        # Profile context
-        profile_summary = {}
-        if profile_intelligence:
-            pi = profile_intelligence
-            profile_summary = {
-                "profile_id": getattr(pi, "profile_id", ""),
-                "profile_type": getattr(pi, "profile_type", "generic"),
-                "document_count": getattr(pi, "document_count", 0),
-                "domain": getattr(pi, "domain_metadata", {}).get(
-                    "detected_domain", "generic"
-                ) if hasattr(pi, "domain_metadata") else "generic",
-            }
+        # Profile summary block
+        profile_summary = {
+            "profile_id": profile_id,
+            "profile_type": profile_type,
+            "document_count": doc_count,
+            "entities_total": (
+                getattr(profile_intelligence, "entities_summary", {}).get("total", 0)
+                if hasattr(profile_intelligence, "entities_summary")
+                else 0
+            ),
+            "patterns_count": len(
+                getattr(profile_intelligence, "collection_insights", {}).get("patterns", [])
+                if hasattr(profile_intelligence, "collection_insights")
+                else []
+            ),
+        }
+
+        # Sort alerts: critical first, then warning, then info
+        severity_order = {"critical": 0, "warning": 1, "info": 2}
+        sorted_alerts = sorted(
+            alert_dicts, key=lambda a: severity_order.get(a["severity"], 9)
+        )
 
         return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "summary": summary,
+            "summary": summary_line,
             "critical_count": len(critical),
-            "warning_count": len(warning),
-            "info_count": len(info),
-            "total_count": len(alert_dicts),
-            "alerts": {
-                "critical": critical,
-                "warning": warning,
-                "info": info,
-            },
+            "warning_count": len(warnings),
+            "info_count": len(infos),
+            "alerts": sorted_alerts,
             "profile_summary": profile_summary,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    # ------------------------------------------------------------------
+    # Storage
+    # ------------------------------------------------------------------
 
     def store_digest(
         self,
@@ -104,93 +103,56 @@ class AlertDigest:
         profile_id: str,
         mongo_client: Any,
     ) -> None:
-        """Store the digest in MongoDB for later retrieval.
+        """Persist the digest in MongoDB ``alert_digests`` collection.
 
-        Stored in the ``alert_digests`` collection with the profile_id
-        and timestamp as the key.
+        Each digest is inserted as a new document (not upserted) so that
+        historical digests are preserved for trend analysis.
+
+        Args:
+            digest: The digest dict produced by :meth:`format_digest`.
+            profile_id: Profile identifier.
+            mongo_client: A pymongo ``MongoClient`` (or compatible).
         """
         try:
-            db = mongo_client.get_database()
+            db = (
+                mongo_client.get_default_database()
+                if hasattr(mongo_client, "get_default_database")
+                else mongo_client.docwain
+            )
             doc = {
                 "profile_id": profile_id,
                 **digest,
             }
-            db["alert_digests"].insert_one(doc)
+            db.alert_digests.insert_one(doc)
             logger.info(
-                "Alert digest stored for profile %s (%d alerts)",
-                profile_id, digest.get("total_count", 0),
+                "Stored alert digest for profile=%s (%d alerts)",
+                profile_id,
+                len(digest.get("alerts", [])),
             )
-        except Exception as exc:
-            logger.error(
-                "Failed to store digest for %s: %s", profile_id, exc
-            )
+        except Exception:
+            logger.exception("Failed to store alert digest for profile=%s", profile_id)
 
-    def get_latest_digest(
-        self,
-        profile_id: str,
-        mongo_client: Any,
-    ) -> Dict[str, Any]:
-        """Retrieve the most recent digest for a profile."""
-        try:
-            db = mongo_client.get_database()
-            doc = db["alert_digests"].find_one(
-                {"profile_id": profile_id},
-                sort=[("generated_at", -1)],
-            )
-            if doc:
-                doc.pop("_id", None)
-                return doc
-        except Exception as exc:
-            logger.error(
-                "Failed to retrieve digest for %s: %s", profile_id, exc
-            )
-        return {}
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
 
-    def format_teams_card(self, digest: Dict[str, Any]) -> Dict[str, Any]:
-        """Format digest as a Microsoft Teams Adaptive Card.
-
-        Returns an Adaptive Card JSON payload ready for posting to Teams.
-        """
-        summary = digest.get("summary", "No alerts")
-        profile = digest.get("profile_summary", {})
-
-        # Build alert items for the card
-        alert_items = []
-        for severity in ["critical", "warning", "info"]:
-            color = {"critical": "attention", "warning": "warning", "info": "default"}
-            for alert in digest.get("alerts", {}).get(severity, []):
-                alert_items.append({
-                    "type": "TextBlock",
-                    "text": f"**[{severity.upper()}]** {alert.get('title', '')}",
-                    "color": color.get(severity, "default"),
-                    "wrap": True,
+    @staticmethod
+    def _normalise_alerts(alerts: List[Any]) -> List[Dict[str, str]]:
+        """Convert Alert dataclass instances (or dicts) to plain dicts."""
+        result: List[Dict[str, str]] = []
+        for a in alerts:
+            if isinstance(a, dict):
+                result.append(a)
+            elif hasattr(a, "to_dict"):
+                result.append(a.to_dict())
+            else:
+                # Fallback: read dataclass fields
+                result.append({
+                    "severity": getattr(a, "severity", "info"),
+                    "category": getattr(a, "category", "general"),
+                    "title": getattr(a, "title", ""),
+                    "detail": getattr(a, "detail", ""),
+                    "action": getattr(a, "action", ""),
+                    "source": getattr(a, "source", "unknown"),
                 })
-                if alert.get("action"):
-                    alert_items.append({
-                        "type": "TextBlock",
-                        "text": f"Action: {alert['action']}",
-                        "size": "Small",
-                        "isSubtle": True,
-                        "wrap": True,
-                    })
-
-        card = {
-            "type": "AdaptiveCard",
-            "version": "1.4",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": f"DocWain Alert Digest — {profile.get('profile_type', 'Profile')}",
-                    "weight": "Bolder",
-                    "size": "Medium",
-                },
-                {
-                    "type": "TextBlock",
-                    "text": summary,
-                    "wrap": True,
-                },
-                {"type": "TextBlock", "text": "---"},
-                *alert_items,
-            ],
-        }
-        return card
+        return result
