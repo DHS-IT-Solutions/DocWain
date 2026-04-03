@@ -1054,7 +1054,6 @@ class AutonomousTrainer:
                 try:
                     gen_result = generator(
                         output_dir=str(data_dir),
-                        num_examples=sft_count,
                         seed=42 + iteration * 1000,
                     )
                     sft_path = Path(gen_result.get("sft_path", str(sft_path)))
