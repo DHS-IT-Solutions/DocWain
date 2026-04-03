@@ -1,0 +1,8 @@
+name: nice_clinical
+domain: clinical
+region: UK
+source_url: https://www.nice.org.uk/guidance/published
+qdrant_collection: knowledge_nice
+citation_format: "[NICE {id}, Section {section}]"
+update_schedule_cron: "0 3 1 * *"  # 1st of each month at 3am
+content_types: [NG, TA, QS, CG]
