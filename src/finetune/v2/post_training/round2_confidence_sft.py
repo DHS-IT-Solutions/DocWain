@@ -141,8 +141,14 @@ def run_round2(
     if config is None:
         config = Round2Config()
 
-    r1_dir = round1_dir or config.round1_dir
+    r1_dir = (round1_dir or config.round1_dir).resolve()
     config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not (r1_dir / "checkpoint_final").exists():
+        raise FileNotFoundError(
+            f"Round 1 checkpoint not found: {r1_dir / 'checkpoint_final'}. "
+            "Round 1 must complete successfully before Round 2."
+        )
 
     logger.info("=== Round 2: Confidence Calibration SFT ===")
     logger.info(
@@ -157,7 +163,8 @@ def run_round2(
     # --- Load model from Round 1 output in 4-bit with LoRA -------------------
     from unsloth import FastLanguageModel  # type: ignore
 
-    model_path = r1_dir / "checkpoint_final"
+    model_path = (r1_dir / "checkpoint_final").resolve()
+    logger.info("Loading Round 1 model from %s", model_path)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=str(model_path),
         dtype=None,

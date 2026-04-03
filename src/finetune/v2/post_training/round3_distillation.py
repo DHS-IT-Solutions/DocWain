@@ -142,8 +142,14 @@ def run_round3(
     if config is None:
         config = Round3Config()
 
-    r2_dir = round2_dir or config.round2_dir
+    r2_dir = (round2_dir or config.round2_dir).resolve()
     config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not (r2_dir / "checkpoint_final").exists():
+        raise FileNotFoundError(
+            f"Round 2 checkpoint not found: {r2_dir / 'checkpoint_final'}. "
+            "Round 2 must complete successfully before Round 3."
+        )
 
     logger.info("=== Round 3: Reasoning Distillation ===")
     logger.info(
@@ -158,7 +164,8 @@ def run_round3(
     # --- Load model from Round 2 output in 4-bit with LoRA -------------------
     from unsloth import FastLanguageModel  # type: ignore
 
-    model_path = r2_dir / "checkpoint_final"
+    model_path = (r2_dir / "checkpoint_final").resolve()
+    logger.info("Loading Round 2 model from %s", model_path)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=str(model_path),
         dtype=None,

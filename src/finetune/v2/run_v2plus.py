@@ -140,7 +140,14 @@ def _run_phase(
     elif phase == "phase4":
         from .merge_promote import run_phase4
 
-        run_phase4()
+        merged_dir = run_phase4()
+        # Verify merge actually produced model weights
+        safetensors = list(merged_dir.glob("*.safetensors"))
+        if not safetensors:
+            raise RuntimeError(
+                f"Phase 4 completed but no safetensors in {merged_dir}. "
+                "LoRA merge may have failed silently."
+            )
 
     elif phase == "round1":
         from .post_training.round1_conversational_dpo import run_round1

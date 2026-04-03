@@ -12,7 +12,8 @@ class TestRound1Config:
         assert cfg.learning_rate == 1e-6
         assert cfg.beta == 0.05
         assert cfg.epochs == 2
-        assert cfg.use_lora is False
+        assert cfg.lora_r == 32
+        assert cfg.lora_alpha == 64
         assert cfg.bf16 is True
         assert cfg.use_gradient_checkpointing is True
         assert cfg.gate_conversation_quality == 0.80

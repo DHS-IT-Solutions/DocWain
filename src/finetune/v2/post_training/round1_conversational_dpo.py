@@ -141,8 +141,14 @@ def run_round1(
     if config is None:
         config = Round1Config()
 
-    model_dir = merged_model_dir or config.merged_model_dir
+    model_dir = (merged_model_dir or config.merged_model_dir).resolve()
     config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not model_dir.exists():
+        raise FileNotFoundError(
+            f"Merged model directory not found: {model_dir}. "
+            "Phase 4 (merge) must complete successfully before Round 1."
+        )
 
     logger.info("=== Round 1: Conversational DPO ===")
     logger.info(
@@ -160,8 +166,9 @@ def run_round1(
 
     max_seq = config.max_prompt_length + config.max_response_length
 
+    logger.info("Loading merged model from %s", model_dir)
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=str(model_dir),
+        model_name=str(model_dir.resolve()),
         dtype=None,
         load_in_4bit=True,
         max_seq_length=max_seq,

@@ -229,7 +229,7 @@ def run_phase4(
 
     logger.info("=== Phase 4: Merge LoRA into Base Model ===")
 
-    adapter_dir = config.phase3_dir / "checkpoint_final"
+    adapter_dir = (config.phase3_dir / "checkpoint_final").resolve()
     if not adapter_dir.exists():
         raise FileNotFoundError(
             f"Adapter checkpoint not found: {adapter_dir}"
@@ -247,16 +247,17 @@ def run_phase4(
     )
 
     # Merge LoRA weights into the base model and save as FP16
-    config.merged_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("Merging LoRA and saving FP16 weights to %s", config.merged_dir)
+    merged_dir = config.merged_dir.resolve()
+    merged_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Merging LoRA and saving FP16 weights to %s", merged_dir)
     model.save_pretrained_merged(
-        str(config.merged_dir),
+        str(merged_dir),
         tokenizer,
         save_method="merged_16bit",
     )
 
-    logger.info("Phase 4 complete — merged model saved to %s", config.merged_dir)
-    return config.merged_dir
+    logger.info("Phase 4 complete — merged model saved to %s", merged_dir)
+    return merged_dir
 
 
 def _generate_safetensors_modelfile(model_dir: str) -> str:
@@ -295,6 +296,41 @@ PARAMETER stop <|im_end|>
 """
 
 
+def _find_existing_gguf(config: Phase4Config, model_dir: Path) -> Optional[Path]:
+    """Search known locations for an existing GGUF file from a prior conversion.
+
+    Unsloth writes GGUF output to ``{save_dir}_gguf/``, a sibling directory
+    of the path passed to ``save_pretrained_gguf``.  We check both the
+    configured output dir and the source model dir.
+    """
+    search_paths = [
+        # Unsloth sibling of the output dir: models/docwain-v2_gguf/
+        Path(str(config.gguf_output_dir) + "_gguf"),
+        # Unsloth sibling of the source model dir
+        Path(str(model_dir) + "_gguf"),
+        # Inside the output dir itself (manual placement)
+        config.gguf_output_dir,
+    ]
+    for search_dir in search_paths:
+        if search_dir.is_dir():
+            gguf_files = sorted(search_dir.glob("*.gguf"), key=lambda p: p.stat().st_size, reverse=True)
+            if gguf_files:
+                return gguf_files[0]
+    return None
+
+
+def _ollama_model_exists(model_tag: str) -> bool:
+    """Return True if the given model tag exists in Ollama."""
+    import subprocess
+
+    result = subprocess.run(
+        ["ollama", "show", model_tag, "--modelfile"],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def run_final_promote(
     config: Optional[Phase4Config] = None,
     *,
@@ -303,8 +339,9 @@ def run_final_promote(
     """Import the final model into Ollama and promote to latest.
 
     Called after all post-training rounds are complete. Takes the final
-    model checkpoint (safetensors format), creates an Ollama model via
-    direct HF import, and promotes it to latest.
+    model checkpoint, converts to GGUF (or reuses an existing GGUF),
+    creates a new Ollama model, and promotes it to latest — but only
+    after safely backing up the existing model.
 
     Parameters
     ----------
@@ -331,48 +368,62 @@ def run_final_promote(
             Path("finetune_artifacts/v2/post_round1/checkpoint_final"),
             config.merged_dir,
         ]:
-            if candidate.exists() and any(candidate.iterdir()):
+            candidate = candidate.resolve()
+            if candidate.exists() and any(candidate.glob("*.safetensors")):
                 model_dir = candidate
                 break
         if model_dir is None:
             raise FileNotFoundError(
-                "No model directory found to promote. Run training first."
+                "No model directory with safetensors found to promote. "
+                "Run training first."
             )
 
+    model_dir = model_dir.resolve()
     logger.info("=== Final Promote: GGUF + Ollama ===")
     logger.info("Source model: %s", model_dir)
 
     config.gguf_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Step 1: Convert to GGUF using Unsloth --------------------------------
-    from unsloth import FastLanguageModel  # type: ignore
+    # --- Step 1: Convert to GGUF (skip if valid GGUF already exists) ----------
+    existing_gguf = _find_existing_gguf(config, model_dir)
+    if existing_gguf is not None and existing_gguf.stat().st_size > 1_000_000_000:
+        logger.info("Reusing existing GGUF file: %s (%.1f GB)",
+                     existing_gguf, existing_gguf.stat().st_size / 1e9)
+        gguf_path = str(existing_gguf.resolve())
+    else:
+        from unsloth import FastLanguageModel  # type: ignore
 
-    logger.info("Loading model for GGUF conversion...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=str(model_dir),
-        dtype=None,
-        load_in_4bit=True,
-    )
+        logger.info("Loading model for GGUF conversion from %s", model_dir)
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=str(model_dir.resolve()),
+            dtype=None,
+            load_in_4bit=True,
+        )
 
-    logger.info("Converting to GGUF (%s)...", config.quant_method)
-    model.save_pretrained_gguf(
-        str(config.gguf_output_dir),
-        tokenizer,
-        quantization_method=config.quant_method,
-    )
+        logger.info("Converting to GGUF (%s)...", config.quant_method)
+        model.save_pretrained_gguf(
+            str(config.gguf_output_dir),
+            tokenizer,
+            quantization_method=config.quant_method,
+        )
 
-    # Find the generated GGUF file
-    gguf_files = list(config.gguf_output_dir.glob("*_gguf/*.gguf"))
-    if not gguf_files:
-        gguf_files = list(config.gguf_output_dir.glob("*.gguf"))
-    if not gguf_files:
-        # Check in the source model's _gguf directory
-        gguf_files = list(Path(str(model_dir) + "_gguf").glob("*.gguf"))
+        # Free GPU memory
+        del model, tokenizer
+        import gc, torch  # noqa: E401
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    if not gguf_files:
-        raise FileNotFoundError("GGUF conversion produced no output files")
+        # Find the generated GGUF file — Unsloth writes to {save_dir}_gguf/
+        converted_gguf = _find_existing_gguf(config, model_dir)
+        if converted_gguf is None:
+            raise FileNotFoundError(
+                "GGUF conversion produced no output files. "
+                f"Searched: {config.gguf_output_dir}_gguf/, "
+                f"{model_dir}_gguf/, {config.gguf_output_dir}/"
+            )
+        gguf_path = str(converted_gguf.resolve())
 
-    gguf_path = str(gguf_files[0].resolve())
     logger.info("GGUF file: %s", gguf_path)
 
     # --- Step 2: Generate Modelfile -------------------------------------------
@@ -381,25 +432,41 @@ def run_final_promote(
     modelfile_path.write_text(modelfile_content, encoding="utf-8")
     logger.info("Modelfile written to %s", modelfile_path)
 
-    # --- Step 3: Backup V1 and promote to Ollama ------------------------------
+    # --- Step 3: Backup existing model before overwriting ---------------------
     model_tag_v2 = f"{config.ollama_model_name}:{config.ollama_tag_v2}"
     model_tag_latest = f"{config.ollama_model_name}:{config.ollama_tag_latest}"
+    backup_tag = f"{config.ollama_model_name}:pre-v2-backup"
 
-    # Backup current latest as v1-backup
-    logger.info("Backing up current model as %s:v1-backup", config.ollama_model_name)
-    subprocess.run(
-        ["ollama", "cp", model_tag_latest, f"{config.ollama_model_name}:v1-backup"],
-        check=False,  # OK if no current model exists
-    )
+    if _ollama_model_exists(model_tag_latest):
+        logger.info("Backing up %s → %s", model_tag_latest, backup_tag)
+        result = subprocess.run(
+            ["ollama", "cp", model_tag_latest, backup_tag],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to backup {model_tag_latest} → {backup_tag}: "
+                f"{result.stderr.decode().strip()}. "
+                "Refusing to overwrite without a successful backup."
+            )
+        logger.info("Backup complete: %s", backup_tag)
+    else:
+        logger.info("No existing %s found — skipping backup", model_tag_latest)
 
-    # Create V2 model
+    # --- Step 4: Create V2 model from GGUF ------------------------------------
     logger.info("Creating Ollama model %s from %s", model_tag_v2, modelfile_path)
-    subprocess.run(
+    result = subprocess.run(
         ["ollama", "create", model_tag_v2, "-f", str(modelfile_path)],
-        check=True,
+        capture_output=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ollama create {model_tag_v2} failed: "
+            f"{result.stderr.decode().strip()}"
+        )
+    logger.info("Successfully created %s", model_tag_v2)
 
-    # Tag as latest
+    # --- Step 5: Promote V2 to latest -----------------------------------------
     logger.info("Promoting %s → %s", model_tag_v2, model_tag_latest)
     subprocess.run(
         ["ollama", "cp", model_tag_v2, model_tag_latest],
@@ -407,4 +474,5 @@ def run_final_promote(
     )
 
     logger.info("Final promote complete — %s is now live", model_tag_latest)
+    logger.info("Previous model preserved as %s", backup_tag)
     return modelfile_path
