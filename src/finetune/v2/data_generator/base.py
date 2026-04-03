@@ -164,6 +164,94 @@ def format_dpo_example(
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
 
+def format_sft_with_chart(
+    query: str,
+    reasoning: str,
+    response_text: str,
+    chart_spec: Optional[Dict[str, Any]] = None,
+    *,
+    system_prompt: Optional[str] = None,
+) -> Dict[str, str]:
+    """Format an SFT example with optional chart_spec output.
+
+    The answer is structured as ``<response>`` text and optional
+    ``<chart_spec>`` JSON block.  When *chart_spec* is ``None`` the
+    ``<chart_spec>`` block is omitted entirely — teaching the model
+    when NOT to generate a chart.
+    """
+    answer_parts = [f"<response>\n{response_text}\n</response>"]
+    if chart_spec is not None:
+        answer_parts.append(
+            f"\n<chart_spec>\n{json.dumps(chart_spec, ensure_ascii=False)}\n</chart_spec>"
+        )
+    return format_sft_example(
+        query, reasoning, "\n".join(answer_parts), system_prompt=system_prompt,
+    )
+
+
+def format_spreadsheet_context(
+    filename: str,
+    sheets: List[Dict[str, Any]],
+) -> str:
+    """Build a ``<spreadsheet>`` context block for model input.
+
+    Each entry in *sheets* should have keys: ``name``, ``headers`` (list),
+    ``rows`` (list of lists), and optionally ``summary``.
+    """
+    lines = [f'<spreadsheet source="{filename}">']
+    for s in sheets:
+        rows_count = len(s.get("rows", []))
+        cols_count = len(s.get("headers", []))
+        lines.append(f'  <sheet name="{s["name"]}" rows="{rows_count}" cols="{cols_count}">')
+        lines.append(f'    <headers>{" | ".join(s["headers"])}</headers>')
+        lines.append("    <sample_rows>")
+        for row in s.get("rows", [])[:10]:
+            lines.append(f"      {' | '.join(str(v) for v in row)}")
+        lines.append("    </sample_rows>")
+        if s.get("summary"):
+            lines.append(f"    <summary>{s['summary']}</summary>")
+        lines.append("  </sheet>")
+    lines.append("</spreadsheet>")
+    return "\n".join(lines)
+
+
+def format_kg_context(
+    entities: List[Dict[str, Any]],
+    relationships: List[Dict[str, Any]],
+) -> str:
+    """Build a ``<kg_context>`` block for model input.
+
+    *entities*: list of dicts with ``id``, ``name``, ``type``, and
+    optionally ``role``, ``doc_sources``.
+
+    *relationships*: list of dicts with ``source``, ``relation``,
+    ``target``, and optionally ``since``, ``date``, ``doc_source``.
+    """
+    lines = ["<kg_context>", "entities:"]
+    for e in entities:
+        parts = [f"id: {e['id']}", f'name: "{e["name"]}"', f"type: {e['type']}"]
+        if e.get("role"):
+            parts.append(f'role: "{e["role"]}"')
+        if e.get("doc_sources"):
+            parts.append(f"doc_sources: [{', '.join(e['doc_sources'])}]")
+        lines.append(f"  - {', '.join(parts)}")
+    lines.append("relationships:")
+    for r in relationships:
+        rel_str = f"  - {r['source']} --[{r['relation']}]--> {r['target']}"
+        extras = []
+        if r.get("since"):
+            extras.append(f"since: {r['since']}")
+        if r.get("date"):
+            extras.append(f"date: {r['date']}")
+        if r.get("doc_source"):
+            extras.append(f"source: {r['doc_source']}")
+        if extras:
+            rel_str += f", {', '.join(extras)}"
+        lines.append(rel_str)
+    lines.append("</kg_context>")
+    return "\n".join(lines)
+
+
 def format_eval_example(
     benchmark: str,
     query: str,

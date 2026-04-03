@@ -5,6 +5,9 @@ from src.finetune.v2.data_generator.base import (
     format_sft_example,
     format_dpo_example,
     format_eval_example,
+    format_sft_with_chart,
+    format_spreadsheet_context,
+    format_kg_context,
 )
 
 __all__ = [
@@ -12,4 +15,7 @@ __all__ = [
     "format_sft_example",
     "format_dpo_example",
     "format_eval_example",
+    "format_sft_with_chart",
+    "format_spreadsheet_context",
+    "format_kg_context",
 ]
