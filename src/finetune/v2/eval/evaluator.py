@@ -1,171 +1,343 @@
-"""Track evaluator — queries Ollama and scores responses against test bank.
+"""Track evaluator -- queries Ollama and scores responses against the test bank.
 
-The rubric scorers return dicts of dimension scores on a 1.0-5.0 scale.
-This evaluator converts them to a single 0-100 composite score for
-gate-checking and comparison.
+Queries the model via the Ollama HTTP API, scores responses using the
+programmatic rubrics, and returns aggregate results with gate-check verdicts.
+
+Usage::
+
+    from src.finetune.v2.eval.evaluator import TrackEvaluator
+
+    ev = TrackEvaluator(model_name="DHS/DocWain")
+    result = ev.evaluate_track("excel_csv")
+    all_results = ev.evaluate_all_tracks()
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import subprocess
+import time
 from typing import Any, Dict, List, Optional
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
+from src.finetune.v2.data_generator.base import DOCWAIN_SYSTEM_PROMPT
 from src.finetune.v2.eval.rubrics import TRACK_SCORERS
 from src.finetune.v2.eval.test_bank import get_test_bank
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Gate thresholds  (1.0-5.0 scale, per-dimension average)
+# ---------------------------------------------------------------------------
 
-def query_ollama(prompt: str, model: str = "DHS/DocWain", timeout: int = 120) -> str:
-    """Send a prompt to Ollama and return the response text.
+GATE_THRESHOLDS: Dict[str, float] = {
+    "excel_csv": 4.0,
+    "layout": 4.0,
+    "ocr_vision": 4.0,
+    "reasoning": 4.0,
+    "kg": 3.8,
+    "visualization": 4.0,
+}
 
-    Parameters
-    ----------
-    prompt:
-        The user query to send.
-    model:
-        Ollama model name.
-    timeout:
-        Request timeout in seconds.
-
-    Returns
-    -------
-    Model response string, or empty string on failure.
-    """
-    try:
-        result = subprocess.run(
-            ["ollama", "run", model, prompt],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        logger.warning("Ollama returned code %d: %s", result.returncode, result.stderr)
-        return ""
-    except FileNotFoundError:
-        logger.warning("ollama CLI not found")
-        return ""
-    except subprocess.TimeoutExpired:
-        logger.warning("Ollama query timed out after %ds", timeout)
-        return ""
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_TIMEOUT = 120  # seconds
 
 
-def _rubric_dict_to_score(rubric_result) -> float:
-    """Convert a rubric scorer result to a 0-100 composite score.
-
-    The rubric scorers return either:
-    - A dict of dimension scores on a 1.0-5.0 scale
-    - A float (0-100) directly
-
-    This normalises to 0-100 in all cases.
-    """
-    if isinstance(rubric_result, (int, float)):
-        return float(rubric_result)
-    if isinstance(rubric_result, dict):
-        values = [v for v in rubric_result.values() if isinstance(v, (int, float))]
-        if not values:
-            return 0.0
-        avg_1_5 = sum(values) / len(values)
-        # Map 1.0-5.0 to 0-100
-        return max(0.0, min(100.0, (avg_1_5 - 1.0) / 4.0 * 100.0))
-    return 0.0
-
+# ---------------------------------------------------------------------------
+# Model query
+# ---------------------------------------------------------------------------
 
 class TrackEvaluator:
-    """Evaluates a model against the test bank for one or more tracks.
+    """Evaluates a model against the frozen test bank for one or more tracks.
 
     Parameters
     ----------
     model_name:
-        Ollama model name to query.
+        Ollama model name to query (e.g. ``DHS/DocWain``).
+    ollama_url:
+        Base URL for the Ollama generate endpoint.
+    temperature:
+        Sampling temperature for model queries.
+    max_tokens:
+        Maximum tokens to generate per response.
     """
 
-    def __init__(self, model_name: str = "DHS/DocWain") -> None:
+    def __init__(
+        self,
+        model_name: str = "DHS/DocWain",
+        ollama_url: str = OLLAMA_URL,
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+    ) -> None:
         self.model_name = model_name
+        self.ollama_url = ollama_url
+        self.temperature = temperature
+        self.max_tokens = max_tokens
 
-    def evaluate_track(self, track: str) -> Dict[str, Any]:
-        """Evaluate all test bank examples for a single track.
+    # ------------------------------------------------------------------
+    # Model interaction
+    # ------------------------------------------------------------------
+
+    def query_model(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """Query Ollama model and return response text.
+
+        Sends a POST to ``/api/generate`` with ``stream: false`` and
+        returns the full response string.  On any error returns an
+        empty string so evaluation can continue.
+        """
+        sys_prompt = system_prompt or DOCWAIN_SYSTEM_PROMPT
+        payload = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "system": sys_prompt,
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self.max_tokens,
+            },
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = Request(
+            self.ollama_url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                return body.get("response", "")
+        except (URLError, OSError, json.JSONDecodeError, TimeoutError) as exc:
+            logger.warning("Ollama query failed: %s", exc)
+            return ""
+
+    # ------------------------------------------------------------------
+    # Per-track evaluation
+    # ------------------------------------------------------------------
+
+    def evaluate_track(self, track_name: str) -> dict:
+        """Run all test bank examples for a track, score them, return aggregate.
 
         Returns
         -------
-        Dict with track, scores (list of 0-100 floats), avg_score,
-        pass_rate, per_example details.
+        dict with keys:
+            track, dimensions (dim_name -> avg_score), overall_avg,
+            passed (bool), per_example, weak_categories
         """
-        bank = get_test_bank(track)
-        tests = bank[track]
-        scorer = TRACK_SCORERS.get(track)
+        scorer = TRACK_SCORERS.get(track_name)
         if scorer is None:
-            raise ValueError(f"No scorer found for track: {track!r}")
+            raise ValueError(f"Unknown track {track_name!r}")
 
+        examples = get_test_bank(track=track_name)
+        gate = GATE_THRESHOLDS.get(track_name, 4.0)
+
+        # Accumulators
         per_example: List[Dict[str, Any]] = []
-        scores: List[float] = []
+        dimension_sums: Dict[str, float] = {}
+        dimension_counts: Dict[str, int] = {}
+        category_scores: Dict[str, List[float]] = {}
 
-        for test in tests:
-            query = test["query"]
-            reference = test["reference"]
-            test_id = test["id"]
+        for idx, example in enumerate(examples):
+            prompt = example["prompt"]
+            reference = example["reference"]
+            category = example["category"]
 
-            logger.info("Evaluating %s: %s", test_id, query[:60])
-            response = query_ollama(query, model=self.model_name)
+            logger.info(
+                "[%s %d/%d] category=%s difficulty=%s",
+                track_name, idx + 1, len(examples),
+                category, example.get("difficulty", "?"),
+            )
+
+            t0 = time.monotonic()
+            response = self.query_model(prompt)
+            elapsed = time.monotonic() - t0
 
             if not response:
-                score = 0.0
-                raw_rubric = {}
-                logger.warning("Empty response for %s", test_id)
+                # Score everything at 1.0 (minimum) on failure
+                scores = {dim: 1.0 for dim in _default_dims(track_name)}
+                logger.warning("  Empty response (%.1fs)", elapsed)
             else:
-                raw_rubric = scorer(response, reference)
-                score = _rubric_dict_to_score(raw_rubric)
+                scores = scorer(response, reference)
+                logger.info(
+                    "  scored in %.1fs: %s",
+                    elapsed,
+                    {k: f"{v:.1f}" for k, v in scores.items()},
+                )
 
-            scores.append(score)
+            # Accumulate dimensions
+            for dim, val in scores.items():
+                dimension_sums[dim] = dimension_sums.get(dim, 0.0) + val
+                dimension_counts[dim] = dimension_counts.get(dim, 0) + 1
+
+            # Accumulate per-category
+            example_avg = sum(scores.values()) / max(len(scores), 1)
+            category_scores.setdefault(category, []).append(example_avg)
+
             per_example.append({
-                "id": test_id,
-                "query": query,
-                "response_length": len(response),
-                "score": score,
-                "rubric_dimensions": raw_rubric if isinstance(raw_rubric, dict) else {},
+                "prompt": prompt[:120] + ("..." if len(prompt) > 120 else ""),
+                "response_len": len(response),
+                "scores": scores,
+                "category": category,
+                "difficulty": example.get("difficulty", "medium"),
+                "elapsed_s": round(elapsed, 1),
             })
-            logger.info("  %s score: %.1f", test_id, score)
 
-        avg_score = sum(scores) / len(scores) if scores else 0.0
-        pass_rate = sum(1 for s in scores if s >= 70.0) / len(scores) if scores else 0.0
+        # Aggregate dimensions
+        dimensions: Dict[str, float] = {}
+        for dim in sorted(dimension_sums):
+            dimensions[dim] = round(
+                dimension_sums[dim] / max(dimension_counts[dim], 1), 2
+            )
+
+        overall_avg = round(
+            sum(dimensions.values()) / max(len(dimensions), 1), 2
+        )
+        passed = overall_avg >= gate
+
+        # Identify weak categories (avg below 3.5)
+        weak_categories: List[str] = []
+        for cat, cat_scores in sorted(category_scores.items()):
+            cat_avg = sum(cat_scores) / len(cat_scores)
+            if cat_avg < 3.5:
+                weak_categories.append(cat)
 
         return {
-            "track": track,
-            "num_examples": len(tests),
-            "avg_score": avg_score,
-            "pass_rate": pass_rate,
-            "scores": scores,
+            "track": track_name,
+            "dimensions": dimensions,
+            "overall_avg": overall_avg,
+            "passed": passed,
+            "gate_threshold": gate,
+            "num_examples": len(examples),
             "per_example": per_example,
+            "weak_categories": weak_categories,
         }
 
-    def evaluate_all(self) -> Dict[str, Any]:
-        """Evaluate all tracks and return combined results.
+    # ------------------------------------------------------------------
+    # All-tracks evaluation
+    # ------------------------------------------------------------------
+
+    def evaluate_all_tracks(self) -> dict:
+        """Evaluate all 6 tracks and return combined results.
 
         Returns
         -------
-        Dict with per_track results, overall_avg, and overall_pass_rate.
+        dict with keys:
+            per_track (track_name -> track_result),
+            overall_avg, all_passed (bool),
+            tracks_passed, tracks_failed
         """
-        per_track: Dict[str, Dict[str, Any]] = {}
-        all_scores: List[float] = []
+        per_track: Dict[str, dict] = {}
+        track_avgs: List[float] = []
+        tracks_passed: List[str] = []
+        tracks_failed: List[str] = []
 
-        for track in TRACK_SCORERS:
-            result = self.evaluate_track(track)
-            per_track[track] = result
-            all_scores.extend(result["scores"])
+        for track_name in sorted(TRACK_SCORERS.keys()):
+            logger.info("=" * 60)
+            logger.info("Evaluating track: %s", track_name)
+            logger.info("=" * 60)
+            result = self.evaluate_track(track_name)
+            per_track[track_name] = result
+            track_avgs.append(result["overall_avg"])
+            if result["passed"]:
+                tracks_passed.append(track_name)
+            else:
+                tracks_failed.append(track_name)
 
-        overall_avg = sum(all_scores) / len(all_scores) if all_scores else 0.0
-        overall_pass = (
-            sum(1 for s in all_scores if s >= 70.0) / len(all_scores)
-            if all_scores
-            else 0.0
+        overall_avg = round(
+            sum(track_avgs) / max(len(track_avgs), 1), 2
         )
 
         return {
             "per_track": per_track,
             "overall_avg": overall_avg,
-            "overall_pass_rate": overall_pass,
-            "num_total": len(all_scores),
+            "all_passed": len(tracks_failed) == 0,
+            "tracks_passed": tracks_passed,
+            "tracks_failed": tracks_failed,
+            "total_examples": sum(
+                r["num_examples"] for r in per_track.values()
+            ),
         }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_TRACK_DIMS = {
+    "excel_csv": ["tabular_qa_accuracy", "cross_sheet_reasoning",
+                  "data_type_correctness", "aggregation_accuracy"],
+    "layout": ["structure_accuracy", "relationship_extraction",
+               "noise_robustness", "completeness_score"],
+    "ocr_vision": ["printed_accuracy", "handwriting_accuracy",
+                   "diagram_understanding", "image_table_reconstruction",
+                   "overlay_handling"],
+    "reasoning": ["reasoning_depth", "evidence_grounding",
+                  "synthesis_coherence"],
+    "kg": ["entity_usage", "relationship_reasoning", "citation_accuracy"],
+    "visualization": ["trigger_judgment", "spec_correctness",
+                      "data_accuracy", "type_selection"],
+}
+
+
+def _default_dims(track_name: str) -> List[str]:
+    """Return the dimension names for a track (for default scoring on failure)."""
+    return _TRACK_DIMS.get(track_name, ["score"])
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Evaluate DocWain V2 model across all tracks"
+    )
+    parser.add_argument("--model", default="DHS/DocWain")
+    parser.add_argument("--track", default=None, help="Evaluate a single track")
+    parser.add_argument("--url", default=OLLAMA_URL)
+    parser.add_argument("-v", "--verbose", action="store_true")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
+
+    evaluator = TrackEvaluator(model_name=args.model, ollama_url=args.url)
+
+    if args.track:
+        result = evaluator.evaluate_track(args.track)
+        _print_track_result(result)
+        return 0 if result["passed"] else 1
+    else:
+        results = evaluator.evaluate_all_tracks()
+        for track_name in sorted(results["per_track"]):
+            _print_track_result(results["per_track"][track_name])
+        print(f"\n{'=' * 60}")
+        print(f"Overall Average: {results['overall_avg']:.2f}")
+        print(f"All Passed:      {results['all_passed']}")
+        if results["tracks_failed"]:
+            print(f"Failed Tracks:   {', '.join(results['tracks_failed'])}")
+        print(f"Total Examples:  {results['total_examples']}")
+        print(f"{'=' * 60}")
+        return 0 if results["all_passed"] else 1
+
+
+def _print_track_result(result: dict) -> None:
+    """Pretty-print a single track evaluation result."""
+    status = "PASS" if result["passed"] else "FAIL"
+    print(f"\n--- {result['track']} ({status}) ---")
+    print(f"  Overall: {result['overall_avg']:.2f} / {result['gate_threshold']}")
+    for dim, score in sorted(result["dimensions"].items()):
+        print(f"  {dim}: {score:.2f}")
+    if result["weak_categories"]:
+        print(f"  Weak: {', '.join(result['weak_categories'])}")
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
