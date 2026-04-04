@@ -158,7 +158,9 @@ def _build_modelfile(gguf_path: str) -> str:
     """
     blocks = _read_v1_modelfile_blocks()
 
-    parts = [f"FROM {gguf_path}"]
+    # Ollama requires absolute path for the GGUF file
+    abs_gguf = str(Path(gguf_path).resolve())
+    parts = [f"FROM {abs_gguf}"]
 
     if blocks["template"]:
         parts.append(blocks["template"])
