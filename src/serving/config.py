@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -87,6 +88,18 @@ class OllamaFallbackConfig:
 
 
 OLLAMA_FALLBACK_CONFIG = OllamaFallbackConfig()
+
+
+@dataclass(frozen=True)
+class OllamaCloudConfig:
+    """Ollama Cloud — primary fallback during training."""
+    host: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    model: str = os.getenv("OLLAMA_MODEL", "qwen3.5:397b")
+    api_key: str = os.getenv("OLLAMA_API_KEY", "")
+    timeout_s: float = 300.0
+
+OLLAMA_CLOUD_CONFIG = OllamaCloudConfig()
+GPU_MODE_FILE = os.getenv("DOCWAIN_GPU_MODE_FILE", "/tmp/docwain-gpu-mode.json")
 
 
 def get_openai_base_url(config: VLLMInstanceConfig) -> str:
