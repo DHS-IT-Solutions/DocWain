@@ -1140,8 +1140,8 @@ class AutonomousTrainer:
             try:
                 evaluator = TrackEvaluator(model_name=OLLAMA_V2_WIP)
                 eval_result = evaluator.evaluate_track(track)
-                avg_score = eval_result["avg_score"]
-                pass_rate = eval_result["pass_rate"]
+                avg_score = eval_result.get("avg_score", eval_result.get("overall_avg", 0.0))
+                pass_rate = eval_result.get("pass_rate", 1.0 if eval_result.get("passed") else 0.0)
             except Exception as exc:
                 self.log("Evaluation failed: %s", exc)
                 avg_score = 0.0
