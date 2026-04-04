@@ -1,132 +1,86 @@
-"""Manages vLLM instance lifecycle and provides a unified query interface."""
+"""Client-only vLLM manager — routes queries to vLLM instances managed by systemd.
+
+No subprocess management. Health checks via HTTP. Falls back to Ollama Cloud
+during training, Ollama local as emergency.
+"""
 
 from __future__ import annotations
 
 import json
-import subprocess
-import threading
-import time
+import re
 from typing import Any, Dict, Optional
-from urllib import request
+from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
 from src.serving.config import (
-    FAST_PATH_CONFIG,
+    GPU_MODE_FILE,
+    OLLAMA_CLOUD_CONFIG,
     OLLAMA_FALLBACK_CONFIG,
-    SMART_PATH_CONFIG,
-    VLLMInstanceConfig,
-    get_openai_base_url,
 )
 from src.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
 
 class VLLMManager:
-    """Thread-safe manager for dual vLLM serving instances with Ollama fallback.
+    """Client-only manager for dual vLLM instances with tiered fallback.
 
-    Usage::
+    Fallback chain (serving mode):
+        vLLM instance -> Ollama Cloud (397b) -> Ollama local (14b)
 
-        mgr = VLLMManager()
-        mgr.start_all()
-        answer = mgr.query_fast("What is this document about?")
-        mgr.stop_all()
+    Fallback chain (training mode):
+        Ollama Cloud (397b) -> Ollama local (14b)
     """
 
     def __init__(
         self,
-        fast_config: VLLMInstanceConfig = FAST_PATH_CONFIG,
-        smart_config: VLLMInstanceConfig = SMART_PATH_CONFIG,
+        fast_url: str = "http://localhost:8100",
+        smart_url: str = "http://localhost:8200",
+        fast_model: str = "docwain-fast",
+        smart_model: str = "docwain-smart",
+        gpu_mode_file: str = GPU_MODE_FILE,
     ) -> None:
-        self._configs: Dict[str, VLLMInstanceConfig] = {
-            fast_config.name: fast_config,
-            smart_config.name: smart_config,
+        self._instances: Dict[str, Dict[str, str]] = {
+            "fast": {"url": fast_url.rstrip("/"), "model": fast_model},
+            "smart": {"url": smart_url.rstrip("/"), "model": smart_model},
         }
-        self._processes: Dict[str, subprocess.Popen] = {}
-        self._lock = threading.Lock()
+        self._gpu_mode_file = gpu_mode_file
 
-    # -- Lifecycle ------------------------------------------------------------
-
-    def start_instance(self, config: VLLMInstanceConfig) -> bool:
-        """Start a vLLM instance as a subprocess. Returns True on success."""
-        with self._lock:
-            if config.name in self._processes:
-                proc = self._processes[config.name]
-                if proc.poll() is None:
-                    logger.info("vLLM instance '%s' already running (pid %d)", config.name, proc.pid)
-                    return True
-
-            cmd = ["python", "-m", "vllm.entrypoints.openai.api_server"] + config.to_vllm_args()
-            logger.info("Starting vLLM instance '%s': %s", config.name, " ".join(cmd))
-
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-                self._processes[config.name] = proc
-                self._configs[config.name] = config
-            except FileNotFoundError:
-                logger.error("vLLM not installed — cannot start instance '%s'", config.name)
-                return False
-            except Exception as exc:
-                logger.error("Failed to start vLLM instance '%s': %s", config.name, exc)
-                return False
-
-        # Wait for readiness (up to 120 s).
-        deadline = time.monotonic() + 120.0
-        while time.monotonic() < deadline:
-            if self.health_check(config.name):
-                logger.info("vLLM instance '%s' is ready on port %d", config.name, config.port)
-                return True
-            time.sleep(2.0)
-
-        logger.warning("vLLM instance '%s' did not become healthy within timeout", config.name)
-        return False
-
-    def stop_instance(self, name: str) -> None:
-        """Stop a running vLLM instance."""
-        with self._lock:
-            proc = self._processes.pop(name, None)
-        if proc is None:
-            return
-        logger.info("Stopping vLLM instance '%s' (pid %d)", name, proc.pid)
-        proc.terminate()
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            logger.warning("Force-killing vLLM instance '%s'", name)
-            proc.kill()
-            proc.wait(timeout=5)
+    # -- Status ----------------------------------------------------------------
 
     def health_check(self, name: str) -> bool:
-        """Return True if the named vLLM instance is responding on /health."""
-        config = self._configs.get(name)
-        if config is None:
+        """Return True if the named vLLM instance responds on /health."""
+        instance = self._instances.get(name)
+        if instance is None:
             return False
-        url = f"http://localhost:{config.port}/health"
+        url = f"{instance['url']}/health"
         try:
-            req = request.Request(url, method="GET")
-            with request.urlopen(req, timeout=5) as resp:
+            req = urllib_request.Request(url, method="GET")
+            with urllib_request.urlopen(req, timeout=5) as resp:
                 return resp.status == 200
         except (HTTPError, URLError, OSError, TimeoutError):
             return False
 
-    def start_all(self) -> Dict[str, bool]:
-        """Start both fast and smart instances. Returns {name: success}."""
-        results = {}
-        for name, config in list(self._configs.items()):
-            results[name] = self.start_instance(config)
-        return results
+    def get_gpu_mode(self) -> str:
+        """Read GPU mode from state file. Returns 'serving' or 'training'."""
+        try:
+            with open(self._gpu_mode_file, "r") as f:
+                data = json.load(f)
+            return data.get("mode", "serving")
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return "serving"
 
-    def stop_all(self) -> None:
-        """Stop all running vLLM instances."""
-        for name in list(self._processes.keys()):
-            self.stop_instance(name)
+    def get_active_backends(self) -> Dict[str, Any]:
+        """Return health status of all backends."""
+        return {
+            "fast": self.health_check("fast"),
+            "smart": self.health_check("smart"),
+            "gpu_mode": self.get_gpu_mode(),
+        }
 
-    # -- Query interface ------------------------------------------------------
+    # -- Query interface -------------------------------------------------------
 
     def query(
         self,
@@ -137,23 +91,27 @@ class VLLMManager:
         max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> str:
-        """Send a chat completion request to the named vLLM instance.
+        """Query a vLLM instance with tiered fallback.
 
-        Falls back to Ollama if the instance is not available.
+        In training mode, skips vLLM entirely and goes to Ollama Cloud.
         """
-        config = self._configs.get(instance_name)
-        if config is None:
-            logger.warning("Unknown instance '%s' — falling back to Ollama", instance_name)
-            return self._query_ollama(prompt, system_prompt, max_tokens, temperature)
+        if self.get_gpu_mode() == "training":
+            logger.info("GPU in training mode — routing to Ollama Cloud")
+            return self._query_ollama_cloud(prompt, system_prompt, max_tokens, temperature)
 
-        if not self.health_check(instance_name):
-            logger.info(
-                "vLLM instance '%s' unavailable — falling back to Ollama",
-                instance_name,
-            )
-            return self._query_ollama(prompt, system_prompt, max_tokens, temperature)
+        instance = self._instances.get(instance_name)
+        if instance and self.health_check(instance_name):
+            result = self._query_vllm(instance, prompt, system_prompt, guided_json, max_tokens, temperature)
+            if result is not None:
+                return result
 
-        return self._query_vllm(config, prompt, system_prompt, guided_json, max_tokens, temperature)
+        logger.info("vLLM '%s' unavailable — falling back to Ollama Cloud", instance_name)
+        cloud_result = self._query_ollama_cloud(prompt, system_prompt, max_tokens, temperature)
+        if cloud_result:
+            return cloud_result
+
+        logger.warning("Ollama Cloud unavailable — emergency fallback to Ollama local")
+        return self._query_ollama_local(prompt, system_prompt, max_tokens, temperature)
 
     def query_fast(
         self,
@@ -163,7 +121,7 @@ class VLLMManager:
         max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> str:
-        """Convenience: query the fast (14B) instance."""
+        """Query the fast (14B) instance."""
         return self.query("fast", prompt, system_prompt, guided_json, max_tokens, temperature)
 
     def query_smart(
@@ -174,22 +132,22 @@ class VLLMManager:
         max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> str:
-        """Convenience: query the smart (27B) instance."""
+        """Query the smart (27B) instance."""
         return self.query("smart", prompt, system_prompt, guided_json, max_tokens, temperature)
 
-    # -- Private helpers ------------------------------------------------------
+    # -- Private: vLLM ---------------------------------------------------------
 
     def _query_vllm(
         self,
-        config: VLLMInstanceConfig,
+        instance: Dict[str, str],
         prompt: str,
         system_prompt: str,
         guided_json: Optional[Dict[str, Any]],
         max_tokens: int,
         temperature: float,
-    ) -> str:
-        """POST to the OpenAI-compatible /v1/chat/completions endpoint."""
-        url = f"{get_openai_base_url(config)}/chat/completions"
+    ) -> Optional[str]:
+        """POST to vLLM OpenAI-compatible endpoint. Returns None on failure."""
+        url = f"{instance['url']}/v1/chat/completions"
 
         messages = []
         if system_prompt:
@@ -197,7 +155,7 @@ class VLLMManager:
         messages.append({"role": "user", "content": prompt})
 
         body: Dict[str, Any] = {
-            "model": config.model,
+            "model": instance["model"],
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -212,63 +170,88 @@ class VLLMManager:
                 },
             }
 
-        payload = json.dumps(body).encode()
-        req = request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
         try:
-            with request.urlopen(req, timeout=300) as resp:
-                data = json.loads(resp.read().decode())
-            content: str = data["choices"][0]["message"]["content"]
-            return content.strip()
+            data = json.dumps(body).encode()
+            req = urllib_request.Request(
+                url, data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib_request.urlopen(req, timeout=300) as resp:
+                result = json.loads(resp.read().decode())
+            return result["choices"][0]["message"]["content"].strip()
         except (HTTPError, URLError, OSError, KeyError, json.JSONDecodeError) as exc:
-            logger.error("vLLM query to '%s' failed: %s — falling back to Ollama", config.name, exc)
-            return self._query_ollama(prompt, system_prompt, max_tokens, temperature)
+            logger.error("vLLM query failed (%s): %s", instance["url"], exc)
+            return None
 
-    def _query_ollama(
+    # -- Private: Ollama Cloud -------------------------------------------------
+
+    def _query_ollama_cloud(
         self,
         prompt: str,
         system_prompt: str,
         max_tokens: int,
         temperature: float,
     ) -> str:
-        """Fallback: query the local Ollama HTTP API at localhost:11434."""
-        url = f"{OLLAMA_FALLBACK_CONFIG.host}/api/generate"
+        """Query Ollama Cloud (397b) — primary fallback."""
+        cfg = OLLAMA_CLOUD_CONFIG
+        url = f"{cfg.host}/api/generate"
 
-        full_prompt = prompt
-        if system_prompt:
-            full_prompt = f"{system_prompt}\n\n{prompt}"
-
-        body: Dict[str, Any] = {
-            "model": OLLAMA_FALLBACK_CONFIG.model,
+        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        body = {
+            "model": cfg.model,
             "prompt": full_prompt,
             "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": temperature,
-            },
+            "options": {"num_predict": max_tokens, "temperature": temperature},
         }
 
-        payload = json.dumps(body).encode()
-        req = request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        try:
+            data = json.dumps(body).encode()
+            req = urllib_request.Request(
+                url, data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib_request.urlopen(req, timeout=cfg.timeout_s) as resp:
+                result = json.loads(resp.read().decode())
+            text = result.get("response", "")
+            return _THINK_RE.sub("", text).strip()
+        except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
+            logger.error("Ollama Cloud query failed: %s", exc)
+            return ""
+
+    # -- Private: Ollama local (emergency) -------------------------------------
+
+    def _query_ollama_local(
+        self,
+        prompt: str,
+        system_prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """Query local Ollama — emergency fallback."""
+        cfg = OLLAMA_FALLBACK_CONFIG
+        url = f"{cfg.host}/api/generate"
+
+        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        body = {
+            "model": cfg.model,
+            "prompt": full_prompt,
+            "stream": False,
+            "options": {"num_predict": max_tokens, "temperature": temperature},
+        }
 
         try:
-            with request.urlopen(req, timeout=OLLAMA_FALLBACK_CONFIG.timeout_s) as resp:
-                data = json.loads(resp.read().decode())
-            text: str = data.get("response", "")
-            # Strip <think>...</think> blocks that Qwen models sometimes emit.
-            import re
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            return text
-        except (HTTPError, URLError, OSError, KeyError, json.JSONDecodeError) as exc:
-            logger.error("Ollama fallback query failed: %s", exc)
+            data = json.dumps(body).encode()
+            req = urllib_request.Request(
+                url, data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib_request.urlopen(req, timeout=cfg.timeout_s) as resp:
+                result = json.loads(resp.read().decode())
+            text = result.get("response", "")
+            return _THINK_RE.sub("", text).strip()
+        except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
+            logger.error("Ollama local fallback failed: %s", exc)
             return ""
