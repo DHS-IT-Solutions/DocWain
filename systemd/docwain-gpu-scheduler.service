@@ -1,0 +1,15 @@
+[Unit]
+Description=DocWain GPU Scheduler
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PycharmProjects/DocWain
+Environment="PATH=/home/ubuntu/PycharmProjects/DocWain/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python scripts/gpu_scheduler.py --interval 300 --idle-minutes 30
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
