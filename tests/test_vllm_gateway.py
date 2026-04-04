@@ -1,13 +1,17 @@
 """Tests that create_llm_gateway() creates vLLM as primary backend.
 
-Verifies:
-1. When Config.VLLM.ENABLED=True, primary is OpenAICompatibleClient with backend="vllm"
-2. When vLLM init raises, gateway falls back to Ollama as primary
+Superseded by VLLMManager (src.serving.vllm_manager) which handles vLLM
+routing directly. LLMGateway no longer imports OpenAICompatibleClient.
+See tests/test_vllm_manager.py for current vLLM tests.
 """
 
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.skip(
+    reason="Superseded by VLLMManager — see tests/test_vllm_manager.py"
+)
 
 
 def _make_vllm_config(enabled=True):

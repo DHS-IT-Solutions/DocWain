@@ -8,7 +8,7 @@ class TestVLLMDefaults:
         assert Config.VLLM.ENABLED is True
 
     def test_vllm_model_name_defaults_to_qwen(self):
-        assert Config.VLLM.MODEL_NAME == "Qwen2.5-14B-Instruct-AWQ"
+        assert Config.VLLM.MODEL_NAME == "Qwen/Qwen3-14B-AWQ"
 
 
 class TestIntelligenceAdaptiveEngine:
