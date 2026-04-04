@@ -1,10 +1,12 @@
-"""DocWain V2 serving layer — dual-model vLLM serving with Ollama fallback."""
+"""DocWain serving layer — vLLM client, intent routing, fast-path handler."""
 
 from src.serving.config import (
     VLLMInstanceConfig,
     FAST_PATH_CONFIG,
     SMART_PATH_CONFIG,
     OLLAMA_FALLBACK_CONFIG,
+    OLLAMA_CLOUD_CONFIG,
+    GPU_MODE_FILE,
     get_openai_base_url,
 )
 from src.serving.vllm_manager import VLLMManager
@@ -16,6 +18,8 @@ __all__ = [
     "FAST_PATH_CONFIG",
     "SMART_PATH_CONFIG",
     "OLLAMA_FALLBACK_CONFIG",
+    "OLLAMA_CLOUD_CONFIG",
+    "GPU_MODE_FILE",
     "get_openai_base_url",
     "VLLMManager",
     "IntentRouter",
