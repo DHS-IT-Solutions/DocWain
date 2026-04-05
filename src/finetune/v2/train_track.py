@@ -43,6 +43,56 @@ _V1_MODELFILE = Path("models/v1_backup/Modelfile.v1")
 
 
 # ---------------------------------------------------------------------------
+# Curriculum sampler
+# ---------------------------------------------------------------------------
+
+
+class CurriculumSampler:
+    """Sorts dataset examples by difficulty: easy -> medium -> hard.
+
+    Works by reordering the dataset in-place before training.
+    TRL's SFTTrainer doesn't support custom Samplers, so we pre-sort
+    the dataset instead.
+    """
+
+    _ORDER = {"easy": 0, "medium": 1, "hard": 2}
+
+    def __init__(self, dataset) -> None:
+        self._indices: list[int] = []
+        difficulties = []
+        for i, ex in enumerate(dataset):
+            diff = ex.get("difficulty", "medium") if isinstance(ex, dict) else "medium"
+            difficulties.append((self._ORDER.get(diff, 1), i))
+        difficulties.sort(key=lambda x: x[0])
+        self._indices = [i for _, i in difficulties]
+
+    def __iter__(self):
+        return iter(self._indices)
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def sort_dataset(self, dataset):
+        """Return a new dataset reordered by curriculum difficulty."""
+        return dataset.select(self._indices)
+
+
+def _patch_mergekit_pydantic():
+    """Patch mergekit's Task model to allow torch.Tensor in pydantic v2.
+
+    Must be called before any ``from trl import ...`` because trl's import
+    chain (callbacks -> mergekit merge_methods -> pydantic.create_model) will
+    fail if Task.model_config lacks arbitrary_types_allowed.
+    """
+    try:
+        import mergekit.graph
+        if not mergekit.graph.Task.model_config.get("arbitrary_types_allowed"):
+            mergekit.graph.Task.model_config["arbitrary_types_allowed"] = True
+    except ImportError:
+        pass  # mergekit not installed, nothing to patch
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -61,7 +111,7 @@ class TrackTrainingConfig:
     # LoRA config
     lora_r: int = 64
     lora_alpha: int = 128
-    lora_dropout: float = 0.0
+    lora_dropout: float = 0.05
     target_modules: List[str] = field(default_factory=lambda: [
         "q_proj", "k_proj", "v_proj", "o_proj",
         "gate_proj", "up_proj", "down_proj",
@@ -75,10 +125,15 @@ class TrackTrainingConfig:
     max_seq_length: int = 4096
     warmup_ratio: float = 0.10
 
+    # Curriculum & checkpointing
+    curriculum_sampling: bool = True
+    checkpoint_save_pct: List[int] = field(default_factory=lambda: [25, 50, 75, 100])
+    skip_ollama_export: bool = False
+
     # DPO
-    dpo_epochs: int = 2
+    dpo_epochs: int = 1
     dpo_lr: float = 5e-6
-    dpo_beta: float = 0.1
+    dpo_beta: float = 0.3
 
     # Ollama
     ollama_model_name: str = "DHS/DocWain"
@@ -204,11 +259,22 @@ def _run_sft(config: TrackTrainingConfig) -> Dict:
     """
     from unsloth import FastLanguageModel
     from datasets import load_dataset
+    _patch_mergekit_pydantic()
     from trl import SFTTrainer, SFTConfig
 
     # Determine base: previous track checkpoint or base model
-    model_name = config.base_checkpoint or config.base_model
-    load_4bit = config.base_checkpoint is None  # only 4bit for HF base model
+    # Resolve local checkpoint paths to absolute so Unsloth doesn't try HuggingFace
+    if config.base_checkpoint:
+        cp = Path(config.base_checkpoint).resolve()
+        if cp.is_dir():
+            model_name = str(cp)
+        else:
+            model_name = config.base_checkpoint
+    else:
+        model_name = config.base_model
+    # Always load in 4-bit: local FP16 checkpoints are too large (~28GB for 14B)
+    # to fit in GPU memory without quantisation, causing meta tensor errors.
+    load_4bit = True
     logger.info(
         "Loading model for SFT: %s (4bit=%s, track=%s)",
         model_name, load_4bit, config.track_name,
@@ -252,6 +318,12 @@ def _run_sft(config: TrackTrainingConfig) -> Dict:
 
         dataset = dataset.map(_format_messages)
 
+    # Apply curriculum ordering if enabled and difficulty field exists
+    if config.curriculum_sampling and "difficulty" in dataset.column_names:
+        sampler = CurriculumSampler(dataset)
+        dataset = sampler.sort_dataset(dataset)
+        logger.info("Applied curriculum ordering: easy -> medium -> hard")
+
     # Training output
     sft_output = Path(config.output_dir) / "sft_checkpoints"
     sft_output.mkdir(parents=True, exist_ok=True)
@@ -264,6 +336,12 @@ def _run_sft(config: TrackTrainingConfig) -> Dict:
         use_bf16 = False
     use_fp16 = not use_bf16
 
+    # Calculate save steps from percentages
+    num_examples = len(dataset)
+    effective_batch = config.batch_size * config.gradient_accumulation_steps
+    total_steps = (num_examples * config.epochs + effective_batch - 1) // effective_batch
+    save_steps = max(1, total_steps // 4)  # Save at ~25% intervals
+
     training_args = SFTConfig(
         output_dir=str(sft_output),
         per_device_train_batch_size=config.batch_size,
@@ -272,7 +350,9 @@ def _run_sft(config: TrackTrainingConfig) -> Dict:
         num_train_epochs=config.epochs,
         warmup_ratio=config.warmup_ratio,
         logging_steps=1,
-        save_strategy="epoch",
+        save_strategy="steps",
+        save_steps=save_steps,
+        save_total_limit=5,
         bf16=use_bf16,
         fp16=use_fp16,
         report_to="none",
@@ -296,12 +376,20 @@ def _run_sft(config: TrackTrainingConfig) -> Dict:
     final_loss = train_result.metrics.get("train_loss", 0.0)
     logger.info("SFT complete (loss=%.4f)", final_loss)
 
+    # Collect checkpoint paths
+    checkpoint_dirs = sorted(
+        [d for d in sft_output.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")],
+        key=lambda d: int(d.name.split("-")[1]),
+    )
+    checkpoint_paths = [str(d) for d in checkpoint_dirs]
+
     return {
         "model": model,
         "tokenizer": tokenizer,
         "train_loss": final_loss,
         "epochs": config.epochs,
         "examples": len(dataset),
+        "checkpoint_paths": checkpoint_paths,
     }
 
 
@@ -321,8 +409,9 @@ def _run_dpo(
     """
     from datasets import load_dataset
     try:
+        _patch_mergekit_pydantic()
         from trl import DPOTrainer, DPOConfig
-    except (ImportError, RuntimeError) as exc:
+    except Exception as exc:
         logger.warning("DPO trainer not available (%s), skipping DPO", exc)
         return {"skipped": True, "reason": str(exc)}
 
@@ -401,7 +490,7 @@ def _merge_and_export(model, tokenizer, config: TrackTrainingConfig) -> str:
 
     Returns path to the merged checkpoint directory.
     """
-    out = Path(config.output_dir)
+    out = Path(config.output_dir).resolve()
     merged_dir = out / "merged_16bit"
     merged_dir.mkdir(parents=True, exist_ok=True)
 
@@ -416,24 +505,88 @@ def _merge_and_export(model, tokenizer, config: TrackTrainingConfig) -> str:
         model.save_pretrained(str(merged_dir))
         tokenizer.save_pretrained(str(merged_dir))
 
-    # Export GGUF Q4_K_M
+    # Validate that the merge produced usable safetensor files
+    safetensor_files = sorted(glob.glob(str(merged_dir / "*.safetensors")))
+    if not safetensor_files:
+        raise RuntimeError(f"Merge produced no safetensor files in {merged_dir}")
+    for sf in safetensor_files:
+        size = os.path.getsize(sf)
+        if size < 1024:  # safetensor shard should be much larger than 1KB
+            raise RuntimeError(
+                f"Merged safetensor {sf} is suspiciously small ({size} bytes), "
+                "merge may be incomplete"
+            )
+    index_file = merged_dir / "model.safetensors.index.json"
+    if index_file.exists():
+        with open(index_file) as f:
+            index = json.load(f)
+        expected = len(set(index.get("weight_map", {}).values()))
+        if expected and len(safetensor_files) != expected:
+            raise RuntimeError(
+                f"Expected {expected} safetensor shards but found "
+                f"{len(safetensor_files)} in {merged_dir}"
+            )
+    logger.info(
+        "Merge validated: %d safetensor files in %s", len(safetensor_files), merged_dir,
+    )
+
+    if config.skip_ollama_export:
+        logger.info("Skipping GGUF/Ollama export (skip_ollama_export=True)")
+        return str(merged_dir)
+
+    # Export GGUF Q4_K_M — try Unsloth first, fall back to llama.cpp
     gguf_dir = out / "gguf"
     gguf_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Exporting GGUF Q4_K_M to %s", gguf_dir)
-    try:
-        model.save_pretrained_gguf(
-            str(gguf_dir), tokenizer, quantization_method="q4_k_m",
-        )
-        logger.info("GGUF export successful")
-    except Exception as exc:
-        logger.warning("GGUF export failed: %s", exc)
+    gguf_ok = False
+    for gguf_attempt in range(1, 4):
+        try:
+            model.save_pretrained_gguf(
+                str(gguf_dir), tokenizer, quantization_method="q4_k_m",
+            )
+            logger.info("GGUF export successful (attempt %d)", gguf_attempt)
+            gguf_ok = True
+            break
+        except Exception as exc:
+            logger.warning("GGUF export attempt %d failed: %s", gguf_attempt, exc)
+
+    # Fallback: use llama.cpp convert_hf_to_gguf + llama-quantize on merged FP16
+    if not gguf_ok:
+        logger.info("Falling back to llama.cpp GGUF conversion from %s", merged_dir)
+        try:
+            _llama_cpp_dir = Path.home() / ".unsloth" / "llama.cpp"
+            _convert_script = _llama_cpp_dir / "convert_hf_to_gguf.py"
+            _quantize_bin = _llama_cpp_dir / "llama-quantize"
+            f16_gguf = gguf_dir / "model-f16.gguf"
+            q4_gguf = gguf_dir / "model-Q4_K_M.gguf"
+            # Step 1: convert HF to F16 GGUF
+            result = subprocess.run(
+                ["python", str(_convert_script), str(merged_dir),
+                 "--outfile", str(f16_gguf), "--outtype", "f16"],
+                capture_output=True, text=True, timeout=600,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"convert_hf_to_gguf failed: {result.stderr[-500:]}")
+            logger.info("F16 GGUF created: %s", f16_gguf)
+            # Step 2: quantize to Q4_K_M
+            result = subprocess.run(
+                [str(_quantize_bin), str(f16_gguf), str(q4_gguf), "Q4_K_M"],
+                capture_output=True, text=True, timeout=600,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"llama-quantize failed: {result.stderr[-500:]}")
+            logger.info("Q4_K_M GGUF created: %s", q4_gguf)
+            # Clean up the large F16 intermediate
+            f16_gguf.unlink(missing_ok=True)
+            gguf_ok = True
+        except Exception as exc:
+            logger.error("llama.cpp fallback GGUF export also failed: %s", exc)
 
     # Find the GGUF file (Unsloth may save in a subdirectory like gguf_gguf/)
     gguf_files = sorted(glob.glob(str(gguf_dir / "*.gguf")))
     if not gguf_files:
         gguf_files = sorted(glob.glob(str(gguf_dir / "**" / "*.gguf"), recursive=True))
     if not gguf_files:
-        # Also check parent directory variations
         gguf_files = sorted(glob.glob(str(gguf_dir.parent / "**" / "*.gguf"), recursive=True))
     if not gguf_files:
         logger.warning("No GGUF file found after export in %s or subdirectories", gguf_dir)
