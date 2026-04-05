@@ -1,17 +1,19 @@
-"""DocWain V2 Autonomous Trainer — runs the full 6-track iterative
-training pipeline with no human intervention.
+"""DocWain V2 Autonomous Trainer — DEPRECATED.
 
-State is persisted to disk after every iteration so the pipeline can
-resume from where it left off if interrupted.
+Superseded by curriculum_trainer.py (unified curriculum approach).
+See docs/superpowers/specs/2026-04-05-curriculum-training-redesign.md
 
-Usage::
-
-    python -m src.finetune.v2.autonomous_trainer
-    python -m src.finetune.v2.autonomous_trainer --tracks excel_csv layout
-    python -m src.finetune.v2.autonomous_trainer --resume
+Kept in tree for reference only.
 """
 
 from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "autonomous_trainer.py is deprecated. Use curriculum_trainer.py instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # Patch llm_blender compatibility with latest transformers (TRANSFORMERS_CACHE removed)
 import transformers.utils.hub as _hub
@@ -69,11 +71,11 @@ TRACK_GENERATORS = {
     "visualization": "src.finetune.v2.data_generator.track6_visualization:generate_track6_data",
 }
 
-# Quality gate: a track passes when avg eval score >= this threshold
-TRACK_PASS_THRESHOLD = 70.0
+# Quality gate: a track passes when avg eval score >= this threshold (1.0-5.0 scale)
+TRACK_PASS_THRESHOLD = 4.0
 
 # After this many iterations with no improvement, change strategy
-STRATEGY_PIVOT_AFTER = 5
+STRATEGY_PIVOT_AFTER = 2
 
 # Maximum iterations per track before forced progression
 MAX_ITERATIONS_PER_TRACK = 20
@@ -122,29 +124,35 @@ _STRATEGY_SEQUENCE = [
     },
     {
         "name": "add_dpo",
-        "description": "Add DPO alignment on top of SFT",
-        "epochs": 3,
-        "lr": 2e-5,
+        "description": "More data + lower LR for fine-grained learning",
+        "epochs": 4,
+        "lr": 1e-5,
         "lora_r": 64,
-        "use_dpo": True,
-        "data_multiplier": 2.0,
+        "use_dpo": False,  # disabled: synthetic DPO pairs cause regression
+        "data_multiplier": 3.0,
     },
     {
         "name": "aggressive",
-        "description": "Higher rank + DPO + more epochs + lower LR",
+        "description": "Higher rank + more epochs + lower LR + 3x data",
         "epochs": 5,
-        "lr": 1e-5,
+        "lr": 8e-6,
         "lora_r": 128,
-        "use_dpo": True,
+        "use_dpo": False,  # disabled: synthetic DPO pairs cause regression
         "data_multiplier": 3.0,
     },
 ]
 
 
-def _get_strategy(iteration: int) -> Dict[str, Any]:
-    """Get the training strategy for a given iteration number (1-based)."""
-    idx = min((iteration - 1) // STRATEGY_PIVOT_AFTER, len(_STRATEGY_SEQUENCE) - 1)
-    return _STRATEGY_SEQUENCE[idx]
+def _get_strategy(iteration: int, no_improve_count: int = 0) -> Dict[str, Any]:
+    """Get the training strategy for a given iteration number (1-based).
+
+    If no_improve_count >= 3, force advance to the next strategy early
+    rather than waiting for STRATEGY_PIVOT_AFTER iterations.
+    """
+    base_idx = min((iteration - 1) // STRATEGY_PIVOT_AFTER, len(_STRATEGY_SEQUENCE) - 1)
+    if no_improve_count >= 3:
+        base_idx = min(base_idx + 1, len(_STRATEGY_SEQUENCE) - 1)
+    return _STRATEGY_SEQUENCE[base_idx]
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +225,73 @@ def _generate_fallback_sft_data(
     return count
 
 
+def _corrupt_reasoning(reasoning: str, rng) -> str:
+    """Create a subtly worse version of the reasoning — still coherent but flawed."""
+    import re
+    corruptions = [
+        # Drop a key reasoning step (truncate ~40% from the middle)
+        lambda r: r[:len(r)//3] + " Therefore, I can provide the answer directly.",
+        # Swap cause and effect
+        lambda r: r.replace("I need to", "I will skip checking and just").replace(
+            "identify", "assume"),
+        # Add false confidence without analysis
+        lambda r: "Based on the document, this is straightforward. " + r[len(r)//2:],
+        # Remove quantitative reasoning
+        lambda r: re.sub(r'\d+[\.\d]*', 'several', r)[:len(r)],
+    ]
+    return rng.choice(corruptions)(reasoning)
+
+
+def _corrupt_answer(answer: str, rng) -> str:
+    """Create a subtly wrong version of the answer — same format but with errors."""
+    import re
+    corruptions = [
+        # Truncate table rows (incomplete extraction)
+        lambda a: "\n".join(a.split("\n")[:len(a.split("\n"))//2 + 1]) + "\n\n*...remaining items omitted...*",
+        # Swap numbers in the output
+        lambda a: re.sub(r'(\d+\.\d{2})', lambda m: f"{float(m.group(1)) * 1.15:.2f}", a, count=3),
+        # Remove markdown structure
+        lambda a: re.sub(r'[|#*\-]', '', a).strip(),
+        # Duplicate a section (copy-paste error)
+        lambda a: a + "\n\n" + a[len(a)//2:] if len(a) > 100 else a + " " + a,
+    ]
+    return rng.choice(corruptions)(answer)
+
+
+def _cleanup_old_iterations(track_dir: Path, history: dict, current_iter: int):
+    """Remove old iteration dirs to prevent disk exhaustion.
+
+    Keeps only the best iteration's merged_16bit and the immediately
+    preceding iteration.  SFT/DPO checkpoints are always removed since
+    the merged_16bit is the only artifact needed for continuation.
+    """
+    import shutil
+    best_iter = history.get("best_iteration", 0)
+    keep = {best_iter, current_iter - 1, current_iter}
+    for child in sorted(track_dir.iterdir()):
+        if not child.is_dir() or not child.name.startswith("iter_"):
+            continue
+        try:
+            iter_num = int(child.name.split("_")[1])
+        except (IndexError, ValueError):
+            continue
+        if iter_num in keep:
+            # Still prune SFT/DPO checkpoints — only merged_16bit matters
+            for sub in ["sft_checkpoints", "dpo_checkpoints"]:
+                p = child / "model" / sub
+                if p.exists():
+                    shutil.rmtree(p, ignore_errors=True)
+            # Prune GGUF intermediates (keep only the final .gguf)
+            gguf_dir = child / "model" / "gguf"
+            if gguf_dir.exists():
+                for f in gguf_dir.iterdir():
+                    if f.name.endswith("-f16.gguf"):
+                        f.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(child, ignore_errors=True)
+            logger.info("Cleaned up old iteration dir: %s", child)
+
+
 def _generate_fallback_dpo_data(
     track: str,
     output_path: Path,
@@ -243,13 +318,10 @@ def _generate_fallback_dpo_data(
             chosen_reasoning = tpl["reasoning"].format(idx=i, seed=seed + i)
             chosen_answer = tpl["answer"].format(idx=i, seed=seed + i)
 
-            # Rejected: vague, missing structure
-            rejected_reasoning = f"The user asked about {track}. Let me provide a response."
-            rejected_answer = (
-                f"Here is some information about your query. "
-                f"The document contains relevant data. "
-                f"Please let me know if you need more details."
-            )
+            # Rejected: structurally similar but with subtle errors
+            # (swapped values, truncated output, wrong calculations)
+            rejected_reasoning = _corrupt_reasoning(chosen_reasoning, rng)
+            rejected_answer = _corrupt_answer(chosen_answer, rng)
 
             example = format_dpo_example(
                 query, chosen_reasoning, chosen_answer,
@@ -319,6 +391,112 @@ def _get_track_templates(track: str) -> List[Dict[str, str]]:
                     "| Operations | $30,000 | $28,900 | -$1,100 (3.7%) | On Track |\n\n"
                     "**Key Finding:** Technology spend exceeds budget by **16.2%**, "
                     "driven by unplanned infrastructure upgrades."
+                ),
+            },
+            {
+                "category": "aggregation",
+                "query": "Calculate the total revenue, total expenses, and net profit from this {domain} quarterly report spreadsheet.",
+                "reasoning": (
+                    "I need to identify the revenue rows and expense rows, sum each "
+                    "category separately, then compute net profit as total revenue minus "
+                    "total expenses. I should also compute margins and growth rates if "
+                    "prior quarter data is available."
+                ),
+                "answer": (
+                    "## Quarterly Financial Summary\n\n"
+                    "| Metric | Q1 Amount | Q2 Amount | Change |\n"
+                    "|--------|-----------|-----------|--------|\n"
+                    "| **Total Revenue** | **$1,245,000** | **$1,382,500** | +11.0% |\n"
+                    "| **Total Expenses** | **$987,000** | **$1,015,200** | +2.9% |\n"
+                    "| **Net Profit** | **$258,000** | **$367,300** | +42.4% |\n"
+                    "| **Profit Margin** | **20.7%** | **26.6%** | +5.9pp |\n\n"
+                    "**Key Finding:** Revenue grew **11.0%** while expenses were contained "
+                    "to **2.9%** growth, expanding profit margin by **5.9 percentage points**."
+                ),
+            },
+            {
+                "category": "multi_sheet_reasoning",
+                "query": "Cross-reference the employee list in Sheet 1 with the payroll data in Sheet 2 to identify any discrepancies for {domain} department.",
+                "reasoning": (
+                    "I need to read employee names and IDs from Sheet 1, match them against "
+                    "payroll records in Sheet 2 using employee ID as the key, then identify: "
+                    "(1) employees in Sheet 1 but not in payroll, (2) payroll entries without "
+                    "matching employees, (3) mismatched names or departments between sheets."
+                ),
+                "answer": (
+                    "## Cross-Sheet Discrepancy Report\n\n"
+                    "### Employees Missing from Payroll (Sheet 1 only)\n"
+                    "| Employee ID | Name | Department | Status |\n"
+                    "|-------------|------|------------|--------|\n"
+                    "| EMP-0042 | **Sarah Chen** | Engineering | Not in payroll |\n"
+                    "| EMP-0089 | **James Rivera** | Operations | Not in payroll |\n\n"
+                    "### Payroll Entries Without Employee Record\n"
+                    "| Employee ID | Payroll Name | Amount |\n"
+                    "|-------------|-------------|--------|\n"
+                    "| EMP-0107 | **K. Patel** | $4,200.00 |\n\n"
+                    "### Data Mismatches\n"
+                    "| Employee ID | Field | Sheet 1 | Sheet 2 |\n"
+                    "|-------------|-------|---------|--------|\n"
+                    "| EMP-0023 | Department | **Marketing** | **Sales** |\n\n"
+                    "**Summary:** Found **2** missing payroll records, **1** orphan payroll "
+                    "entry, and **1** department mismatch. Recommend HR review."
+                ),
+            },
+            {
+                "category": "data_type_handling",
+                "query": "Parse and normalize the date formats, currency values, and percentage fields in this {domain} spreadsheet.",
+                "reasoning": (
+                    "I need to identify columns with mixed formats: dates may appear as "
+                    "MM/DD/YYYY, DD-Mon-YYYY, or ISO format; currencies may have different "
+                    "symbols ($, £, €) or no symbol; percentages may be decimals (0.15) or "
+                    "strings (15%). I should normalize each to a consistent format and flag "
+                    "any unparseable values."
+                ),
+                "answer": (
+                    "## Data Normalization Report\n\n"
+                    "### Date Fields (Column B: \"Transaction Date\")\n"
+                    "- **Formats found:** MM/DD/YYYY (67%), DD-Mon-YYYY (28%), ISO 8601 (5%)\n"
+                    "- **Normalized to:** YYYY-MM-DD (ISO 8601)\n"
+                    "- **Unparseable:** Row 47 value \"TBD\", Row 112 value \"Q2 2024\"\n\n"
+                    "### Currency Fields (Column E: \"Amount\")\n"
+                    "| Original Format | Count | Example | Normalized |\n"
+                    "|----------------|-------|---------|------------|\n"
+                    "| $X,XXX.XX | 142 | $1,500.00 | 1500.00 USD |\n"
+                    "| X,XXX | 23 | 2,300 | 2300.00 USD |\n"
+                    "| £X,XXX.XX | 8 | £850.00 | 850.00 GBP |\n\n"
+                    "### Percentage Fields (Column G: \"Growth Rate\")\n"
+                    "- **Decimal format (0.15):** 45 values → converted to 15.0%\n"
+                    "- **String format (15%):** 89 values → kept as 15.0%\n"
+                    "- **Negative values:** 12 entries flagged (e.g., -3.2%)\n\n"
+                    "**Summary:** Normalized **173** currency values, **134** percentages, "
+                    "and **200** dates. Flagged **2** unparseable dates for manual review."
+                ),
+            },
+            {
+                "category": "formula_interpretation",
+                "query": "Explain the formulas used in this {domain} financial model spreadsheet and verify the calculated totals.",
+                "reasoning": (
+                    "I need to identify cells containing formulas (SUM, VLOOKUP, IF, etc.), "
+                    "trace their dependencies, verify the logic is correct, and check whether "
+                    "the computed outputs match expected results. I should also flag any "
+                    "circular references or broken formula chains."
+                ),
+                "answer": (
+                    "## Formula Audit Results\n\n"
+                    "### Formula Inventory\n"
+                    "| Cell | Formula | Purpose | Status |\n"
+                    "|------|---------|---------|--------|\n"
+                    "| D15 | =SUM(D2:D14) | Total Revenue | **Correct** ($1,382,500) |\n"
+                    "| D30 | =SUM(D16:D29) | Total Expenses | **Correct** ($1,015,200) |\n"
+                    "| D32 | =D15-D30 | Net Profit | **Correct** ($367,300) |\n"
+                    "| D33 | =D32/D15 | Profit Margin | **Correct** (26.6%) |\n"
+                    "| E15 | =D15/C15-1 | Revenue Growth | **Error**: should be =(D15-C15)/C15 |\n\n"
+                    "### Issues Found\n"
+                    "- **Cell E15:** Growth formula divides by prior period then subtracts 1, "
+                    "which gives the same result mathematically but may cause #DIV/0! if C15 is zero\n"
+                    "- **Row 22:** VLOOKUP references Sheet3 which contains outdated Q1 rates\n\n"
+                    "**Summary:** **4 of 5** formulas verified correct. **1** formula has a "
+                    "potential division-by-zero risk. Cross-sheet reference on Row 22 uses stale data."
                 ),
             },
         ]
@@ -1037,16 +1215,41 @@ class AutonomousTrainer:
         start_iteration = len(history.get("iterations", [])) + 1
         weak_areas = history.get("weak_areas", [])
         best_score = history.get("best_score", 0.0)
+        # Recover best checkpoint from history when resuming
         best_checkpoint = base_checkpoint
+        if history.get("best_iteration", 0) > 0:
+            for it in history.get("iterations", []):
+                if it.get("iteration") == history["best_iteration"] and it.get("merged_dir"):
+                    best_checkpoint = it["merged_dir"]
+                    break
+        # Recompute no_improve_count from history so restarts don't lose
+        # stagnation state (needed for timely strategy escalation to DPO)
         no_improve_count = 0
+        if history.get("iterations"):
+            running_best = 0.0
+            for it in history["iterations"]:
+                score = it.get("avg_score", 0.0)
+                if score > running_best:
+                    if score - running_best >= 0.1:
+                        no_improve_count = 0
+                    else:
+                        no_improve_count += 1
+                    running_best = score
+                else:
+                    no_improve_count += 1
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_ERRORS = 3
 
         for iteration in range(start_iteration, MAX_ITERATIONS_PER_TRACK + 1):
             iter_start = time.time()
-            strategy = _get_strategy(iteration)
+            strategy = _get_strategy(iteration, no_improve_count)
             self.log(
                 "Track %s, iteration %d, strategy: %s",
                 track, iteration, strategy["name"],
             )
+
+            # 0. Disk housekeeping — keep only the best and latest checkpoints
+            _cleanup_old_iterations(track_dir, history, iteration)
 
             # 1. Generate data
             data_dir = track_dir / f"iter_{iteration}" / "data"
@@ -1121,7 +1324,9 @@ class AutonomousTrainer:
 
             try:
                 merged_dir = train_track(config)
+                consecutive_errors = 0
             except Exception as exc:
+                consecutive_errors += 1
                 self.log("Training failed at iteration %d: %s", iteration, exc)
                 logger.error("Traceback:\n%s", traceback.format_exc())
                 history.setdefault("iterations", []).append({
@@ -1133,6 +1338,13 @@ class AutonomousTrainer:
                 })
                 self.state.setdefault("track_history", {})[track] = history
                 self._save_state()
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    self.log(
+                        "Track %s: %d consecutive failures, halting track to avoid "
+                        "wasting iterations. Last error: %s",
+                        track, consecutive_errors, exc,
+                    )
+                    break
                 continue
 
             # 3. Evaluate
@@ -1144,9 +1356,10 @@ class AutonomousTrainer:
                 pass_rate = eval_result.get("pass_rate", 1.0 if eval_result.get("passed") else 0.0)
             except Exception as exc:
                 self.log("Evaluation failed: %s", exc)
+                logger.error("Eval traceback:\n%s", traceback.format_exc())
                 avg_score = 0.0
                 pass_rate = 0.0
-                eval_result = {"avg_score": 0, "pass_rate": 0, "per_example": []}
+                eval_result = {"overall_avg": 0, "passed": False, "per_example": [], "weak_categories": []}
 
             duration = time.time() - iter_start
 
@@ -1168,22 +1381,36 @@ class AutonomousTrainer:
                 track, iteration, avg_score, pass_rate * 100, strategy["name"], duration,
             )
 
-            # Update best
+            # Update best — require meaningful improvement (>=0.1) to reset
+            # stagnation counter, otherwise SFT-only loops never escalate to DPO
+            MINIMUM_IMPROVEMENT = 0.1
             if avg_score > best_score:
+                improvement = avg_score - best_score
                 best_score = avg_score
                 best_checkpoint = merged_dir
                 history["best_score"] = best_score
                 history["best_iteration"] = iteration
-                no_improve_count = 0
+                if improvement >= MINIMUM_IMPROVEMENT:
+                    no_improve_count = 0
+                else:
+                    no_improve_count += 1
             else:
                 no_improve_count += 1
 
             # Identify weak areas from eval results
             new_weak = []
             for ex in eval_result.get("per_example", []):
-                if ex.get("score", 0) < 60:
-                    # Extract category from test ID
-                    new_weak.append(ex.get("id", ""))
+                ex_scores = ex.get("scores", {})
+                if ex_scores:
+                    ex_avg = sum(ex_scores.values()) / len(ex_scores)
+                    if ex_avg < 3.0:
+                        cat = ex.get("category", "")
+                        if cat and cat not in new_weak:
+                            new_weak.append(cat)
+            # Also include weak categories identified by the evaluator
+            for wc in eval_result.get("weak_categories", []):
+                if wc not in new_weak:
+                    new_weak.append(wc)
             if new_weak:
                 weak_areas = new_weak
                 history["weak_areas"] = weak_areas
@@ -1200,7 +1427,7 @@ class AutonomousTrainer:
                 break
 
             # 6. Log strategy evolution if applicable
-            next_strategy = _get_strategy(iteration + 1)
+            next_strategy = _get_strategy(iteration + 1, no_improve_count)
             if next_strategy["name"] != strategy["name"]:
                 self.log(
                     "Strategy evolution: %s -> %s (no improvement for %d iters)",
@@ -1216,20 +1443,20 @@ class AutonomousTrainer:
     def run_cross_track_eval(self) -> Dict[str, Any]:
         """Evaluate the model across all tracks after all individual tracks pass."""
         evaluator = TrackEvaluator(model_name=OLLAMA_V2_WIP)
-        results = evaluator.evaluate_all()
+        results = evaluator.evaluate_all_tracks()
 
         self.log("Cross-track results:")
         for track_name, track_result in results.get("per_track", {}).items():
             self.log(
-                "  %s: avg=%.1f, pass_rate=%.0f%%",
+                "  %s: avg=%.1f, passed=%s",
                 track_name,
-                track_result["avg_score"],
-                track_result["pass_rate"] * 100,
+                track_result.get("overall_avg", 0.0),
+                track_result.get("passed", False),
             )
         self.log(
-            "  Overall: avg=%.1f, pass_rate=%.0f%%",
-            results["overall_avg"],
-            results["overall_pass_rate"] * 100,
+            "  Overall: avg=%.1f, all_passed=%s",
+            results.get("overall_avg", 0.0),
+            results.get("all_passed", False),
         )
 
         return results
