@@ -192,14 +192,16 @@ def run_lora_inference(
             "Install them with: pip install unsloth torch"
         ) from exc
 
-    logger.info("Loading base model %s with adapter %s", base_model, adapter_path)
+    logger.info("Loading model from %s (base: %s)", adapter_path, base_model)
+    # Load directly from the checkpoint path — if it's a merged FP16 checkpoint,
+    # the LoRA weights are already merged in. If it's a LoRA adapter directory,
+    # Unsloth will load the base + adapter automatically.
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=base_model,
+        model_name=adapter_path,
         max_seq_length=4096,
         dtype=None,
         load_in_4bit=True,
     )
-    model = FastLanguageModel.get_peft_model(model, adapter_path)
     FastLanguageModel.for_inference(model)
 
     responses: List[str] = []
