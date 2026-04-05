@@ -1661,8 +1661,8 @@ def _build_ocr_vision() -> List[dict]:
     ]):
         ctx_block = (
             "[IMAGE: document_scan.png]\n"
-            "[OCR CONTEXT]\n"
-            f"Extracted text content relevant to: {prompt}\n\n"
+            f"[OCR_OUTPUT: document_scan.png / confidence: 0.89]\n"
+            f"{ref_text}\n\n"
         )
         items.append(_ex("ocr_vision", "printed_text_extraction",
             ctx_block + prompt,
@@ -1695,8 +1695,8 @@ def _build_ocr_vision() -> List[dict]:
     ]):
         ctx_block = (
             "[IMAGE: handwritten_doc.png]\n"
-            "[OCR CONTEXT -- HANDWRITTEN]\n"
-            f"Content relevant to: {prompt}\n\n"
+            f"[OCR_OUTPUT: handwritten_doc.png / confidence: 0.72]\n"
+            f"{ref_hw}\n\n"
         )
         items.append(_ex("ocr_vision", "handwriting_recognition",
             ctx_block + prompt,
@@ -1729,8 +1729,9 @@ def _build_ocr_vision() -> List[dict]:
     ]):
         ctx_block = (
             "[IMAGE: diagram.png]\n"
-            "[DIAGRAM DESCRIPTION]\n"
-            f"Diagram showing: {', '.join(elements[:3])} and more components\n\n"
+            f"[OCR_OUTPUT: diagram.png / confidence: 0.85]\n"
+            f"Components detected: {', '.join(elements)}\n"
+            f"Connections: {' -> '.join(elements[:4])}\n\n"
         )
         items.append(_ex("ocr_vision", "diagram_understanding",
             ctx_block + prompt,
@@ -1792,10 +1793,14 @@ def _build_ocr_vision() -> List[dict]:
           ["Kim", "8", "15", "2100"],
           ["Patel", "15", "5", "1950"]], "easy"),
     ]):
+        # Build a pipe-delimited table from the data
+        table_text = " | ".join(table[0]) + "\n"
+        for row in table[1:]:
+            table_text += " | ".join(row) + "\n"
         ctx_block = (
             "[IMAGE: scanned_table.png]\n"
-            "[OCR CONTEXT -- TABLE]\n"
-            "Table with " + str(len(table)) + " rows detected\n\n"
+            f"[OCR_OUTPUT: scanned_table.png / confidence: 0.91]\n"
+            f"{table_text}\n"
         )
         items.append(_ex("ocr_vision", "table_from_image",
             ctx_block + prompt,
