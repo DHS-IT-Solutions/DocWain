@@ -282,7 +282,7 @@ def build_augmentation_briefs(
     briefs: List[GenerationBrief] = []
     allocated = 0
     for idx, (weak, gap) in enumerate(zip(weak_areas, gaps)):
-        area = weak["area"]
+        area = weak.get("area") or weak["track"]
         dimension = weak.get("dimension", "")
         patterns = weak.get("failure_patterns", [])
 
