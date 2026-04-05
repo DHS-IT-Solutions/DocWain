@@ -1,7 +1,40 @@
-"""DocWain V2 — Vision-grafted unified model with native tool-calling."""
+"""DocWain V2 — Curriculum-trained unified model.
 
-from .vision_graft import GraftConfig, VisionGraftedModel
-from .pipeline import V2Pipeline
-from .tool_schemas import get_core_tool_schemas
+Core modules:
+- curriculum_trainer: Orchestrator for generate → train → eval → analyze loop
+- curriculum_generator: Subagent-driven training data generation
+- curriculum_evaluator: LoRA inference evaluation with subagent judges
+- train_track: Unified SFT training with curriculum sampling
+"""
 
-__all__ = ["GraftConfig", "VisionGraftedModel", "V2Pipeline", "get_core_tool_schemas"]
+from .curriculum_trainer import PipelineState, run_pipeline
+from .curriculum_generator import (
+    GenerationBrief,
+    build_initial_briefs,
+    build_augmentation_briefs,
+    merge_datasets,
+    AREA_CONFIGS,
+)
+from .curriculum_evaluator import (
+    run_lora_inference,
+    aggregate_scores,
+    check_gates,
+    GateResult,
+)
+from .train_track import TrackTrainingConfig, CurriculumSampler
+
+__all__ = [
+    "PipelineState",
+    "run_pipeline",
+    "GenerationBrief",
+    "build_initial_briefs",
+    "build_augmentation_briefs",
+    "merge_datasets",
+    "AREA_CONFIGS",
+    "run_lora_inference",
+    "aggregate_scores",
+    "check_gates",
+    "GateResult",
+    "TrackTrainingConfig",
+    "CurriculumSampler",
+]

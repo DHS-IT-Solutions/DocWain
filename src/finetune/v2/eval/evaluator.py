@@ -78,7 +78,12 @@ def query_ollama(
     try:
         with urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
-            return body.get("response", "")
+            response = body.get("response", "")
+            # Qwen3 thinking models may put content in "thinking" field
+            # and leave "response" empty when num_predict is exhausted
+            if not response.strip() and body.get("thinking"):
+                response = body["thinking"]
+            return response
     except Exception as exc:
         logger.warning("query_ollama failed (model=%s): %s", model, exc)
         return ""
@@ -108,7 +113,7 @@ class TrackEvaluator:
         model_name: str = "DHS/DocWain",
         ollama_url: str = OLLAMA_URL,
         temperature: float = 0.1,
-        max_tokens: int = 2048,
+        max_tokens: int = 4096,
     ) -> None:
         self.model_name = model_name
         self.ollama_url = ollama_url
@@ -147,7 +152,11 @@ class TrackEvaluator:
         try:
             with urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
-                return body.get("response", "")
+                response = body.get("response", "")
+                # Qwen3 thinking models may put content in "thinking" field
+                if not response.strip() and body.get("thinking"):
+                    response = body["thinking"]
+                return response
         except (URLError, OSError, json.JSONDecodeError, TimeoutError) as exc:
             logger.warning("Ollama query failed: %s", exc)
             return ""
@@ -155,6 +164,17 @@ class TrackEvaluator:
     # ------------------------------------------------------------------
     # Per-track evaluation
     # ------------------------------------------------------------------
+
+    def _check_model_available(self) -> bool:
+        """Verify the Ollama model exists before running full eval."""
+        test_response = self.query_model("Hello")
+        if not test_response:
+            logger.error(
+                "Model %s is not responding — check Ollama model exists",
+                self.model_name,
+            )
+            return False
+        return True
 
     def evaluate_track(self, track_name: str) -> dict:
         """Run all test bank examples for a track, score them, return aggregate.
@@ -168,6 +188,12 @@ class TrackEvaluator:
         scorer = TRACK_SCORERS.get(track_name)
         if scorer is None:
             raise ValueError(f"Unknown track {track_name!r}")
+
+        if not self._check_model_available():
+            raise RuntimeError(
+                f"Model {self.model_name!r} not available in Ollama. "
+                f"GGUF export or ollama create may have failed."
+            )
 
         examples = get_test_bank(track=track_name)
         gate = GATE_THRESHOLDS.get(track_name, 4.0)

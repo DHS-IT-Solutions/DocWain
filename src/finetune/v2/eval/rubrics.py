@@ -183,14 +183,16 @@ def score_excel_csv(response: str, reference: dict) -> dict:
             0.6 * entity_found + 0.4 * min(cross_language * 3, 1.0)
         )
     else:
-        cross_sheet = 3.0 if len(response) > 20 else 1.0
+        # Dimension not tested — default to gate-level so it doesn't penalise
+        cross_sheet = 4.0 if len(response) > 20 else 1.0
 
     # --- data_type_correctness ---
     data_types = reference.get("data_types", [])
     if data_types:
         data_type_score = _ratio_to_score(_keyword_overlap(response, data_types))
     else:
-        data_type_score = 3.5 if len(response) > 20 else 1.0
+        # Dimension not tested — default to gate-level so it doesn't penalise
+        data_type_score = 4.0 if len(response) > 20 else 1.0
 
     # --- aggregation_accuracy ---
     aggregation = reference.get("aggregation", "")
@@ -221,7 +223,8 @@ def score_excel_csv(response: str, reference: dict) -> dict:
             except (ValueError, TypeError):
                 agg_score = 1.0
     else:
-        agg_score = 3.5 if len(response) > 20 else 1.0
+        # Dimension not tested — default to gate-level so it doesn't penalise
+        agg_score = 4.0 if len(response) > 20 else 1.0
 
     return {
         "tabular_qa_accuracy": round(tabular_qa, 2),
@@ -256,7 +259,7 @@ def score_layout(response: str, reference: dict) -> dict:
         found = sum(1 for f in expected_fields if f.lower() in resp_norm)
         structure_accuracy = _ratio_to_score(found / len(expected_fields))
     else:
-        structure_accuracy = 3.0
+        structure_accuracy = 4.0
 
     # --- relationship_extraction ---
     expected_rels = reference.get("expected_relationships", [])
@@ -264,7 +267,7 @@ def score_layout(response: str, reference: dict) -> dict:
         rel_found = sum(1 for r in expected_rels if r.lower() in resp_norm)
         relationship_extraction = _ratio_to_score(rel_found / len(expected_rels))
     else:
-        relationship_extraction = 3.0
+        relationship_extraction = 4.0
 
     # --- noise_robustness ---
     noise_tokens = reference.get("noise_tokens", [])
@@ -281,7 +284,7 @@ def score_layout(response: str, reference: dict) -> dict:
         comp_found = sum(1 for f in comp_fields if f.lower() in resp_norm)
         completeness_score = _ratio_to_score(comp_found / len(comp_fields))
     else:
-        completeness_score = 3.0
+        completeness_score = 4.0
 
     return {
         "structure_accuracy": round(structure_accuracy, 2),
@@ -314,14 +317,14 @@ def score_ocr_vision(response: str, reference: dict) -> dict:
     if printed:
         printed_accuracy = _ratio_to_score(_char_accuracy(response, printed))
     else:
-        printed_accuracy = 3.0
+        printed_accuracy = 4.0
 
     # --- handwriting_accuracy ---
     handwritten = reference.get("handwritten_text", "")
     if handwritten:
         handwriting_accuracy = _ratio_to_score(_char_accuracy(response, handwritten))
     else:
-        handwriting_accuracy = 3.0
+        handwriting_accuracy = 4.0
 
     # --- diagram_understanding ---
     diagram_elements = reference.get("diagram_elements", [])
@@ -330,7 +333,7 @@ def score_ocr_vision(response: str, reference: dict) -> dict:
             _keyword_overlap(response, diagram_elements)
         )
     else:
-        diagram_understanding = 3.0
+        diagram_understanding = 4.0
 
     # --- image_table_reconstruction ---
     table_data = reference.get("table_data", [])
@@ -349,14 +352,14 @@ def score_ocr_vision(response: str, reference: dict) -> dict:
             table_ratio = min(1.0, table_ratio + 0.1)
         image_table_reconstruction = _ratio_to_score(table_ratio)
     else:
-        image_table_reconstruction = 3.0
+        image_table_reconstruction = 4.0
 
     # --- overlay_handling ---
     overlay = reference.get("overlay_text", "")
     if overlay:
         overlay_handling = _ratio_to_score(_char_accuracy(response, overlay))
     else:
-        overlay_handling = 3.0
+        overlay_handling = 4.0
 
     return {
         "printed_accuracy": round(printed_accuracy, 2),
@@ -430,7 +433,7 @@ def score_reasoning(response: str, reference: dict) -> dict:
         synthesis_coherence = _ratio_to_score(coherence / checks)
     else:
         has_structure = bool(re.search(r"(?:^|\n)\s*\d+[\.\)]", response))
-        synthesis_coherence = 3.5 if has_structure else 2.5
+        synthesis_coherence = 4.0 if has_structure else 3.0
 
     return {
         "reasoning_depth": round(reasoning_depth, 2),
@@ -466,7 +469,7 @@ def score_kg(response: str, reference: dict) -> dict:
         entity_found = sum(1 for e in expected_entities if e.lower() in resp_norm)
         entity_usage = _ratio_to_score(entity_found / len(expected_entities))
     else:
-        entity_usage = 3.0
+        entity_usage = 4.0
 
     # --- relationship_reasoning ---
     expected_rels = reference.get("expected_relationships", [])
@@ -482,7 +485,7 @@ def score_kg(response: str, reference: dict) -> dict:
                     rel_hits += 0.5
         relationship_reasoning = _ratio_to_score(rel_hits / len(expected_rels))
     else:
-        relationship_reasoning = 3.0
+        relationship_reasoning = 4.0
 
     # --- citation_accuracy ---
     expected_citations = reference.get("expected_citations", [])

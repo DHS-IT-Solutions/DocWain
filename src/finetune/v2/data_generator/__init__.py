@@ -1,21 +1,13 @@
-"""Data generator base infrastructure for DocWain V2+ finetuning pipeline."""
+"""Data generator base for DocWain V2 finetuning."""
 
 from src.finetune.v2.data_generator.base import (
-    JSONLWriter,
+    DOCWAIN_SYSTEM_PROMPT,
     format_sft_example,
     format_dpo_example,
-    format_eval_example,
-    format_sft_with_chart,
-    format_spreadsheet_context,
-    format_kg_context,
 )
 
 __all__ = [
-    "JSONLWriter",
+    "DOCWAIN_SYSTEM_PROMPT",
     "format_sft_example",
     "format_dpo_example",
-    "format_eval_example",
-    "format_sft_with_chart",
-    "format_spreadsheet_context",
-    "format_kg_context",
 ]
