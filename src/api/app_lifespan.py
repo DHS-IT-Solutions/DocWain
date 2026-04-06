@@ -215,6 +215,14 @@ def initialize_app_state(app: FastAPI) -> AppState:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Neo4j unavailable; KG augmentation disabled: %s", exc)
 
+    # Warm KG entity cache for fast query-time lookups
+    if graph_augmenter:
+        try:
+            from src.kg.kg_cache import kg_cache
+            kg_cache.warm(neo4j_store=neo4j_store)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("KG cache warming skipped: %s", exc)
+
     state = AppState(
         embedding_model=embedding_model,
         reranker=cross_encoder,
