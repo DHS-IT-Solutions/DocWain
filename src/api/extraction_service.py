@@ -1832,6 +1832,190 @@ def _transition_to_awaiting_review(doc_id: str) -> None:
     logger.info("Document %s moved to AWAITING_REVIEW_1 (HITL gate 1)", doc_id)
 
 
+def _process_single_document(
+    doc_id: str,
+    doc_info: Dict[str, Any],
+    idx: int,
+    total: int,
+    effective_sub: str,
+    allowed_statuses: set,
+    extract_fn=None,
+) -> Dict[str, Any]:
+    """Process a single document for batch extraction.
+
+    Returns a result dict compatible with the batch extraction response.
+    Raises ``CredentialError`` to signal that the entire batch should abort.
+    """
+    if extract_fn is None:
+        extract_fn = _extract_from_connector
+
+    doc_name = doc_info.get("dataDict", {}).get("name", "Unknown")
+
+    # --- FRESH STATUS CHECK: re-query MongoDB before processing ---
+    current_status = _get_current_doc_status(doc_id)
+    if current_status and current_status not in allowed_statuses:
+        logger.info(
+            "[EXTRACTION %d/%d] Skipped: doc=%s name=%s reason=already_%s",
+            idx, total, doc_id, doc_name, current_status,
+        )
+        return {
+            "document_id": doc_id,
+            "doc_name": doc_name,
+            "status": current_status,
+            "reason": f"already_{current_status}",
+            "index": f"{idx}/{total}",
+            "elapsed_seconds": 0,
+            "_skipped": True,
+        }
+
+    doc_start = time.time()
+    logger.info(
+        "[EXTRACTION %d/%d] ▶ Starting: doc=%s name=%s",
+        idx, total, doc_id, doc_name,
+    )
+    _emit_batch_progress(effective_sub, 0, total,
+                          current_doc=doc_name,
+                          stage=f"extracting {idx}/{total}")
+    # Emit per-document status log and progress for batch extraction
+    try:
+        from src.api.document_status import emit_status_log as _esl, clear_status_logs as _csl
+        _csl(doc_id)
+        _esl(doc_id, "extraction", "batch_extraction_start",
+             f"Batch extraction started ({idx}/{total})",
+             extra={"batch_index": idx, "batch_total": total, "doc_name": doc_name})
+        emit_progress(doc_id, "extraction", 0.05, f"Extraction starting ({idx}/{total})")
+    except Exception:
+        pass
+
+    # This may raise CredentialError — callers must handle it.
+    res = extract_fn(doc_id, doc_info.get("dataDict", {}), doc_info.get("connDict", {}))
+
+    elapsed = round(time.time() - doc_start, 1)
+    res["elapsed_seconds"] = elapsed
+    res["doc_name"] = doc_name
+    res["index"] = f"{idx}/{total}"
+    status = res.get("status", "")
+
+    try:
+        from src.api.document_status import emit_status_log as _esl
+    except Exception:
+        _esl = None
+
+    if status == STATUS_EXTRACTION_COMPLETED:
+        logger.info(
+            "[EXTRACTION %d/%d] ✓ Completed: doc=%s name=%s in %.1fs",
+            idx, total, doc_id, doc_name, elapsed,
+        )
+        if _esl:
+            try:
+                _esl(doc_id, "extraction", "extraction_completed",
+                     f"Extraction completed in {elapsed}s",
+                     extra={"elapsed_seconds": elapsed})
+                emit_progress(doc_id, "extraction", 0.20, f"Extraction completed in {elapsed}s")
+            except Exception:
+                pass
+        try:
+            _transition_to_awaiting_review(doc_id)
+        except Exception:
+            logger.warning("Failed to transition doc %s to AWAITING_REVIEW_1", doc_id, exc_info=True)
+    elif status == "CONFLICT":
+        logger.info(
+            "[EXTRACTION %d/%d] ⊘ Skipped: doc=%s reason=%s",
+            idx, total, doc_id, res.get("reason", "conflict"),
+        )
+        if _esl:
+            try:
+                _esl(doc_id, "extraction", "extraction_skipped",
+                     f"Skipped: {res.get('reason', 'conflict')}")
+            except Exception:
+                pass
+        res["_skipped"] = True
+    else:
+        logger.warning(
+            "[EXTRACTION %d/%d] ✗ Failed: doc=%s name=%s in %.1fs error=%s",
+            idx, total, doc_id, doc_name, elapsed, res.get("error", str(status)),
+        )
+        if _esl:
+            try:
+                _esl(doc_id, "extraction", "extraction_failed",
+                     f"Extraction failed after {elapsed}s: {res.get('error', str(status))}",
+                     extra={"elapsed_seconds": elapsed, "error": res.get("error")})
+                emit_progress(doc_id, "failed", 0.0, f"Extraction failed: {res.get('error', str(status))}")
+            except Exception:
+                pass
+
+    return res
+
+
+def _run_parallel_extraction(
+    eligible_docs: Dict[str, Dict[str, Any]],
+    extract_fn=None,
+    max_workers: int = _BATCH_MAX_WORKERS,
+    effective_sub: str = "",
+    allowed_statuses: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    """Submit all eligible documents to a thread pool and collect results.
+
+    Returns a list of per-document result dicts (same shape as the sequential
+    loop produced).  Raises ``CredentialError`` if any document encounters one
+    — the remaining futures are cancelled in that case.
+    """
+    if allowed_statuses is None:
+        allowed_statuses = {STATUS_UNDER_REVIEW, STATUS_EXTRACTION_FAILED}
+
+    total = len(eligible_docs)
+    documents: List[Dict[str, Any]] = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_doc = {}
+        for idx, (doc_id, doc_info) in enumerate(eligible_docs.items(), 1):
+            fut = executor.submit(
+                _process_single_document,
+                doc_id=doc_id,
+                doc_info=doc_info,
+                idx=idx,
+                total=total,
+                effective_sub=effective_sub,
+                allowed_statuses=allowed_statuses,
+                extract_fn=extract_fn,
+            )
+            future_to_doc[fut] = (doc_id, doc_info)
+
+        for fut in concurrent.futures.as_completed(future_to_doc):
+            doc_id, doc_info = future_to_doc[fut]
+            doc_name = doc_info.get("dataDict", {}).get("name", "Unknown")
+            try:
+                res = fut.result()
+            except CredentialError:
+                # Cancel remaining futures and propagate
+                for remaining in future_to_doc:
+                    remaining.cancel()
+                raise
+            except Exception as exc:
+                logger.error(
+                    "Unexpected error processing doc=%s: %s", doc_id, exc, exc_info=True,
+                )
+                res = {
+                    "document_id": doc_id,
+                    "doc_name": doc_name,
+                    "status": STATUS_EXTRACTION_FAILED,
+                    "error": str(exc),
+                    "elapsed_seconds": 0,
+                }
+            documents.append(res)
+            completed = sum(
+                1 for d in documents
+                if d.get("status") == STATUS_EXTRACTION_COMPLETED
+            )
+            _emit_batch_progress(
+                effective_sub, completed, total,
+                current_doc=doc_name,
+                stage=f"processed {len(documents)}/{total}",
+            )
+
+    return documents
+
+
 def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
     batch_start = time.time()
 
@@ -1918,107 +2102,19 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
         )
         _emit_batch_progress(effective_sub, 0, total, stage="starting")
 
-        documents = []
-        completed_count = 0
-        skipped_count = 0
-        for idx, (doc_id, doc_info) in enumerate(eligible_docs.items(), 1):
-            doc_name = doc_info.get("dataDict", {}).get("name", "Unknown")
-
-            # --- FRESH STATUS CHECK: re-query MongoDB before processing ---
-            current_status = _get_current_doc_status(doc_id)
-            if current_status and current_status not in allowed_statuses:
-                logger.info(
-                    "[EXTRACTION %d/%d] Skipped: doc=%s name=%s reason=already_%s",
-                    idx, total, doc_id, doc_name, current_status,
-                )
-                skipped_count += 1
-                documents.append({
-                    "document_id": doc_id,
-                    "doc_name": doc_name,
-                    "status": current_status,
-                    "reason": f"already_{current_status}",
-                    "index": f"{idx}/{total}",
-                    "elapsed_seconds": 0,
-                })
-                _emit_batch_progress(effective_sub, completed_count, total,
-                                      current_doc=doc_name,
-                                      stage=f"skipped {idx}/{total} (already {current_status})")
-                continue
-
-            doc_start = time.time()
-            logger.info(
-                "[EXTRACTION %d/%d] ▶ Starting: doc=%s name=%s",
-                idx, total, doc_id, doc_name,
+        try:
+            documents = _run_parallel_extraction(
+                eligible_docs,
+                max_workers=_BATCH_MAX_WORKERS,
+                effective_sub=effective_sub,
+                allowed_statuses=allowed_statuses,
             )
-            _emit_batch_progress(effective_sub, completed_count, total,
-                                  current_doc=doc_name,
-                                  stage=f"extracting {idx}/{total}")
-            # Emit per-document status log and progress for batch extraction
-            try:
-                from src.api.document_status import emit_status_log as _esl, clear_status_logs as _csl
-                _csl(doc_id)
-                _esl(doc_id, "extraction", "batch_extraction_start",
-                     f"Batch extraction started ({idx}/{total})",
-                     extra={"batch_index": idx, "batch_total": total, "doc_name": doc_name})
-                emit_progress(doc_id, "extraction", 0.05, f"Extraction starting ({idx}/{total})")
-            except Exception:
-                pass
-            try:
-                res = _extract_from_connector(doc_id, doc_info.get("dataDict", {}), doc_info.get("connDict", {}))
-            except CredentialError as exc:
-                logger.error("Credential error during extraction; failing batch: %s", exc)
-                return {"status": "error", "message": f"CredentialError: {exc}", "documents": documents}
-            elapsed = round(time.time() - doc_start, 1)
-            res["elapsed_seconds"] = elapsed
-            res["doc_name"] = doc_name
-            res["index"] = f"{idx}/{total}"
-            status = res.get("status", "")
-            if status == STATUS_EXTRACTION_COMPLETED:
-                completed_count += 1
-                logger.info(
-                    "[EXTRACTION %d/%d] ✓ Completed: doc=%s name=%s in %.1fs",
-                    idx, total, doc_id, doc_name, elapsed,
-                )
-                try:
-                    _esl(doc_id, "extraction", "extraction_completed",
-                         f"Extraction completed in {elapsed}s",
-                         extra={"elapsed_seconds": elapsed})
-                    emit_progress(doc_id, "extraction", 0.20, f"Extraction completed in {elapsed}s")
-                except Exception:
-                    pass
-                try:
-                    _transition_to_awaiting_review(doc_id)
-                except Exception:
-                    logger.warning("Failed to transition doc %s to AWAITING_REVIEW_1", doc_id, exc_info=True)
-            elif status == "CONFLICT":
-                skipped_count += 1
-                logger.info(
-                    "[EXTRACTION %d/%d] ⊘ Skipped: doc=%s reason=%s",
-                    idx, total, doc_id, res.get("reason", "conflict"),
-                )
-                try:
-                    _esl(doc_id, "extraction", "extraction_skipped",
-                         f"Skipped: {res.get('reason', 'conflict')}")
-                except Exception:
-                    pass
-            else:
-                logger.warning(
-                    "[EXTRACTION %d/%d] ✗ Failed: doc=%s name=%s in %.1fs error=%s",
-                    idx, total, doc_id, doc_name, elapsed, res.get("error", str(status)),
-                )
-                try:
-                    _esl(doc_id, "extraction", "extraction_failed",
-                         f"Extraction failed after {elapsed}s: {res.get('error', str(status))}",
-                         extra={"elapsed_seconds": elapsed, "error": res.get("error")})
-                    emit_progress(doc_id, "failed", 0.0, f"Extraction failed: {res.get('error', str(status))}")
-                except Exception:
-                    pass
-            documents.append(res)
-            _emit_batch_progress(effective_sub, completed_count, total,
-                                  current_doc=doc_name,
-                                  stage=f"processed {idx}/{total}")
+        except CredentialError as exc:
+            logger.error("Credential error during extraction; failing batch: %s", exc)
+            return {"status": "error", "message": f"CredentialError: {exc}", "documents": []}
 
         successful = [d for d in documents if d.get("status") == STATUS_EXTRACTION_COMPLETED]
+        skipped_count = sum(1 for d in documents if d.get("_skipped"))
         failed = [d for d in documents if d.get("status") not in (STATUS_EXTRACTION_COMPLETED, "CONFLICT") and not d.get("reason", "").startswith("already_")]
         batch_elapsed = round(time.time() - batch_start, 1)
         logger.info(
