@@ -7,7 +7,6 @@ _PATCHES = [
     patch("src.api.extraction_service._get_current_doc_status", return_value=None),
     patch("src.api.extraction_service._emit_batch_progress"),
     patch("src.api.extraction_service.emit_progress"),
-    patch("src.api.extraction_service._transition_to_awaiting_review"),
     patch("src.api.document_status.emit_status_log", return_value=None),
     patch("src.api.document_status.clear_status_logs", return_value=None),
 ]

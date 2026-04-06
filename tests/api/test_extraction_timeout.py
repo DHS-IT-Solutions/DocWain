@@ -26,12 +26,3 @@ def test_stale_lock_recovery_with_force():
     _release_batch_lock(lock2)
 
 
-def test_extraction_sets_hitl_review_not_status():
-    """After extraction, hitl_review=AWAITING_REVIEW_1 but main status is NOT changed."""
-    with patch("src.api.extraction_service.update_document_fields") as mock_update:
-        from src.api.extraction_service import _transition_to_awaiting_review
-        _transition_to_awaiting_review("test_doc_789")
-        mock_update.assert_called_once()
-        fields = mock_update.call_args[0][1]
-        assert fields["hitl_review"] == "AWAITING_REVIEW_1"
-        assert "status" not in fields  # main status must NOT be overwritten

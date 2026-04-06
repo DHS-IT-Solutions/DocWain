@@ -63,10 +63,6 @@ from src.api.layout_graph_store import save_layout_graph, save_layout_graph_loca
 from src.api.document_status import emit_progress, get_documents_collection, init_document_record, set_error, update_document_fields, update_stage
 from src.api.pipeline_models import ExtractedDocument
 from src.api.statuses import (
-    PIPELINE_AWAITING_REVIEW_1,
-    PIPELINE_AWAITING_REVIEW_2,
-    PIPELINE_PROCESSING_IN_PROGRESS,
-    PIPELINE_REJECTED,
     STATUS_DELETED,
     STATUS_EXTRACTION_COMPLETED,
     STATUS_EXTRACTION_FAILED,
@@ -1818,20 +1814,6 @@ def get_batch_extraction_progress(subscription_id: str) -> Optional[Dict[str, An
         return None
 
 
-def _transition_to_awaiting_review(doc_id: str) -> None:
-    """After extraction completes, mark HITL gate 1 as pending.
-
-    The main ``status`` field stays as EXTRACTION_COMPLETED (set by the
-    extraction pipeline).  HITL state is tracked separately in
-    ``hitl_review`` so existing status flows are preserved.
-    """
-    update_document_fields(doc_id, {
-        "hitl_review": "AWAITING_REVIEW_1",
-        "awaiting_review_1_at": time.time(),
-    })
-    logger.info("Document %s: HITL gate 1 pending (status stays EXTRACTION_COMPLETED)", doc_id)
-
-
 def _process_single_document(
     doc_id: str,
     doc_info: Dict[str, Any],
@@ -1914,10 +1896,6 @@ def _process_single_document(
                 emit_progress(doc_id, "extraction", 0.20, f"Extraction completed in {elapsed}s")
             except Exception:
                 pass
-        try:
-            _transition_to_awaiting_review(doc_id)
-        except Exception:
-            logger.warning("Failed to transition doc %s to AWAITING_REVIEW_1", doc_id, exc_info=True)
     elif status == "CONFLICT":
         logger.info(
             "[EXTRACTION %d/%d] ⊘ Skipped: doc=%s reason=%s",

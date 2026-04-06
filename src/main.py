@@ -212,35 +212,6 @@ if _EXTRACTION_ROUTER_AVAILABLE and extraction_router:
 if _INTELLIGENCE_ROUTER_AVAILABLE and intelligence_router:
     api_router.include_router(intelligence_router, tags=["Intelligence"])
 
-# --- HITL Review Gate Endpoints ---
-
-class ReviewApproveRequest(BaseModel):
-    reviewer: str = Field(..., min_length=1)
-
-class ReviewRejectRequest(BaseModel):
-    reviewer: str = Field(..., min_length=1)
-    reason: str = Field(..., min_length=1)
-
-@api_router.post("/review/{doc_id}/approve/gate1", tags=["HITL Review"])
-def api_approve_gate_1(doc_id: str, body: ReviewApproveRequest):
-    from src.api.hitl_review import approve_review_gate_1
-    return approve_review_gate_1(doc_id, reviewer=body.reviewer)
-
-@api_router.post("/review/{doc_id}/approve/gate2", tags=["HITL Review"])
-def api_approve_gate_2(doc_id: str, body: ReviewApproveRequest):
-    from src.api.hitl_review import approve_review_gate_2
-    return approve_review_gate_2(doc_id, reviewer=body.reviewer)
-
-@api_router.post("/review/{doc_id}/reject", tags=["HITL Review"])
-def api_reject_document(doc_id: str, body: ReviewRejectRequest):
-    from src.api.hitl_review import reject_document
-    return reject_document(doc_id, reviewer=body.reviewer, reason=body.reason)
-
-@api_router.post("/review/{doc_id}/reextract", tags=["HITL Review"])
-def api_request_reextraction(doc_id: str, body: ReviewRejectRequest):
-    from src.api.hitl_review import request_reextraction
-    return request_reextraction(doc_id, reviewer=body.reviewer, reason=body.reason)
-
 class FeedbackRequest(BaseModel):
     query: str = Field(..., min_length=1)
     answer: str = Field(..., min_length=1)
