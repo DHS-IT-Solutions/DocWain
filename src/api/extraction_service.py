@@ -1677,6 +1677,7 @@ def _get_current_doc_status(doc_id: str) -> Optional[str]:
 
 # Subscription-level batch lock to prevent concurrent extraction runs
 _BATCH_LOCK_TTL_SECONDS = 1800  # 30 minutes max
+_STALE_LOCK_THRESHOLD_SECONDS = int(os.getenv("STALE_LOCK_THRESHOLD_SECONDS", "900"))  # 15 min default
 
 def _acquire_batch_lock(subscription_id: str) -> Optional[str]:
     """Acquire a subscription-level batch extraction lock. Returns lock key if acquired, None otherwise."""
@@ -1712,6 +1713,44 @@ def _release_batch_lock(lock_key: str) -> None:
     from src.utils.idempotency import _MEMORY_LOCKS, _MEMORY_LOCK
     with _MEMORY_LOCK:
         _MEMORY_LOCKS.pop(lock_key, None)
+
+def _force_release_batch_lock(subscription_id: str) -> None:
+    """Force-delete the batch lock for a subscription, regardless of who holds it."""
+    lock_key = f"docwain:batch_extraction:{subscription_id}"
+    logger.warning("Force-releasing stale batch lock for subscription %s", subscription_id)
+    try:
+        from src.api.dw_newron import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.delete(lock_key)
+            return
+    except Exception:
+        pass
+    from src.utils.idempotency import _MEMORY_LOCKS, _MEMORY_LOCK
+    with _MEMORY_LOCK:
+        _MEMORY_LOCKS.pop(lock_key, None)
+
+def _get_batch_lock_age(subscription_id: str) -> Optional[float]:
+    """Return how long the batch lock has been held in seconds, or None if no lock exists."""
+    lock_key = f"docwain:batch_extraction:{subscription_id}"
+    try:
+        from src.api.dw_newron import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client:
+            ttl = redis_client.ttl(lock_key)
+            if ttl is None or ttl < 0:
+                return None
+            return _BATCH_LOCK_TTL_SECONDS - ttl
+    except Exception:
+        pass
+    # Fallback: in-memory lock
+    from src.utils.idempotency import _MEMORY_LOCKS, _MEMORY_LOCK
+    with _MEMORY_LOCK:
+        expiry = _MEMORY_LOCKS.get(lock_key)
+        if expiry is None:
+            return None
+        age = _BATCH_LOCK_TTL_SECONDS - (expiry - time.time())
+        return age if age >= 0 else None
 
 
 def _emit_batch_progress(subscription_id: str, completed: int, total: int,
@@ -1821,6 +1860,18 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
     effective_sub = str(subscription_id) if subscription_id else "global"
     batch_lock_key = _acquire_batch_lock(effective_sub)
     if not batch_lock_key:
+        # Check if the lock is stale and can be auto-released
+        lock_age = _get_batch_lock_age(effective_sub)
+        if lock_age is not None and lock_age > _STALE_LOCK_THRESHOLD_SECONDS:
+            logger.warning(
+                "Batch lock for subscription %s is stale (held for %.0fs > %ds threshold); auto-releasing",
+                effective_sub, lock_age, _STALE_LOCK_THRESHOLD_SECONDS,
+            )
+            _force_release_batch_lock(effective_sub)
+            batch_lock_key = _acquire_batch_lock(effective_sub)
+
+    if not batch_lock_key:
+        lock_age = _get_batch_lock_age(effective_sub)
         logger.info(
             "Batch extraction already in progress for subscription %s; rejecting duplicate request",
             effective_sub,
@@ -1829,6 +1880,7 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
             "status": "already_running",
             "message": f"Extraction is already running for subscription {effective_sub}. "
                        "Please wait for the current batch to complete.",
+            "lock_age_seconds": round(lock_age, 1) if lock_age is not None else None,
             "documents": [],
         }
 
