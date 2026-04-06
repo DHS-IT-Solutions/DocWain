@@ -896,8 +896,9 @@ As of 2026-04-06, extraction is stuck on subscription `67fde0754e36c00b14cea7f5`
 - Duplicate extraction requests being rejected with no recovery path
 
 Immediate fixes (Phase 0):
-1. Kill or timeout the stuck extraction
-2. Implement per-document timeout (5 min hard limit)
-3. Add CSV/Excel native parser path (bypass OCR/deep analysis for structured files)
-4. Add Neo4j circuit breaker
-5. Add stale extraction lock auto-release (>15 min)
+1. Add CSV/Excel native parser path (bypass OCR/deep analysis for structured files) — this is the root cause fix
+2. Add Neo4j circuit breaker
+3. Add stale extraction lock auto-release (>15 min)
+4. Smart extraction routing by file type (Phase 2b)
+
+Note: No per-document timeout — every document must complete extraction. Efficiency is achieved through smart routing (native parsers for structured files, parallel pages for PDFs), not by abandoning work.
