@@ -96,7 +96,7 @@ from src.metrics.ai_metrics import get_metrics_store
 from src.metrics.repository import MetricsRepository
 from src.mode.execution_mode import resolve_execution_mode
 from src.mode.session_state import SessionStateStore
-from src.execution.router import execute_request
+from src.execution.router import execute_request, execute_request_stream
 from src.execution.common import normalize_answer
 from src.intelligence.redis_intel_cache import RedisIntelCache
 from src.api.learning_signals import LearningSignalStore
@@ -211,6 +211,35 @@ if _EXTRACTION_ROUTER_AVAILABLE and extraction_router:
     api_router.include_router(extraction_router, tags=["Extraction Pipeline"])
 if _INTELLIGENCE_ROUTER_AVAILABLE and intelligence_router:
     api_router.include_router(intelligence_router, tags=["Intelligence"])
+
+# --- HITL Review Gate Endpoints ---
+
+class ReviewApproveRequest(BaseModel):
+    reviewer: str = Field(..., min_length=1)
+
+class ReviewRejectRequest(BaseModel):
+    reviewer: str = Field(..., min_length=1)
+    reason: str = Field(..., min_length=1)
+
+@api_router.post("/review/{doc_id}/approve/gate1", tags=["HITL Review"])
+def api_approve_gate_1(doc_id: str, body: ReviewApproveRequest):
+    from src.api.hitl_review import approve_review_gate_1
+    return approve_review_gate_1(doc_id, reviewer=body.reviewer)
+
+@api_router.post("/review/{doc_id}/approve/gate2", tags=["HITL Review"])
+def api_approve_gate_2(doc_id: str, body: ReviewApproveRequest):
+    from src.api.hitl_review import approve_review_gate_2
+    return approve_review_gate_2(doc_id, reviewer=body.reviewer)
+
+@api_router.post("/review/{doc_id}/reject", tags=["HITL Review"])
+def api_reject_document(doc_id: str, body: ReviewRejectRequest):
+    from src.api.hitl_review import reject_document
+    return reject_document(doc_id, reviewer=body.reviewer, reason=body.reason)
+
+@api_router.post("/review/{doc_id}/reextract", tags=["HITL Review"])
+def api_request_reextraction(doc_id: str, body: ReviewRejectRequest):
+    from src.api.hitl_review import request_reextraction
+    return request_reextraction(doc_id, reviewer=body.reviewer, reason=body.reason)
 
 class FeedbackRequest(BaseModel):
     query: str = Field(..., min_length=1)
@@ -978,57 +1007,65 @@ def ask_question_api(
 
     session_id, session_state, mode, ctx = _prepare_execution(request, agent_mode)
     want_stream = bool(getattr(request, "stream", False) or stream)
-    result = execute_request(request, session_state, ctx, stream=want_stream, debug=bool(request.debug))
 
     if want_stream:
-        normalized_stream_answer = normalize_answer(result.answer)
-
-        # Run visualization on the completed answer before streaming
-        try:
-            from src.visualization.enhancer import enhance_with_visualization
-            normalized_stream_answer = enhance_with_visualization(
-                normalized_stream_answer, request.query, channel="web",
-            )
-        except Exception as _viz_exc:
-            logger.warning("Stream visualization failed: %s", _viz_exc)
-
-        persisted_session_id = _persist_chat_turn(
-            user_id=request.user_id,
-            query=request.query,
-            answer_payload=normalized_stream_answer,
-            session_id=session_id,
-            new_session=bool(request.new_session),
-        )
-
-        # Build trailing metadata block with media, sources, session_id
         import json as _stream_json
-        _stream_media = normalized_stream_answer.get("media")
-        _stream_sources = normalized_stream_answer.get("sources", [])
-        _stream_meta = {
-            "sources": _stream_sources,
-            "grounded": normalized_stream_answer.get("grounded", False),
-            "context_found": normalized_stream_answer.get("context_found", False),
-            "session_id": persisted_session_id,
-        }
-        if _stream_media:
-            _stream_meta["media"] = _stream_media
-            logger.info("Stream visualization attached: %d media items", len(_stream_media))
 
-        # Re-chunk the response text (viz may have stripped VIZ directives)
-        from src.execution.common import chunk_text_stream_with_metadata
-        _response_text = normalized_stream_answer.get("response", "")
-        _text_chunks = list(chunk_text_stream_with_metadata(_response_text))
+        # True streaming: UNDERSTAND+RETRIEVE run inside the generator,
+        # then REASON tokens stream out as they arrive from the LLM.
+        _token_stream = execute_request_stream(request, session_state, ctx)
+
+        # Collect full text in background for post-stream persistence
+        _collected_chunks: list = []
 
         def _stream_with_trailing_meta():
-            for chunk in _text_chunks:
-                yield chunk
-            # Append metadata as a parseable trailing block
+            for token in _token_stream:
+                _collected_chunks.append(token)
+                yield token
+
+            # After stream completes, build metadata and append as trailing block
+            full_text = "".join(_collected_chunks)
+
+            # Post-stream: normalize, visualize, persist
+            answer_payload = normalize_answer({
+                "response": full_text,
+                "sources": [],
+                "grounded": bool(full_text.strip()),
+                "context_found": bool(full_text.strip()),
+            })
+
+            try:
+                from src.visualization.enhancer import enhance_with_visualization
+                answer_payload = enhance_with_visualization(
+                    answer_payload, request.query, channel="web",
+                )
+            except Exception as _viz_exc:
+                logger.warning("Stream visualization failed: %s", _viz_exc)
+
+            _persisted_sid = _persist_chat_turn(
+                user_id=request.user_id,
+                query=request.query,
+                answer_payload=answer_payload,
+                session_id=session_id,
+                new_session=bool(request.new_session),
+            )
+
+            _stream_meta = {
+                "sources": answer_payload.get("sources", []),
+                "grounded": answer_payload.get("grounded", False),
+                "context_found": answer_payload.get("context_found", False),
+                "session_id": _persisted_sid,
+            }
+            _stream_media = answer_payload.get("media")
+            if _stream_media:
+                _stream_meta["media"] = _stream_media
+
             yield "\n\n<!--DOCWAIN_MEDIA_JSON:" + _stream_json.dumps(_stream_meta, default=str) + "-->"
 
         response = StreamingResponse(_stream_with_trailing_meta(), media_type="text/plain")
-        if persisted_session_id:
-            response.headers["X-Session-ID"] = persisted_session_id
         return response
+
+    result = execute_request(request, session_state, ctx, stream=False, debug=bool(request.debug))
 
     normalized = normalize_answer(result.answer)
 
