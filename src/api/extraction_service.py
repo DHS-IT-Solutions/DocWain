@@ -1,4 +1,5 @@
 from src.utils.logging_utils import get_logger
+import concurrent.futures
 import os
 import threading
 import time
@@ -84,6 +85,10 @@ logger = get_logger(__name__)
 _DOC_PROCESSING_SEMAPHORE = threading.Semaphore(
     int(os.getenv("DOC_PROCESSING_MAX_CONCURRENT", "2"))
 )
+
+# Maximum number of documents to extract in parallel during batch extraction.
+# Set to 1 to fall back to sequential processing (useful for debugging).
+_BATCH_MAX_WORKERS = int(os.getenv("BATCH_EXTRACTION_MAX_WORKERS", "3"))
 
 def _mark_intelligence_ready(document_id: str) -> None:
     """Set intelligence_ready=true and persist intelligence subdocument to MongoDB.
@@ -1188,6 +1193,14 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
                 if doc_content is None:
                     raise ValueError("Failed to read S3 file")
 
+                from src.extraction.extraction_router import route_extraction
+                _content_len = len(doc_content) if isinstance(doc_content, (bytes, bytearray)) else 0
+                _route = route_extraction(file_keys[0], _content_len)
+                logger.info(
+                    "Document %s: extraction route=%s reason='%s' est=%.1fs",
+                    doc_id, _route.method, _route.reason, _route.estimated_seconds,
+                )
+
                 extracted_doc = fileProcessor(doc_content, file_keys[0])
                 if not extracted_doc:
                     raise ValueError("Content extraction failed")
@@ -1217,6 +1230,14 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
                 if doc_content is None:
                     raise ValueError(f"Failed to read file {file_key}")
                 _raw_file_bytes = doc_content if isinstance(doc_content, bytes) else None
+
+                from src.extraction.extraction_router import route_extraction
+                _content_len = len(doc_content) if isinstance(doc_content, (bytes, bytearray)) else 0
+                _route = route_extraction(file_path, _content_len)
+                logger.info(
+                    "Document %s: extraction route=%s reason='%s' est=%.1fs",
+                    doc_id, _route.method, _route.reason, _route.estimated_seconds,
+                )
 
                 extracted_doc = fileProcessor(doc_content, file_path)
                 if not extracted_doc:
