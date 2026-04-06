@@ -1797,66 +1797,6 @@ def get_batch_extraction_progress(subscription_id: str) -> Optional[Dict[str, An
         return None
 
 
-# Per-document extraction timeout
-_DOC_EXTRACTION_TIMEOUT_SECONDS = int(os.getenv("DOC_EXTRACTION_TIMEOUT_SECONDS", "300"))  # 5 min default
-
-
-def _extract_single_with_timeout(
-    doc_id: str,
-    doc_data: Dict[str, Any],
-    conn_data: Dict[str, Any],
-    timeout_seconds: int = _DOC_EXTRACTION_TIMEOUT_SECONDS,
-    extract_fn=None,
-) -> Dict[str, Any]:
-    """Run extraction for a single document with a hard timeout.
-
-    If the extraction exceeds timeout_seconds, returns a FAILED result
-    instead of blocking the batch forever.
-    """
-    if extract_fn is None:
-        extract_fn = _extract_from_connector
-
-    result_holder: List[Dict[str, Any]] = []
-    error_holder: List[Exception] = []
-
-    def _run():
-        try:
-            result_holder.append(extract_fn(doc_id, doc_data, conn_data))
-        except Exception as exc:
-            error_holder.append(exc)
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout_seconds)
-
-    if thread.is_alive():
-        logger.error(
-            "Document %s extraction timed out after %ds — marking FAILED",
-            doc_id, timeout_seconds,
-        )
-        return {
-            "document_id": doc_id,
-            "status": STATUS_EXTRACTION_FAILED,
-            "error": f"Extraction timed out after {timeout_seconds}s",
-        }
-
-    if error_holder:
-        exc = error_holder[0]
-        if isinstance(exc, CredentialError):
-            raise exc  # Propagate credential errors to batch level
-        return {
-            "document_id": doc_id,
-            "status": STATUS_EXTRACTION_FAILED,
-            "error": str(exc),
-        }
-
-    return result_holder[0] if result_holder else {
-        "document_id": doc_id,
-        "status": STATUS_EXTRACTION_FAILED,
-        "error": "Extraction produced no result",
-    }
-
-
 def _transition_to_awaiting_review(doc_id: str) -> None:
     """After extraction completes, move document to AWAITING_REVIEW_1 for HITL gate."""
     update_document_fields(doc_id, {
@@ -2003,11 +1943,7 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
             except Exception:
                 pass
             try:
-                res = _extract_single_with_timeout(
-                    doc_id,
-                    doc_info.get("dataDict", {}),
-                    doc_info.get("connDict", {}),
-                )
+                res = _extract_from_connector(doc_id, doc_info.get("dataDict", {}), doc_info.get("connDict", {}))
             except CredentialError as exc:
                 logger.error("Credential error during extraction; failing batch: %s", exc)
                 return {"status": "error", "message": f"CredentialError: {exc}", "documents": documents}
