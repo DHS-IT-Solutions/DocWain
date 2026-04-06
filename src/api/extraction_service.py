@@ -1819,17 +1819,17 @@ def get_batch_extraction_progress(subscription_id: str) -> Optional[Dict[str, An
 
 
 def _transition_to_awaiting_review(doc_id: str) -> None:
-    """After extraction completes, move document to AWAITING_REVIEW_1 for HITL gate."""
+    """After extraction completes, mark HITL gate 1 as pending.
+
+    The main ``status`` field stays as EXTRACTION_COMPLETED (set by the
+    extraction pipeline).  HITL state is tracked separately in
+    ``hitl_review`` so existing status flows are preserved.
+    """
     update_document_fields(doc_id, {
-        "status": PIPELINE_AWAITING_REVIEW_1,
+        "hitl_review": "AWAITING_REVIEW_1",
         "awaiting_review_1_at": time.time(),
     })
-    update_stage(doc_id, "extraction", {
-        "status": "COMPLETED",
-        "completed_at": time.time(),
-        "awaiting_review": True,
-    })
-    logger.info("Document %s moved to AWAITING_REVIEW_1 (HITL gate 1)", doc_id)
+    logger.info("Document %s: HITL gate 1 pending (status stays EXTRACTION_COMPLETED)", doc_id)
 
 
 def _process_single_document(
