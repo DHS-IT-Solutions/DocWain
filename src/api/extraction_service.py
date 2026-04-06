@@ -1268,7 +1268,17 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
         masked_docs = all_extracted_docs
         pii_count = 0
         pii_items: List[Any] = []
-        if pii_masking_enabled:
+
+        # Check if ALL documents are native-parsed (CSV/Excel) — skip PII masking
+        # because the text is a statistical summary, not original document content.
+        _all_native = all(
+            isinstance(v, dict) and v.get("native_parsed")
+            for v in all_extracted_docs.values()
+        )
+        if _all_native:
+            logger.info("All documents are native-parsed — skipping PII masking and inline embedding for %s", doc_id)
+            update_pii_stats(doc_id, 0, False, [])
+        elif pii_masking_enabled:
             masked_docs, pii_count, _high_conf, pii_items = mask_document_content(all_extracted_docs)
             update_pii_stats(doc_id, pii_count, False, pii_items)
         else:
