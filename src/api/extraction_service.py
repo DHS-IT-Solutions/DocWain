@@ -62,6 +62,10 @@ from src.api.layout_graph_store import save_layout_graph, save_layout_graph_loca
 from src.api.document_status import emit_progress, get_documents_collection, init_document_record, set_error, update_document_fields, update_stage
 from src.api.pipeline_models import ExtractedDocument
 from src.api.statuses import (
+    PIPELINE_AWAITING_REVIEW_1,
+    PIPELINE_AWAITING_REVIEW_2,
+    PIPELINE_PROCESSING_IN_PROGRESS,
+    PIPELINE_REJECTED,
     STATUS_DELETED,
     STATUS_EXTRACTION_COMPLETED,
     STATUS_EXTRACTION_FAILED,
@@ -1853,6 +1857,20 @@ def _extract_single_with_timeout(
     }
 
 
+def _transition_to_awaiting_review(doc_id: str) -> None:
+    """After extraction completes, move document to AWAITING_REVIEW_1 for HITL gate."""
+    update_document_fields(doc_id, {
+        "status": PIPELINE_AWAITING_REVIEW_1,
+        "awaiting_review_1_at": time.time(),
+    })
+    update_stage(doc_id, "extraction", {
+        "status": "COMPLETED",
+        "completed_at": time.time(),
+        "awaiting_review": True,
+    })
+    logger.info("Document %s moved to AWAITING_REVIEW_1 (HITL gate 1)", doc_id)
+
+
 def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
     batch_start = time.time()
 
@@ -2011,6 +2029,10 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
                     emit_progress(doc_id, "extraction", 0.20, f"Extraction completed in {elapsed}s")
                 except Exception:
                     pass
+                try:
+                    _transition_to_awaiting_review(doc_id)
+                except Exception:
+                    logger.warning("Failed to transition doc %s to AWAITING_REVIEW_1", doc_id, exc_info=True)
             elif status == "CONFLICT":
                 skipped_count += 1
                 logger.info(
