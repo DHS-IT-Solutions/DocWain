@@ -831,7 +831,7 @@ def _load_model_candidates(required_dim: Optional[int] = None) -> SentenceTransf
         if name and name not in candidates:
             candidates.append(name)
     if not candidates:
-        candidates.append(getattr(Config.Model, "SENTENCE_TRANSFORMERS", "sentence-transformers/all-mpnet-base-v2"))
+        candidates.append(getattr(Config.Model, "SENTENCE_TRANSFORMERS", "BAAI/bge-large-en-v1.5"))
 
     last_error = None
     _configure_hf_env()

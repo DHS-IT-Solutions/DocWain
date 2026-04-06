@@ -106,9 +106,11 @@ class Config:
         SENTENCE_TRANSFORMERS_FALLBACK = SENTENCE_TRANSFORMERS
         SENTENCE_TRANSFORMERS_CANDIDATES = [
             EMBEDDING_MODEL,
-            os.getenv("EMBEDDING_FALLBACK_MODEL", "BAAI/bge-base-en-v1.5"),
         ]
-        RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
+        _fallback_model = os.getenv("EMBEDDING_FALLBACK_MODEL", "")
+        if _fallback_model:
+            SENTENCE_TRANSFORMERS_CANDIDATES.append(_fallback_model)
+        RERANKER_MODEL = os.getenv("RERANKER_MODEL", "")
         OCR_ENGINE = os.getenv("OCR_ENGINE", "pytesseract")
         AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
         AZURE_OPENAI_API_KEY = _secret("AZURE_OPENAI_API_KEY", "")

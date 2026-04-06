@@ -278,7 +278,7 @@ def _get_standalone_embedder():
             import warnings
             warnings.filterwarnings("ignore", message=r".*_target_device.*has been deprecated", category=FutureWarning)
             from sentence_transformers import SentenceTransformer
-            _standalone_embedder = SentenceTransformer("BAAI/bge-large-en-v1.5")
+            _standalone_embedder = SentenceTransformer("BAAI/bge-large-en-v1.5", device="cpu", local_files_only=True)
             logger.info("Loaded standalone sentence-transformer for intent classification")
             return _standalone_embedder
         except Exception as exc:  # noqa: BLE001

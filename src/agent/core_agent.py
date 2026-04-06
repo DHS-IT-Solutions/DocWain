@@ -80,10 +80,27 @@ _TASK_SYNONYMS: Dict[str, List[str]] = {
 # ---------------------------------------------------------------------------
 
 _CONVERSATIONAL_RESPONSES: Dict[str, str] = {
-    "greeting": "Ready. What would you like to know about your documents?",
-    "farewell": "Feel free to come back anytime.",
-    "thanks": "Happy to help. Let me know if there's anything else.",
-    "meta": "I'm a document intelligence expert. I can search, extract, compare, and analyze information from the documents in your profile. Just ask me a question.",
+    "greeting": (
+        "Welcome to DocWain. I can help you with:\n\n"
+        "- **Search & Extract** — Find specific data, names, dates, amounts from your documents\n"
+        "- **Compare & Analyze** — Side-by-side comparisons, rankings, pattern detection\n"
+        "- **Summarize** — Executive summaries, key findings, document overviews\n"
+        "- **Generate** — Draft emails, reports, cover letters from document evidence\n"
+        "- **Translate** — Convert document content to other languages\n\n"
+        "Just ask a question about the documents in your profile."
+    ),
+    "farewell": "Feel free to come back anytime. Your documents and session history are saved.",
+    "thanks": "Happy to help. Let me know if there's anything else you'd like to explore in your documents.",
+    "meta": (
+        "I'm DocWain, a document intelligence expert. I can search, extract, compare, "
+        "rank, summarize, and analyze information across all the documents in your profile. "
+        "I support PDF, Word, Excel, images, and more. "
+        "Try asking me something like:\n\n"
+        "- \"List all candidates with Python experience\"\n"
+        "- \"Compare the top 3 contracts by payment terms\"\n"
+        "- \"Summarize the key findings across all documents\"\n"
+        "- \"Draft an email based on the document data\"\n"
+    ),
 }
 
 _GREETING_RE = re.compile(
@@ -99,7 +116,7 @@ _THANKS_RE = re.compile(
     re.IGNORECASE,
 )
 _META_RE = re.compile(
-    r"^\s*(?:who\s+are\s+you|what\s+can\s+you\s+do|help)\s*[?!.]?\s*$",
+    r"(?:who\s+are\s+you|what\s+can\s+you\s+(?:do|help)|how\s+(?:do\s+I|can\s+I|to)\s+(?:upload|use|start|get\s+started)|what\s+(?:types?\s+of\s+)?files?\s+(?:can|do)|show\s+me\s+example|help\s+me)",
     re.IGNORECASE,
 )
 

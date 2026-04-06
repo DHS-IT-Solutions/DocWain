@@ -115,7 +115,7 @@ def get_embedder() -> Any:
             warnings.filterwarnings("ignore", message=r".*_target_device.*has been deprecated", category=FutureWarning)
             from sentence_transformers import SentenceTransformer
             _embedder_instance = SentenceTransformer(
-                "BAAI/bge-large-en-v1.5", device="cpu",
+                "BAAI/bge-large-en-v1.5", device="cpu", local_files_only=True,
             )
             return _embedder_instance
         except Exception as exc:

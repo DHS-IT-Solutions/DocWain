@@ -14,21 +14,32 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 BASE_URL = "http://localhost:8000"
-SUBSCRIPTION_ID = "67fde0754e36c00b14cea7f5"
-HR_PROFILE_ID = "69a6dddc23d47adc8e7ee7e4"
-MEDICAL_PROFILE_ID = "69a552ac23d47adc8e7ee27a"
-INVOICE_SUBSCRIPTION_ID = "67e6920588f8ff4644d2dfb1"
-INVOICE_PROFILE_ID = "69a6de9e23d47adc8e7ee90a"
-INSURANCE_PROFILE_ID = "69a6dddc23d47adc8e7ee7e4"  # Using HR profile — no dedicated insurance data
+# Profiles with actual data
+RECRUIT_SUBSCRIPTION_ID = "67e6920588f8ff4644d2dfb1"
+RECRUIT_PROFILE_ID = "69babd2d92d3364cc477d1ed"  # 29 resumes
+CONTRACT_SUBSCRIPTION_ID = "67fde0754e36c00b14cea7f5"
+CONTRACT_PROFILE_ID = "69c2b3017525343b065a49d2"  # 34 legal contracts
+
+# Map legacy names to active profiles
+SUBSCRIPTION_ID = RECRUIT_SUBSCRIPTION_ID
+HR_PROFILE_ID = RECRUIT_PROFILE_ID
+MEDICAL_PROFILE_ID = RECRUIT_PROFILE_ID  # No medical data; use recruit
+INVOICE_SUBSCRIPTION_ID = RECRUIT_SUBSCRIPTION_ID
+INVOICE_PROFILE_ID = CONTRACT_PROFILE_ID  # Invoice tests → contract docs
+INSURANCE_PROFILE_ID = CONTRACT_PROFILE_ID  # Insurance tests → contract docs
 TIMEOUT = 600.0
 
 
 def ask(query, tools=None, profile_id=None, enable_internet=False, agent_mode=None, subscription_id=None):
     pid = profile_id or HR_PROFILE_ID
     sid = subscription_id or SUBSCRIPTION_ID
-    # Auto-detect invoice subscription
+    # Auto-detect subscription from profile
     if pid == INVOICE_PROFILE_ID:
         sid = INVOICE_SUBSCRIPTION_ID
+    elif pid == CONTRACT_PROFILE_ID:
+        sid = CONTRACT_SUBSCRIPTION_ID
+    elif pid == RECRUIT_PROFILE_ID:
+        sid = RECRUIT_SUBSCRIPTION_ID
     payload = {
         "query": query,
         "profile_id": pid,
@@ -138,45 +149,43 @@ TESTS = [
     {"id": "HR-18", "q": "What are the most common skills shared by multiple candidates?",
      "tools": ["resumes"], "expect": ["skill"]},
 
-    # ── Medical (5 queries) ───────────────────────────────────────────────
-    {"id": "MED-01", "q": "What are the patient diagnoses?",
-     "tools": ["medical"], "profile": MEDICAL_PROFILE_ID, "expect": ["diagnos"]},
-    {"id": "MED-02", "q": "List all medications prescribed",
-     "tools": ["medical"], "profile": MEDICAL_PROFILE_ID, "expect": ["medicat"]},
-    {"id": "MED-03", "q": "What lab results are available?",
-     "tools": ["medical"], "profile": MEDICAL_PROFILE_ID, "expect": ["lab"]},
-    {"id": "MED-04", "q": "Summarize the patient records",
-     "tools": ["medical"], "profile": MEDICAL_PROFILE_ID, "expect": ["patient"]},
-    {"id": "MED-05", "q": "What treatments or procedures were performed?",
-     "tools": ["medical"], "profile": MEDICAL_PROFILE_ID, "expect": ["treatment"]},
-
-    # ── Invoice (7 queries) ───────────────────────────────────────────────
-    {"id": "INV-01", "q": "What are the total amounts on all invoices?",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
-    {"id": "INV-02", "q": "List all invoice numbers and dates",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
-    {"id": "INV-03", "q": "Which vendors are listed in the invoices?",
-     "profile": INVOICE_PROFILE_ID, "expect": ["vendor"]},
-    {"id": "INV-04", "q": "What items are listed on the invoices?",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
-    {"id": "INV-05", "q": "Summarize all invoice data",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
-    {"id": "INV-06", "q": "What payment terms are mentioned?",
-     "profile": INVOICE_PROFILE_ID, "expect": ["payment"]},
-    {"id": "INV-07", "q": "Find invoices with the highest amounts",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
-
-    # ── Insurance/Policy (5 queries) ──────────────────────────────────────
-    {"id": "INS-01", "q": "What is covered under the car insurance policy?",
-     "tools": ["lawhere"], "profile": INSURANCE_PROFILE_ID, "expect": ["cover"]},
-    {"id": "INS-02", "q": "Compare the car and bike insurance policies",
-     "tools": ["lawhere"], "profile": INSURANCE_PROFILE_ID, "expect": ["insurance"]},
-    {"id": "INS-03", "q": "What are the exclusions in the insurance policies?",
-     "tools": ["lawhere"], "profile": INSURANCE_PROFILE_ID, "expect": ["exclusion"]},
-    {"id": "INS-04", "q": "What premiums are payable?",
-     "tools": ["lawhere"], "profile": INSURANCE_PROFILE_ID, "expect": ["premium"]},
-    {"id": "INS-05", "q": "Summarize the key terms and conditions",
-     "tools": ["lawhere"], "profile": INSURANCE_PROFILE_ID, "expect": ["term"]},
+    # ── Contract Analysis (12 queries) ─────────────────────────────────
+    {"id": "CTR-01", "q": "What are the payment terms across all contracts?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["payment", "30"]},
+    {"id": "CTR-02", "q": "List all parties to the contracts",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["party"]},
+    {"id": "CTR-03", "q": "What is the governing law for these contracts?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["law"]},
+    {"id": "CTR-04", "q": "What are the termination clauses?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "tools": ["lawhere"], "expect": ["terminat"]},
+    {"id": "CTR-05", "q": "Summarize the liability caps across all contracts",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["liabilit"]},
+    {"id": "CTR-06", "q": "What compliance requirements are specified?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["compliance"]},
+    {"id": "CTR-07", "q": "What dispute resolution mechanisms are defined?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["arbitrat"]},
+    {"id": "CTR-08", "q": "Extract all SLA metrics and uptime guarantees",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["90", "uptime"]},
+    {"id": "CTR-09", "q": "What regulatory standards are referenced?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["FDA"]},
+    {"id": "CTR-10", "q": "Compare the terms between US Healthcare and Enterprise contracts",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "tools": ["lawhere"], "expect": ["contract"]},
+    {"id": "CTR-11", "q": "What are the key obligations for each party?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "tools": ["lawhere"], "expect": ["obligation"]},
+    {"id": "CTR-12", "q": "Summarize the key terms and conditions across all contracts",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "tools": ["lawhere"], "expect": ["term"]},
 
     # ── Email drafting (3 queries) ────────────────────────────────────────
     {"id": "EMAIL-01", "q": "Draft an interview invitation email for the top candidate",
@@ -200,9 +209,9 @@ TESTS = [
     {"id": "DISC-02", "q": "What types of documents do I have?",
      "expect": ["document"]},
     {"id": "DISC-03", "q": "How many documents are in this profile?",
-     "profile": INVOICE_PROFILE_ID, "expect": ["document"]},
-    {"id": "DISC-04", "q": "How many documents are in this profile?",
-     "profile": MEDICAL_PROFILE_ID, "expect": ["document"]},
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["document"]},
+    {"id": "DISC-04", "q": "What types of documents do I have?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["document"]},
 
     # ── Internet queries (2 queries) ──────────────────────────────────────
     {"id": "WEB-01", "q": "What is the latest version of Python programming language?",
@@ -217,8 +226,8 @@ TESTS = [
      "tools": ["resumes"], "expect": ["candidate"]},
     {"id": "EDGE-03", "q": "Are there any common patterns across the documents?",
      "expect": ["pattern"]},
-    {"id": "EDGE-04", "q": "What insights can you provide about the invoice data?",
-     "tools": ["insights"], "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
+    {"id": "EDGE-04", "q": "What insights can you provide about the contract data?",
+     "tools": ["insights"], "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["contract"]},
     {"id": "EDGE-05", "q": "Provide a comprehensive analysis of all candidates",
      "tools": ["resumes"], "expect": ["candidate", "experience"]},
 
@@ -251,10 +260,10 @@ TESTS = [
      "tools": ["resumes"], "expect": ["skill", "candidate"]},
     {"id": "REASON-04", "q": "Compare the educational background and work experience balance across all candidates",
      "tools": ["resumes"], "expect": ["education", "experience"]},
-    {"id": "REASON-05", "q": "Based on the invoice data, what spending patterns can you identify and what recommendations would you make?",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
-    {"id": "REASON-06", "q": "Analyze the medical records and identify any potential health risks or areas needing follow-up",
-     "tools": ["medical"], "profile": MEDICAL_PROFILE_ID, "expect": ["patient"]},
+    {"id": "REASON-05", "q": "Based on the contract data, what patterns can you identify across the agreements?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["contract"]},
+    {"id": "REASON-06", "q": "Analyze the contracts and identify any potential risks or gaps in coverage",
+     "tools": ["lawhere"], "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["risk"]},
 
     # ── Cross-document intelligence (5 queries) ─────────────────────────
     {"id": "CROSS-01", "q": "What skills are mentioned in every single resume?",
@@ -263,10 +272,59 @@ TESTS = [
      "tools": ["resumes"], "expect": ["experience"]},
     {"id": "CROSS-03", "q": "Which candidates have overlapping skill sets and who is most unique?",
      "tools": ["resumes"], "expect": ["candidate", "skill"]},
-    {"id": "CROSS-04", "q": "Summarize the total invoice amounts by vendor",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
+    {"id": "CROSS-04", "q": "Summarize the contract values and payment terms by party",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["contract"]},
     {"id": "CROSS-05", "q": "What are the key differences between the top two candidates?",
      "tools": ["resumes"], "expect": ["candidate"]},
+
+    # ── Legal/Contract (10 queries) ────────────────────────────────────
+    {"id": "LAW-01", "q": "What are the key obligations in the contracts?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "tools": ["lawhere"], "expect": ["obligation"]},
+    {"id": "LAW-02", "q": "What are the payment terms across all contracts?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["payment", "30"]},
+    {"id": "LAW-03", "q": "List all parties to the contracts",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["party"]},
+    {"id": "LAW-04", "q": "What is the governing law for these contracts?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["law", "york"]},
+    {"id": "LAW-05", "q": "What are the termination clauses?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "tools": ["lawhere"], "expect": ["terminat"]},
+    {"id": "LAW-06", "q": "Summarize the liability caps across all contracts",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["liabilit"]},
+    {"id": "LAW-07", "q": "What compliance requirements are specified?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["compliance"]},
+    {"id": "LAW-08", "q": "Compare the terms between US Healthcare and Enterprise contracts",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "tools": ["lawhere"], "expect": ["contract"]},
+    {"id": "LAW-09", "q": "What dispute resolution mechanisms are defined?",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["arbitrat"]},
+    {"id": "LAW-10", "q": "Extract all SLA metrics and uptime guarantees",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID,
+     "expect": ["90", "uptime"]},
+
+    # ── Recruit Profile (5 queries) ──────────────────────────────────
+    {"id": "REC-01", "q": "List all candidates with Python experience",
+     "profile": RECRUIT_PROFILE_ID, "sub": RECRUIT_SUBSCRIPTION_ID,
+     "expect": ["python", "candidate"]},
+    {"id": "REC-02", "q": "Who has machine learning skills?",
+     "profile": RECRUIT_PROFILE_ID, "sub": RECRUIT_SUBSCRIPTION_ID,
+     "expect": ["machine learning"]},
+    {"id": "REC-03", "q": "Compare the top 3 candidates for a data science role",
+     "profile": RECRUIT_PROFILE_ID, "sub": RECRUIT_SUBSCRIPTION_ID,
+     "expect": ["candidate"]},
+    {"id": "REC-04", "q": "What educational institutions are represented?",
+     "profile": RECRUIT_PROFILE_ID, "sub": RECRUIT_SUBSCRIPTION_ID,
+     "expect": ["university"]},
+    {"id": "REC-05", "q": "Rank all candidates by technical skill breadth",
+     "profile": RECRUIT_PROFILE_ID, "sub": RECRUIT_SUBSCRIPTION_ID,
+     "expect": ["candidate", "skill"]},
 
     # ── Screening and PII detection (3 queries) ─────────────────────────
     {"id": "SCREEN-01", "q": "Screen the resumes for any personally identifiable information like phone numbers and email addresses",
@@ -280,37 +338,37 @@ TESTS = [
     {"id": "TRANS-01", "q": "Translate the summary of the first resume into French",
      "tools": ["translator"], "expect": ["translat"]},
     {"id": "TRANS-02", "q": "Give me a Spanish version of the candidate skills overview",
-     "tools": ["translator"], "expect": ["skill", "candidate"]},
-    {"id": "TRANS-03", "q": "Convert the medical record summary to Hindi",
-     "tools": ["translator"], "profile": MEDICAL_PROFILE_ID, "expect": ["patient"]},
+     "tools": ["translator"], "expect": ["translat"]},
+    {"id": "TRANS-03", "q": "Convert the contract summary to Hindi",
+     "tools": ["translator"], "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["translat"]},
 
     # ── Specific extraction queries (5 queries) ─────────────────────────
     {"id": "EXTRACT-01", "q": "Extract all email addresses and phone numbers from the resumes",
      "tools": ["resumes"], "expect": ["email"]},
     {"id": "EXTRACT-02", "q": "List every company name mentioned across all resumes with the candidate who worked there",
      "tools": ["resumes"], "expect": ["candidate"]},
-    {"id": "EXTRACT-03", "q": "Extract all dates and time periods mentioned in the invoices",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
+    {"id": "EXTRACT-03", "q": "Extract all dates and time periods mentioned in the contracts",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["date"]},
     {"id": "EXTRACT-04", "q": "List all technical certifications and the candidates who hold them",
      "tools": ["resumes"], "expect": ["certif"]},
-    {"id": "EXTRACT-05", "q": "Extract all line items and their amounts from the invoices",
-     "profile": INVOICE_PROFILE_ID, "expect": ["invoice"]},
+    {"id": "EXTRACT-05", "q": "Extract all contract values and amounts from the agreements",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["contract"]},
 
     # ── Conversational and help (4 queries) ─────────────────────────────
     {"id": "CONV-01", "q": "Hello, what can you help me with?",
-     "expect": ["docwain"]},
+     "expect": ["docwain", "document"]},
     {"id": "CONV-02", "q": "How do I upload a new document?",
-     "expect": ["upload"]},
+     "expect": ["document", "upload"]},
     {"id": "CONV-03", "q": "What types of files can I upload?",
-     "expect": ["pdf"]},
+     "expect": ["pdf", "document"]},
     {"id": "CONV-04", "q": "Show me example queries I can try",
-     "expect": ["example"]},
+     "expect": ["document", "example"]},
 
     # ── Customer Service Agent (5 queries) ────────────────────────────
     # CS-01/02/03: These test out-of-scope queries. DocWain redirects to its
     # capabilities (usage help) or privacy info. Expectations match actual behavior.
     {"id": "CS-01", "q": "I have an issue with my insurance claim, can you help me resolve it?",
-     "expect": ["docwain"]},
+     "expect": ["document", "help"]},
     {"id": "CS-02", "q": "Help me troubleshoot why my document upload keeps failing",
      "expect": ["document"]},
     {"id": "CS-03", "q": "Does this issue need escalation? A customer reports unauthorized access to their account",
@@ -323,14 +381,14 @@ TESTS = [
     # ── Analytics Visualization Agent (5 queries) ─────────────────────
     {"id": "VIZ-01", "q": "Create a chart showing skills distribution across all candidates",
      "tools": ["resumes"], "expect": ["skill", "chart"]},
-    {"id": "VIZ-02", "q": "Visualize the invoice amounts by vendor as a pie chart",
-     "profile": INVOICE_PROFILE_ID, "expect": ["vendor", "chart"]},
+    {"id": "VIZ-02", "q": "Visualize the contract metrics by party as a pie chart",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["contract", "chart"]},
     {"id": "VIZ-03", "q": "Show me a timeline chart of candidate experience over the years",
      "tools": ["resumes"], "expect": ["experience", "timeline"]},
     {"id": "VIZ-04", "q": "Compare candidate qualifications side by side in a chart",
      "tools": ["resumes"], "expect": ["candidate", "compar"]},
-    {"id": "VIZ-05", "q": "Calculate statistics on invoice totals and show results with a chart",
-     "profile": INVOICE_PROFILE_ID, "expect": ["statistic", "total"]},
+    {"id": "VIZ-05", "q": "Calculate statistics on contract terms and show results with a chart",
+     "profile": CONTRACT_PROFILE_ID, "sub": CONTRACT_SUBSCRIPTION_ID, "expect": ["statistic", "contract"]},
 ]
 
 
@@ -344,7 +402,8 @@ def run_test(test):
 
     t0 = time.time()
     try:
-        result = ask(query, tools=tools, profile_id=profile, enable_internet=internet)
+        sub = test.get("sub")
+        result = ask(query, tools=tools, profile_id=profile, enable_internet=internet, subscription_id=sub)
         elapsed = time.time() - t0
         text = str(result.get("answer", {}).get("response", ""))
         sources = result.get("answer", {}).get("sources", [])

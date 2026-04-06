@@ -28,9 +28,13 @@ DONT_DOWNGRADE_STATUSES = {
 
 # Only allow screening AFTER extraction completes — never bypass extraction.
 # UNDER_REVIEW excluded: extraction must run first to create the pickle.
+# Post-embedding/training statuses are also eligible for re-screening.
 SCREENING_ELIGIBLE_STATUSES = {
     STATUS_EXTRACTION_COMPLETED,
     STATUS_SCREENING_COMPLETED,
+    STATUS_EMBEDDING_COMPLETED,
+    STATUS_TRAINING_COMPLETED,
+    STATUS_TRAINING_PARTIALLY_COMPLETED,
 }
 
 def _embedding_already_completed(record: Dict[str, Any]) -> bool:

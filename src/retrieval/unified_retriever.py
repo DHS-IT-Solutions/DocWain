@@ -309,5 +309,5 @@ class UnifiedRetriever:
             # Fallback: try sentence-transformers directly
             from sentence_transformers import SentenceTransformer
             from src.api.config import Config
-            model = SentenceTransformer(Config.Model.EMBEDDING_MODEL)
+            model = SentenceTransformer(Config.Model.EMBEDDING_MODEL, device="cpu", local_files_only=True)
             return model.encode(query).tolist()

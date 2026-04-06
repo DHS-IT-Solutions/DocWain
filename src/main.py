@@ -1,10 +1,16 @@
 import hashlib
 import json
 import logging
+import os
+
+# Force fully-offline mode for HuggingFace / transformers libraries.
+# Must be set before any library import to prevent network access attempts.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 from src.utils.logging_utils import get_logger
 import datetime as dt
-import os
 import re
 import time
 import uuid

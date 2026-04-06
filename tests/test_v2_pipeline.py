@@ -6,7 +6,7 @@ class TestV2Pipeline:
     def test_pipeline_phases(self):
         from src.finetune.v2.pipeline import V2Pipeline
         pipe = V2Pipeline()
-        assert pipe.phases == ["phase1", "phase2", "phase3", "phase4"]
+        assert pipe.phases == ["phase1", "phase2", "phase2_5", "phase3", "phase3_5", "phase4"]
 
     def test_pipeline_status(self, tmp_path):
         from src.finetune.v2.pipeline import V2Pipeline

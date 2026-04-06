@@ -130,7 +130,7 @@ class Reasoner:
         usage = metadata.get("usage", {}) if metadata else {}
 
         sources = self._extract_sources(evidence)
-        grounded = self._check_grounding(text, evidence)
+        grounded = self._check_grounding(text, evidence, doc_context)
 
         return ReasonerResult(
             text=text,
@@ -161,13 +161,15 @@ class Reasoner:
         return sources
 
     def _check_grounding(
-        self, answer: str, evidence: List[Dict[str, Any]]
+        self, answer: str, evidence: List[Dict[str, Any]],
+        doc_context: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Evidence-anchored grounding check.
 
         Verifies that the answer's key claims are derivable from the provided
-        evidence. Uses semantic overlap rather than strict verbatim matching,
-        allowing expert-level synthesis and reasoning while catching fabrication.
+        evidence AND document intelligence context. Uses semantic overlap
+        rather than strict verbatim matching, allowing expert-level synthesis
+        and reasoning while catching fabrication.
 
         Returns False only when the answer introduces substantial content
         that cannot be traced to any evidence.
@@ -186,6 +188,27 @@ class Reasoner:
                 or ""
             )
             evidence_parts.append(text)
+
+        # Include Document Intelligence content (summaries, key_facts,
+        # key_values, entities) — the model reasons over this data too.
+        if doc_context:
+            for s in doc_context.get("summaries") or []:
+                if s:
+                    evidence_parts.append(str(s))
+            for f in doc_context.get("key_facts") or []:
+                if f:
+                    evidence_parts.append(str(f))
+            for kv in doc_context.get("key_values") or []:
+                if isinstance(kv, dict):
+                    evidence_parts.append(" ".join(str(v) for v in kv.values()))
+                elif kv:
+                    evidence_parts.append(str(kv))
+            for e in doc_context.get("entities") or []:
+                if isinstance(e, dict):
+                    evidence_parts.append(" ".join(str(v) for v in e.values()))
+                elif e:
+                    evidence_parts.append(str(e))
+
         evidence_text = " ".join(evidence_parts)
 
         # If we have evidence items but no extractable text, mark as ungrounded
