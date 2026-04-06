@@ -83,6 +83,8 @@ def parse_excel(content: bytes, filename: str) -> Dict[str, Any]:
         "sheet_count": len(sheets),
         "sheets": sheets,
         "text": combined_text,
+        "full_text": combined_text,
+        "texts": [combined_text],
     }
 
 
@@ -106,6 +108,10 @@ def _build_profile(df: pd.DataFrame, filename: str, sheet_name: str | None = Non
         "statistical_profile": stat_profile,
         "sample_rows": sample_rows,
         "text": text,
+        # Pipeline-compatible fields: downstream extraction_service expects
+        # full_text and texts for sanitization, PII masking, and embedding.
+        "full_text": text,
+        "texts": [text],
     }
     if sheet_name is not None:
         result["name"] = sheet_name
