@@ -468,6 +468,16 @@ def decrypt_data(encrypted_value: str, encryption_key=Config.Encryption.ENCRYPTI
 
 def fileProcessor(content, file, content_type: str = ""):
     """Processes different types of documents and extracts text or dataframe."""
+    from src.extraction.native_parsers import is_native_parseable, parse_native
+
+    # Fast path: CSV/TSV/Excel bypass OCR entirely with native parsing
+    if isinstance(content, bytes) and is_native_parseable(file):
+        native_result = parse_native(content, file)
+        if native_result is not None:
+            logger.info("Using native parser for %s (parser=%s, rows=%s)",
+                        file, native_result["parser"], native_result.get("row_count", "N/A"))
+            return {file: native_result}
+
     extracted_data = {}
     try:
         file_name = file.split('/')[-1]
