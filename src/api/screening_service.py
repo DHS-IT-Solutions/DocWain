@@ -93,6 +93,13 @@ def promote_to_screening_completed(document_id: str) -> None:
             document_id, current_status, SCREENING_ELIGIBLE_STATUSES,
         )
 
+    # HITL gate 2: after screening completes, move to AWAITING_REVIEW_2
+    try:
+        from src.api.hitl_review import transition_to_awaiting_review_2
+        transition_to_awaiting_review_2(document_id)
+    except Exception:
+        logger.warning("Failed to transition doc %s to AWAITING_REVIEW_2", document_id, exc_info=True)
+
 def _set_document_status(
     document_id: str,
     status: str,

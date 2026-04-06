@@ -44,3 +44,11 @@ def test_approve_review_2_transitions_to_processing():
         mock_proc.assert_called_once_with("doc_123")
 
 
+def test_screening_completion_transitions_to_awaiting_review_2():
+    from src.api.hitl_review import transition_to_awaiting_review_2
+    from src.api.statuses import PIPELINE_AWAITING_REVIEW_2
+    with patch("src.api.hitl_review.update_document_fields") as mock_update, \
+         patch("src.api.hitl_review.update_stage"):
+        transition_to_awaiting_review_2("doc_456")
+        call_fields = mock_update.call_args[0][1]
+        assert call_fields["status"] == PIPELINE_AWAITING_REVIEW_2

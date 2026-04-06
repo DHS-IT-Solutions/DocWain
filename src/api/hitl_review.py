@@ -159,3 +159,17 @@ def request_reextraction(doc_id: str, reviewer: str, reason: str) -> Dict[str, A
     })
     logger.info("Document %s sent back for re-extraction by %s: %s", doc_id, reviewer, reason)
     return {"status": "reextraction_requested", "doc_id": doc_id, "reviewer": reviewer, "reason": reason}
+
+
+def transition_to_awaiting_review_2(doc_id: str) -> None:
+    """Transition document to AWAITING_REVIEW_2 after screening completes."""
+    update_document_fields(doc_id, {
+        "status": PIPELINE_AWAITING_REVIEW_2,
+        "awaiting_review_2_at": time.time(),
+    })
+    update_stage(doc_id, "screening", {
+        "status": "COMPLETED",
+        "completed_at": time.time(),
+        "awaiting_review": True,
+    })
+    logger.info("Document %s moved to AWAITING_REVIEW_2 (HITL gate 2)", doc_id)
