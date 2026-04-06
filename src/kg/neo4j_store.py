@@ -68,9 +68,21 @@ class Neo4jStore:
                 session.run(query)
 
     def run_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        with self._session() as session:
-            result = session.run(query, **(params or {}))
-            return [dict(record) for record in result]
+        from src.kg.circuit_breaker import neo4j_breaker
+
+        if not neo4j_breaker.should_allow_request():
+            logger.debug("Neo4j circuit breaker open — skipping query")
+            return []
+
+        try:
+            with self._session() as session:
+                result = session.run(query, **(params or {}))
+                rows = [dict(record) for record in result]
+            neo4j_breaker.record_success()
+            return rows
+        except Exception:
+            neo4j_breaker.record_failure()
+            raise
 
     def get_state(self, name: str) -> KGState:
         query = (
