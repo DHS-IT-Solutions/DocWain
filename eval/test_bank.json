@@ -1,0 +1,6 @@
+[
+  {"id": "eval_001", "category": "simple_lookup", "query": "What is the total revenue for Q2 2024?", "profile_id": null, "subscription_id": null, "expected_facts": ["total revenue", "Q2 2024"], "negative_facts": ["Q1 2024", "projected"], "expected_doc_ids": [], "notes": "Template"},
+  {"id": "eval_002", "category": "multi_doc", "query": "How has the salary changed between the 2023 and 2024 reports?", "profile_id": null, "subscription_id": null, "expected_facts": ["salary", "2023", "2024", "change"], "negative_facts": [], "expected_doc_ids": [], "notes": "Template"},
+  {"id": "eval_003", "category": "table", "query": "What are the line items in the invoice?", "profile_id": null, "subscription_id": null, "expected_facts": ["line item", "amount"], "negative_facts": [], "expected_doc_ids": [], "notes": "Template"},
+  {"id": "eval_004", "category": "analytical", "query": "Based on the financial data, what areas need improvement?", "profile_id": null, "subscription_id": null, "expected_facts": ["analysis", "recommendation"], "negative_facts": [], "expected_doc_ids": [], "notes": "Template"}
+]
