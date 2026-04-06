@@ -1277,6 +1277,12 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
         if pii_masking_enabled:
             for fname, content in masked_docs.items():
                 if isinstance(content, dict) and "texts" in content:
+                    # Skip inline embedding for native-parsed docs (CSV/Excel) —
+                    # their text is a statistical summary that will be properly
+                    # chunked and embedded during the embedding pipeline stage.
+                    if content.get("native_parsed"):
+                        logger.info("Skipping inline embedding for native-parsed %s", fname)
+                        continue
                     texts = content.get("texts") or []
                     if texts:
                         from src.api.dataHandler import encode_with_fallback

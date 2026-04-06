@@ -85,6 +85,7 @@ def parse_excel(content: bytes, filename: str) -> Dict[str, Any]:
         "text": combined_text,
         "full_text": combined_text,
         "texts": [combined_text],
+        "native_parsed": True,
     }
 
 
@@ -112,6 +113,9 @@ def _build_profile(df: pd.DataFrame, filename: str, sheet_name: str | None = Non
         # full_text and texts for sanitization, PII masking, and embedding.
         "full_text": text,
         "texts": [text],
+        # Signal to skip in-extraction embedding — native-parsed data
+        # will be properly chunked and embedded during the embedding stage.
+        "native_parsed": True,
     }
     if sheet_name is not None:
         result["name"] = sheet_name
