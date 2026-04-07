@@ -139,10 +139,13 @@ class TeamsQueryHandler:
             # Proceed anyway — the search call will fail if collection is missing
 
         try:
+            from qdrant_client.models import NamedVector
+
             results = await asyncio.to_thread(
-                lambda: client.search(
+                lambda: client.query_points(
                     collection_name=collection_name,
-                    query_vector=("content_vector", query_vector),
+                    query=query_vector,
+                    using="content_vector",
                     limit=top_k,
                     with_payload=True,
                 )
@@ -152,14 +155,14 @@ class TeamsQueryHandler:
             return []
 
         chunks = []
-        for hit in results:
+        for hit in results.points:
             payload = hit.payload or {}
             chunks.append({
-                "text": payload.get("text", ""),
+                "text": payload.get("content", payload.get("text", payload.get("embedding_text", ""))),
                 "score": hit.score,
                 "source_name": payload.get("source_file", payload.get("filename", "Unknown")),
-                "section": payload.get("section_kind", ""),
-                "page": payload.get("page", ""),
+                "section": payload.get("section_title", ""),
+                "page": payload.get("page_number", ""),
                 "document_id": payload.get("document_id", ""),
             })
         return chunks

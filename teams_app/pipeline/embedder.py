@@ -393,21 +393,11 @@ async def embed_document(
     chunk_texts: List[str] = []
     chunk_meta: List[Dict[str, Any]] = []
 
-    if pre_chunked_texts and len(pre_chunked_texts) >= 3:
-        # Already chunked by fileProcessor — use as-is
-        chunk_texts = pre_chunked_texts
-        chunk_meta = [
-            {
-                "section_title": "Document",
-                "section_path": "Document",
-                "chunk_index": i,
-                "sentence_complete": t.strip()[-1] in {".", "?", "!"} if t.strip() else False,
-            }
-            for i, t in enumerate(pre_chunked_texts)
-        ]
-    else:
-        # Need to chunk from full_text
-        text_to_chunk = full_text or "\n\n".join(pre_chunked_texts)
+    logger.info("Text extraction: pre_chunked=%d, full_text_len=%d", len(pre_chunked_texts), len(full_text))
+
+    # Always chunk from full_text for better quality — fileProcessor chunks are often too granular or too few
+    text_to_chunk = full_text or "\n\n".join(pre_chunked_texts)
+    if text_to_chunk:
 
         # Try production SectionChunker first
         result = await asyncio.to_thread(
@@ -428,6 +418,8 @@ async def embed_document(
                 }
                 for c in raw_chunks
             ]
+
+    logger.info("Chunking result: %d chunks (section_chunker=%s)", len(chunk_texts), "yes" if result else "no")
 
     if not chunk_texts:
         raise ValueError(f"Chunking produced no chunks for {filename}")
