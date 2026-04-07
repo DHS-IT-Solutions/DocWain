@@ -196,7 +196,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
         """
         import asyncio
         from teams_app.pipeline.cards import (
-            progress_card, completion_card, error_card,
+            progress_card, intelligence_card, error_card,
             send_card, update_card,
         )
         from teams_app.pipeline.fast_path import classify_file, Pipeline
@@ -205,11 +205,11 @@ class StandaloneTeamsBot(DocWainTeamsBot):
             _download_bytes, _build_download_headers,
             _run_security_screening,
         )
-        from src.teams.insights import get_domain_actions, _fallback_questions, _normalize_domain
         from src.api.dataHandler import fileProcessor
         from src.teams.pipeline import _build_teams_collection_name
         from src.api.config import Config
         from teams_app.pipeline.embedder import embed_document
+        from teams_app.pipeline.intelligence import analyze_document
 
         for att in attachments:
             att_dict = att.as_dict() if hasattr(att, "as_dict") else {
@@ -228,7 +228,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
             pipeline_type = classify_file(filename)
 
             # Step 1: Download — send initial progress card
-            card = progress_card(filename, "1/4", "Downloading file...", 10)
+            card = progress_card(filename, "1/5", "Downloading file...", 5)
             card_id = await send_card(turn_context, card)
 
             try:
@@ -245,7 +245,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 continue
 
             # Step 2: Extract
-            card = progress_card(filename, "2/4", f"Extracting content ({pipeline_type.value} pipeline)...", 30)
+            card = progress_card(filename, "2/5", f"Extracting content ({pipeline_type.value} pipeline)...", 20)
             await update_card(turn_context, card_id, card)
 
             try:
@@ -267,7 +267,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 continue
 
             # Step 3: Screen
-            card = progress_card(filename, "3/4", "Running security screening...", 55)
+            card = progress_card(filename, "3/5", "Running security screening...", 40)
             await update_card(turn_context, card_id, card)
 
             try:
@@ -282,7 +282,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 risk_level = "UNKNOWN"
 
             # Step 4: Embed
-            card = progress_card(filename, "4/4", f"Security: {risk_level} risk. Embedding for retrieval...", 75)
+            card = progress_card(filename, "4/5", f"Security: {risk_level} risk. Embedding for retrieval...", 60)
             await update_card(turn_context, card_id, card)
 
             try:
@@ -313,21 +313,28 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 await update_card(turn_context, card_id, error_card(filename, f"Embedding failed: {exc}"))
                 continue
 
-            # Done — show completion card with domain-aware actions
-            domain_actions = get_domain_actions(doc_type)
-            domain = _normalize_domain(doc_type)
-            questions = _fallback_questions(domain)
+            # Step 5: Intelligence analysis via LLM — generate summary + 5 smart questions
+            card = progress_card(filename, "5/5", "Analyzing document intelligence...", 90)
+            await update_card(turn_context, card_id, card)
 
-            done_card = completion_card(
+            intel = await analyze_document(all_text, filename, fallback_doc_type=doc_type)
+            # Use LLM-detected doc_type if available (overrides heuristic)
+            if intel.doc_type and intel.doc_type != "general":
+                doc_type = intel.doc_type
+
+            # Show intelligence card with summary + 5 clickable question buttons
+            done_card = intelligence_card(
                 filename=filename,
                 chunks_count=chunks_count,
                 quality_grade=quality_grade,
                 doc_type=doc_type,
-                actions=domain_actions,
-                questions=questions,
+                summary=intel.summary,
+                key_entities=intel.key_entities,
+                questions=intel.questions,
             )
             await update_card(turn_context, card_id, done_card)
-            logger.info("Pipeline complete for %s: %d chunks, grade=%s, type=%s", filename, chunks_count, quality_grade, doc_type)
+            logger.info("Pipeline complete for %s: %d chunks, grade=%s, type=%s, entities=%s",
+                         filename, chunks_count, quality_grade, doc_type, intel.key_entities[:3])
 
     async def _handle_onedrive_link(
         self,

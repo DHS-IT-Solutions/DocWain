@@ -63,59 +63,90 @@ def progress_card(
     }
 
 
-def completion_card(
+def intelligence_card(
     filename: str,
     chunks_count: int,
     quality_grade: str,
     doc_type: str,
-    actions: List[Dict[str, str]],
+    summary: str,
+    key_entities: List[str],
     questions: List[str],
 ) -> Dict[str, Any]:
-    """Build a document-ready card with content-aware actions."""
+    """Build a document intelligence card with LLM-generated insights and clickable questions.
+
+    Shows: summary, doc type, entities, and 5 smart questions as action buttons.
+    """
     quality_labels = {"A": "Excellent", "B": "Good", "C": "Fair"}
     quality_text = quality_labels.get(quality_grade, quality_grade)
 
-    q_text = "\n".join(f"- {q}" for q in questions[:3]) if questions else "- What is this document about?"
+    body: List[Dict[str, Any]] = [
+        {"type": "TextBlock", "text": "DocWain Intelligence Report", "weight": "Bolder", "size": "Large", "color": "Accent"},
+        {"type": "TextBlock", "text": f"\"{filename}\"", "weight": "Bolder", "size": "Medium", "spacing": "Small"},
+        # Metadata row
+        {
+            "type": "ColumnSet",
+            "spacing": "Small",
+            "columns": [
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"Type: {doc_type.replace('_', ' ').title()}", "size": "Small", "weight": "Bolder", "color": "Good"},
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"Indexed: {chunks_count} sections", "size": "Small", "isSubtle": True},
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"Quality: {quality_text}", "size": "Small", "isSubtle": True},
+                ]},
+            ],
+        },
+    ]
 
-    # Build action buttons from domain actions — no duplicates
+    # Summary section
+    if summary:
+        body.append({"type": "TextBlock", "text": "Summary", "weight": "Bolder", "size": "Small", "spacing": "Medium", "separator": True})
+        body.append({"type": "TextBlock", "text": summary, "wrap": True, "size": "Small", "spacing": "None"})
+
+    # Key entities
+    if key_entities:
+        entities_text = " | ".join(f"**{e}**" for e in key_entities[:5])
+        body.append({"type": "TextBlock", "text": f"Key entities: {entities_text}", "wrap": True, "size": "Small", "spacing": "Small", "isSubtle": True})
+
+    # Questions header
+    if questions:
+        body.append({
+            "type": "TextBlock",
+            "text": "Ask DocWain about this document:",
+            "weight": "Bolder",
+            "size": "Small",
+            "color": "Accent",
+            "spacing": "Medium",
+            "separator": True,
+        })
+
+    # Build 5 question buttons
     card_actions = []
-    seen_titles = set()
-    for act in actions[:3]:
-        title = act.get("title", "")
-        if title and title not in seen_titles:
-            seen_titles.add(title)
+    for i, q in enumerate(questions[:5]):
+        if q and q.strip():
+            # Truncate button title to 40 chars for display, keep full query in data
+            title = q if len(q) <= 45 else q[:42] + "..."
             card_actions.append({
                 "type": "Action.Submit",
                 "title": title,
-                "data": {"action": "domain_query", "query": act.get("query", title)},
+                "data": {"action": "domain_query", "query": q},
             })
+
+    # Fallback if no LLM questions
+    if not card_actions:
+        card_actions = [
+            {"type": "Action.Submit", "title": "Summarize this document", "data": {"action": "domain_query", "query": "Provide a comprehensive summary of this document"}},
+            {"type": "Action.Submit", "title": "Extract key information", "data": {"action": "domain_query", "query": "Extract all key names, dates, amounts, and important data points"}},
+            {"type": "Action.Submit", "title": "Key findings", "data": {"action": "domain_query", "query": "What are the most important findings and takeaways?"}},
+        ]
 
     return {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
         "version": "1.5",
-        "body": [
-            {"type": "TextBlock", "text": "✅ Document Ready", "weight": "Bolder", "size": "Medium", "color": "Good"},
-            {"type": "TextBlock", "text": f"\"{filename}\" is now ready for questions.", "wrap": True, "spacing": "Small"},
-            {
-                "type": "ColumnSet",
-                "spacing": "Small",
-                "columns": [
-                    {"type": "Column", "width": "auto", "items": [{"type": "TextBlock", "text": f"Type: {doc_type.title()}", "size": "Small", "isSubtle": True}]},
-                    {"type": "Column", "width": "auto", "items": [{"type": "TextBlock", "text": f"Chunks: {chunks_count}", "size": "Small", "isSubtle": True}]},
-                    {"type": "Column", "width": "auto", "items": [{"type": "TextBlock", "text": f"Quality: {quality_text}", "size": "Small", "isSubtle": True}]},
-                ],
-            },
-            {
-                "type": "Container",
-                "separator": True,
-                "spacing": "Medium",
-                "items": [
-                    {"type": "TextBlock", "text": "Try asking:", "weight": "Bolder", "size": "Small", "color": "Accent"},
-                    {"type": "TextBlock", "text": q_text, "wrap": True, "size": "Small"},
-                ],
-            },
-        ],
+        "body": body,
         "actions": card_actions,
     }
 
