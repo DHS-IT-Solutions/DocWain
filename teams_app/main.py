@@ -56,14 +56,6 @@ async def health():
     else:
         checks["redis"] = "unavailable (in-memory fallback)"
 
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{config.main_app_url}/api/health")
-            checks["main_app"] = "ok" if resp.status_code == 200 else f"status {resp.status_code}"
-    except Exception as exc:
-        checks["main_app"] = f"unreachable: {exc}"
-
     healthy = all(v == "ok" for k, v in checks.items() if k != "redis")
     return JSONResponse(
         status_code=200 if healthy else 503,
