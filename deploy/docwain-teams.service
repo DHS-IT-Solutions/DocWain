@@ -1,0 +1,20 @@
+[Unit]
+Description=DocWain Teams Bot Service
+After=network.target docwain-app.service
+Wants=docwain-app.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PycharmProjects/DocWain
+ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python -m teams_app.main
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+StandardOutput=journal
+SyslogIdentifier=docwain-teams
+Environment=PYTHONPATH=/home/ubuntu/PycharmProjects/DocWain
+
+[Install]
+WantedBy=multi-user.target
