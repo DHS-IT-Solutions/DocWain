@@ -122,25 +122,41 @@ def intelligence_card(
             "separator": True,
         })
 
-    # Build 5 question buttons
+    # Build question buttons using Hero Card-style actions (messageBack)
+    # These send the question as a regular user message — no Action.Submit invoke issues
     card_actions = []
     for i, q in enumerate(questions[:5]):
         if q and q.strip():
-            # Truncate button title to 40 chars for display, keep full query in data
             title = q if len(q) <= 45 else q[:42] + "..."
             card_actions.append({
                 "type": "Action.Submit",
                 "title": title,
-                "data": {"action": "domain_query", "query": q},
+                "data": {
+                    "msteams": {
+                        "type": "messageBack",
+                        "text": q,
+                        "displayText": q,
+                    }
+                },
             })
 
-    # Fallback if no LLM questions
     if not card_actions:
-        card_actions = [
-            {"type": "Action.Submit", "title": "Summarize this document", "data": {"action": "domain_query", "query": "Provide a comprehensive summary of this document"}},
-            {"type": "Action.Submit", "title": "Extract key information", "data": {"action": "domain_query", "query": "Extract all key names, dates, amounts, and important data points"}},
-            {"type": "Action.Submit", "title": "Key findings", "data": {"action": "domain_query", "query": "What are the most important findings and takeaways?"}},
-        ]
+        for q in [
+            "Provide a comprehensive summary of this document",
+            "Extract all key names, dates, amounts, and important data points",
+            "What are the most important findings and takeaways?",
+        ]:
+            card_actions.append({
+                "type": "Action.Submit",
+                "title": q[:42] + "..." if len(q) > 45 else q,
+                "data": {
+                    "msteams": {
+                        "type": "messageBack",
+                        "text": q,
+                        "displayText": q,
+                    }
+                },
+            })
 
     return {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",

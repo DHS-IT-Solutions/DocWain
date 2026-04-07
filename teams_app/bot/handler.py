@@ -151,9 +151,14 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 await turn_context.send_activity(f"Thanks for the feedback! {emoji}")
                 return
 
-            # Route query-based actions through the proxy (not local RAG)
+            # Route query-based actions through the query handler
             if action in ("domain_query", "summarize_recent"):
                 query = activity.value.get("query", "Summarize this document")
+                # For card button clicks, we must handle the invoke properly.
+                # First send a typing indicator, then process the query.
+                # The activity.text is empty for card actions, so set it to the query
+                # so the base class doesn't get confused.
+                activity.text = query
                 await self._handle_query(query, context, turn_context, tenant_id)
                 return
 
