@@ -271,7 +271,11 @@ class StandaloneTeamsBot(DocWainTeamsBot):
             await update_card(turn_context, card_id, card)
 
             try:
-                screen_result = await _run_security_screening(all_text[:50000], filename, correlation_id)
+                from src.utils.logging_utils import get_logger as _get_logger
+                _log = _get_logger(__name__, correlation_id)
+                screen_result = await asyncio.to_thread(
+                    _run_security_screening, all_text[:50000], filename, correlation_id, _log
+                )
                 risk_level = screen_result.risk_level if screen_result else "LOW"
             except Exception as exc:
                 logger.warning("Screening failed for %s (proceeding): %s", filename, exc)

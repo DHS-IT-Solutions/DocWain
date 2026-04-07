@@ -337,6 +337,66 @@ class LLMGateway:
         return answer, meta
 
     # ------------------------------------------------------------------
+    # Streaming generation
+    # ------------------------------------------------------------------
+
+    def generate_stream(
+        self,
+        prompt: str,
+        *,
+        system: str = "",
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> "Generator[str, None, None]":
+        """Stream tokens from the primary backend.
+
+        Tries vLLM streaming first, then Ollama streaming, then falls back
+        to yielding the full non-streaming response as a single chunk.
+        """
+        from typing import Generator  # noqa: F811
+
+        temperature = temperature if temperature is not None else Config.LLM.TEMPERATURE
+        max_tokens = max_tokens if max_tokens is not None else Config.LLM.MAX_TOKENS
+
+        # Try vLLM streaming via VLLMManager (fast → smart fallback)
+        try:
+            from src.api.rag_state import get_app_state
+            app_state = get_app_state()
+            vllm_mgr = getattr(app_state, "vllm_manager", None) if app_state else None
+            if vllm_mgr is not None:
+                try:
+                    yield from vllm_mgr.stream_query_fast(
+                        prompt, system_prompt=system,
+                        max_tokens=max_tokens, temperature=temperature,
+                    )
+                    return
+                except Exception as fast_exc:
+                    logger.warning("vLLM fast stream failed: %s — trying smart instance", fast_exc)
+                    yield from vllm_mgr.stream_query_smart(
+                        prompt, system_prompt=system,
+                        max_tokens=max_tokens, temperature=temperature,
+                    )
+                    return
+        except Exception as exc:
+            logger.warning("vLLM streaming unavailable: %s — trying Ollama stream", exc)
+
+        # Try Ollama streaming
+        client = self._pick_client()
+        if hasattr(client, "generate_stream"):
+            try:
+                full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
+                yield from client.generate_stream(
+                    full_prompt,
+                    options={"temperature": temperature, "max_tokens": max_tokens},
+                )
+                return
+            except Exception as exc:
+                logger.warning("Ollama streaming failed: %s — falling back to non-streaming", exc)
+
+        # Final fallback: full generation as single chunk
+        yield self.generate(prompt, system=system, temperature=temperature, max_tokens=max_tokens)
+
+    # ------------------------------------------------------------------
     # Classification helper
     # ------------------------------------------------------------------
 
@@ -427,32 +487,52 @@ class LLMGateway:
             if any(m in combined for m in json_markers):
                 system = "/no_think\n" + system
 
+        # Try vLLM first (fast local inference) before Ollama Cloud
+        vllm_used = False
         try:
-            raw, usage_meta = self._call_client(
-                client, prompt, system=system, think=think,
-                opts=opts, **kwargs,
-            )
-        except Exception as primary_exc:
-            self._record_failure(primary_exc)
-            # If we have a fallback and didn't already use it, try fallback
-            if self._fallback is not None and client is not self._fallback:
-                logger.warning(
-                    "Primary LLM (%s) failed: %s — retrying with fallback (%s)",
-                    getattr(client, "backend", "unknown"),
-                    primary_exc,
-                    getattr(self._fallback, "backend", "unknown"),
+            from src.api.rag_state import get_app_state
+            app_state = get_app_state()
+            vllm_mgr = getattr(app_state, "vllm_manager", None) if app_state else None
+            if vllm_mgr is not None and vllm_mgr.health_check("fast"):
+                full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
+                vllm_result = vllm_mgr.query_fast(
+                    prompt, system_prompt=system,
+                    max_tokens=max_tokens, temperature=temperature,
                 )
-                self._record_fallback()
-                try:
-                    raw, usage_meta = self._call_client(
-                        self._fallback, prompt, system=system, think=think,
-                        opts=opts, **kwargs,
+                if vllm_result:
+                    raw = vllm_result
+                    usage_meta = {"model": vllm_mgr._instances["fast"]["model"], "backend": "vllm"}
+                    vllm_used = True
+        except Exception as vllm_exc:
+            logger.debug("vLLM generate failed: %s — falling back to primary", vllm_exc)
+
+        if not vllm_used:
+            try:
+                raw, usage_meta = self._call_client(
+                    client, prompt, system=system, think=think,
+                    opts=opts, **kwargs,
+                )
+            except Exception as primary_exc:
+                self._record_failure(primary_exc)
+                # If we have a fallback and didn't already use it, try fallback
+                if self._fallback is not None and client is not self._fallback:
+                    logger.warning(
+                        "Primary LLM (%s) failed: %s — retrying with fallback (%s)",
+                        getattr(client, "backend", "unknown"),
+                        primary_exc,
+                        getattr(self._fallback, "backend", "unknown"),
                     )
-                except Exception:
-                    logger.exception("Fallback LLM also failed")
+                    self._record_fallback()
+                    try:
+                        raw, usage_meta = self._call_client(
+                            self._fallback, prompt, system=system, think=think,
+                            opts=opts, **kwargs,
+                        )
+                    except Exception:
+                        logger.exception("Fallback LLM also failed")
+                        raise
+                else:
                     raise
-            else:
-                raise
 
         answer, thinking = _split_thinking(raw)
         return LLMResponse(text=answer, thinking=thinking, usage=usage_meta)

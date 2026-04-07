@@ -400,26 +400,33 @@ async def embed_document(
     if text_to_chunk:
 
         # Try production SectionChunker first
-        result = await asyncio.to_thread(
+        section_result = await asyncio.to_thread(
             _try_section_chunker, text_to_chunk, doc_tag, filename,
         )
-        if result:
-            chunk_texts, chunk_meta = result
-        else:
-            # Fallback: simple paragraph chunking
-            raw_chunks = _simple_chunk(text_to_chunk)
-            chunk_texts = [c["text"] for c in raw_chunks]
-            chunk_meta = [
-                {
-                    "section_title": c["section_title"],
-                    "section_path": c["section_title"],
-                    "chunk_index": c["chunk_index"],
-                    "sentence_complete": c["text"].strip()[-1] in {".", "?", "!"} if c["text"].strip() else False,
-                }
-                for c in raw_chunks
-            ]
 
-    logger.info("Chunking result: %d chunks (section_chunker=%s)", len(chunk_texts), "yes" if result else "no")
+        # Always run simple chunker too for comparison
+        raw_chunks = _simple_chunk(text_to_chunk)
+        simple_texts = [c["text"] for c in raw_chunks]
+        simple_meta = [
+            {
+                "section_title": c["section_title"],
+                "section_path": c["section_title"],
+                "chunk_index": c["chunk_index"],
+                "sentence_complete": c["text"].strip()[-1] in {".", "?", "!"} if c["text"].strip() else False,
+            }
+            for c in raw_chunks
+        ]
+
+        # Use whichever produced more chunks (better coverage)
+        if section_result and len(section_result[0]) >= len(simple_texts):
+            chunk_texts, chunk_meta = section_result
+            chunker_used = "section"
+        else:
+            chunk_texts = simple_texts
+            chunk_meta = simple_meta
+            chunker_used = "simple"
+
+    logger.info("Chunking result: %d chunks (chunker=%s, text_len=%d)", len(chunk_texts), chunker_used, len(text_to_chunk))
 
     if not chunk_texts:
         raise ValueError(f"Chunking produced no chunks for {filename}")
