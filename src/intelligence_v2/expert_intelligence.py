@@ -286,10 +286,15 @@ def filter_insights_for_query(
 
 def _get_db(mongo_client: Any) -> Any:
     """Return the database handle from a client or pass through."""
-    if hasattr(mongo_client, "get_database"):
-        return mongo_client.get_database()
-    if hasattr(mongo_client, "documents"):
+    # If it has a 'list_collection_names' method, it's already a Database
+    if hasattr(mongo_client, "list_collection_names"):
         return mongo_client
+    # If it's a MongoClient, get the default database
+    if hasattr(mongo_client, "get_default_database"):
+        try:
+            return mongo_client.get_default_database()
+        except Exception:
+            pass
     return mongo_client
 
 
