@@ -24,7 +24,7 @@ RESOURCE_GROUP = "rg-docwain-dev"
 APIM_SERVICE = "dhs-docwain-api"
 API_ID = "docwain-api"
 OPERATION_ID = "teamschat"  # Existing APIM operation for POST /teams/messages
-BACKEND_IP = "4.213.139.185"
+BACKEND_IP = "198.145.127.234"
 TEAMS_PORT = 8300
 MAIN_PORT = 8000
 

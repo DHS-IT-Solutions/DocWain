@@ -31,7 +31,7 @@ Azure Bot Service (dhs-docwain-bot)
     ▼
 API Management (dhs-docwain-api.azure-api.net)
   API: docwain_api (path: /)
-  Backend: http://4.213.139.185:8000/
+  Backend: http://198.145.127.234:8000/
     │
     ▼
 Main App (port 8000)
@@ -51,8 +51,8 @@ Azure Bot Service (dhs-docwain-bot)
     │
     ▼
 API Management (dhs-docwain-api.azure-api.net)
-  Route: /teams/* → http://4.213.139.185:8300/
-  Route: /* (everything else) → http://4.213.139.185:8000/
+  Route: /teams/* → http://198.145.127.234:8300/
+  Route: /* (everything else) → http://198.145.127.234:8000/
     │
     ├─ Teams traffic → Teams Service (port 8300)
     └─ All other traffic → Main App (port 8000)
@@ -461,7 +461,7 @@ WantedBy=multi-user.target
 
 Automates the APIM route update to split Teams traffic from main app traffic:
 
-1. Create a new APIM backend pointing to `http://4.213.139.185:8300`
+1. Create a new APIM backend pointing to `http://198.145.127.234:8300`
 2. Add an APIM policy on `/teams/*` operations to route to the Teams backend
 3. Verify the route is active by hitting the health endpoint through APIM
 4. Optionally roll back by removing the policy (traffic falls back to main app)
