@@ -14,8 +14,7 @@ ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python -m vllm.entrypoi
     --served-model-name docwain-fast \
     --port 8100 \
     --host 0.0.0.0 \
-    --dtype fp8 \
-    --kv-cache-dtype fp8 \
+    --dtype bfloat16 \
     --max-model-len 40960 \
     --gpu-memory-utilization 0.85 \
     --enable-prefix-caching \
