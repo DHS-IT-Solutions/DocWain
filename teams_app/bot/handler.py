@@ -352,7 +352,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 logger.warning("Screening failed for %s (proceeding): %s", filename, exc)
                 risk_level = "UNKNOWN"
 
-            # Step 4: Embed
+            # Step 4: Embed (clear old documents first — fresh context per upload)
             card = progress_card(filename, "4/5", f"Security: {risk_level} risk. Embedding for retrieval...", 60)
             await update_card(turn_context, card_id, card)
 
@@ -360,6 +360,15 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 collection_name = _build_teams_collection_name(
                     context.subscription_id, context.profile_id,
                 )
+
+                # Clear previous embeddings so queries focus on the new document
+                try:
+                    from qdrant_client import QdrantClient
+                    q_client = QdrantClient(url=Config.Qdrant.URL, api_key=Config.Qdrant.API, timeout=30)
+                    q_client.delete_collection(collection_name)
+                    logger.info("Cleared old collection %s before new upload", collection_name)
+                except Exception:
+                    pass  # Collection may not exist yet
 
                 chunks_count, quality_grade, doc_type = await embed_document(
                     extracted_docs=extracted_docs,

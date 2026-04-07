@@ -158,6 +158,15 @@ def intelligence_card(
                 },
             })
 
+    # Footer hint
+    body.append({
+        "type": "TextBlock",
+        "text": "Type **clear all** to remove old documents and start fresh.",
+        "size": "Small",
+        "isSubtle": True,
+        "spacing": "Medium",
+    })
+
     return {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",

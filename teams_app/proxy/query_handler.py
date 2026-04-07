@@ -143,9 +143,9 @@ class TeamsQueryHandler:
             "THANKS": "You're welcome! Let me know if you have more questions.",
             "PRAISE": "Thank you! Happy to help. What else would you like to know?",
             "IDENTITY": "I'm DocWain, a document intelligence assistant. I can analyze, summarize, extract, and compare information from your uploaded documents.",
-            "CAPABILITY": "I can **summarize** documents, **extract** specific data (names, dates, amounts), **compare** across documents, **analyze** trends, and answer detailed questions — all grounded in your uploaded files.",
-            "HOW_IT_WORKS": "Upload a document and I'll process it automatically. Then just ask questions in plain language — I search your documents, find relevant sections, and give you grounded answers with source references.",
-            "USAGE_HELP": "Just type your question naturally! For example:\n- \"Summarize this document\"\n- \"What are the key dates?\"\n- \"Extract all amounts\"\n- \"Compare the two reports\"",
+            "CAPABILITY": "I can **summarize** documents, **extract** specific data (names, dates, amounts), **compare** across documents, **analyze** trends, and answer detailed questions — all grounded in your uploaded files.\n\nType **clear all** to remove old documents and start fresh.",
+            "HOW_IT_WORKS": "Upload a document and I'll process it automatically. Then just ask questions in plain language — I search your documents, find relevant sections, and give you grounded answers with source references.\n\nType **clear all** to remove old documents and start fresh.",
+            "USAGE_HELP": "Just type your question naturally! For example:\n- \"Summarize this document\"\n- \"What are the key dates?\"\n- \"Extract all amounts\"\n- \"Compare the two reports\"\n- **\"clear all\"** — remove old documents and start fresh",
         }
         return responses.get(intent)
 
