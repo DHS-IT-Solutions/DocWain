@@ -166,38 +166,162 @@ class StandaloneTeamsBot(DocWainTeamsBot):
         auth_token: str,
         tenant_id: str,
     ) -> None:
-        """Process file attachments using the existing Teams pipeline with progress cards.
+        """Fast document pipeline with clear progress cards.
 
-        Uses src.teams.pipeline.TeamsDocumentPipeline.run_full_pipeline directly
-        because it already has proper progress card updates (stage 1/3, 2/3, 3/3).
+        Skips the slow DI/cloud LLM stage — goes straight to:
+        extract → screen → embed with in-place card updates.
         """
-        from src.teams.pipeline import TeamsDocumentPipeline
-        from src.teams.teams_storage import TeamsDocumentStorage
-
-        pipeline = TeamsDocumentPipeline(
-            storage=TeamsDocumentStorage(),
-            state_store=self.orchestrator.state_store,
+        import asyncio
+        from teams_app.pipeline.cards import (
+            progress_card, completion_card, error_card,
+            send_card, update_card,
         )
+        from teams_app.pipeline.fast_path import classify_file, Pipeline
+        from src.teams.attachments import (
+            _resolve_download_url, _resolve_filename,
+            _download_bytes, _build_download_headers,
+            _run_security_screening,
+        )
+        from src.teams.insights import get_domain_actions, _fallback_questions, _normalize_domain
+        from src.api.dataHandler import fileProcessor, train_on_document
+        from src.teams.pipeline import _build_teams_collection_name
+        from src.api.vector_store import QdrantVectorStore
+        from src.api.config import Config
+        from qdrant_client import QdrantClient
 
         for att in attachments:
+            att_dict = att.as_dict() if hasattr(att, "as_dict") else {
+                "contentType": getattr(att, "content_type", None),
+                "name": getattr(att, "name", None),
+                "contentUrl": getattr(att, "content_url", None),
+                "content": getattr(att, "content", None),
+            }
+            filename = _resolve_filename(att_dict)
+            download_url = _resolve_download_url(att_dict)
+
+            if not download_url:
+                await turn_context.send_activity(f"Could not resolve download URL for {filename}.")
+                continue
+
+            pipeline_type = classify_file(filename)
+
+            # Step 1: Download — send initial progress card
+            card = progress_card(filename, "1/4", "Downloading file...", 10)
+            card_id = await send_card(turn_context, card)
+
             try:
-                # Convert Bot Framework Attachment to raw dict for the pipeline
-                att_dict = att.as_dict() if hasattr(att, "as_dict") else {
-                    "contentType": getattr(att, "content_type", None),
-                    "name": getattr(att, "name", None),
-                    "contentUrl": getattr(att, "content_url", None),
-                    "content": getattr(att, "content", None),
-                }
-                await pipeline.run_full_pipeline(
-                    attachment=att_dict,
-                    context=context,
-                    turn_context=turn_context,
-                    correlation_id=correlation_id,
-                    auth_token=auth_token,
+                headers = _build_download_headers(auth_token)
+                file_bytes = await _download_bytes(
+                    download_url, headers=headers,
+                    timeout=float(getattr(Config.Teams, "HTTP_TIMEOUT_SEC", 20)),
+                    retries=int(getattr(Config.Teams, "HTTP_RETRIES", 2)),
+                    max_bytes=int(getattr(Config.Teams, "MAX_ATTACHMENT_MB", 50)) * 1024 * 1024,
                 )
             except Exception as exc:
-                logger.error("Pipeline failed for %s: %s", getattr(att, "name", "?"), exc)
-                await turn_context.send_activity(f"Failed to process {getattr(att, 'name', 'file')}: {exc}")
+                logger.error("Download failed for %s: %s", filename, exc)
+                await update_card(turn_context, card_id, error_card(filename, f"Download failed: {exc}"))
+                continue
+
+            # Step 2: Extract
+            card = progress_card(filename, "2/4", f"Extracting content ({pipeline_type.value} pipeline)...", 30)
+            await update_card(turn_context, card_id, card)
+
+            try:
+                extracted_docs = await asyncio.to_thread(fileProcessor, file_bytes, filename)
+                if not extracted_docs:
+                    await update_card(turn_context, card_id, error_card(filename, "No extractable content found."))
+                    continue
+
+                # Get extracted text for screening
+                all_text = ""
+                for doc_data in extracted_docs.values():
+                    if isinstance(doc_data, dict):
+                        all_text += doc_data.get("full_text", "") or doc_data.get("text", "") or ""
+                    elif isinstance(doc_data, str):
+                        all_text += doc_data
+            except Exception as exc:
+                logger.error("Extraction failed for %s: %s", filename, exc)
+                await update_card(turn_context, card_id, error_card(filename, f"Extraction failed: {exc}"))
+                continue
+
+            # Step 3: Screen
+            card = progress_card(filename, "3/4", "Running security screening...", 55)
+            await update_card(turn_context, card_id, card)
+
+            try:
+                screen_result = await _run_security_screening(all_text[:50000], filename, correlation_id)
+                risk_level = screen_result.risk_level if screen_result else "LOW"
+            except Exception as exc:
+                logger.warning("Screening failed for %s (proceeding): %s", filename, exc)
+                risk_level = "UNKNOWN"
+
+            # Step 4: Embed
+            card = progress_card(filename, "4/4", f"Security: {risk_level} risk. Embedding for retrieval...", 75)
+            await update_card(turn_context, card_id, card)
+
+            try:
+                collection_name = _build_teams_collection_name(
+                    context.subscription_id, context.profile_id,
+                )
+                client = QdrantClient(url=Config.Qdrant.URL, api_key=Config.Qdrant.API, timeout=120)
+                vector_store = QdrantVectorStore(client)
+                vector_size = int(getattr(Config.Model, "EMBEDDING_DIM", 1024))
+                vector_store.ensure_collection(collection_name, vector_size)
+
+                doc_tag = correlation_id
+                chunks_count = 0
+                doc_type = "general"
+
+                for doc_name, doc_content in extracted_docs.items():
+                    result = await asyncio.to_thread(
+                        train_on_document,
+                        doc_content,
+                        subscription_id=collection_name,
+                        profile_id=context.profile_id,
+                        doc_tag=doc_tag,
+                        doc_name=doc_name,
+                    )
+                    if isinstance(result, int):
+                        chunks_count += result
+                    else:
+                        chunks_count += 1
+
+                    # Try to get doc_type from the content
+                    if isinstance(doc_content, dict):
+                        doc_type = doc_content.get("doc_type", doc_type) or doc_type
+
+                quality_grade = "A" if chunks_count > 10 else "B" if chunks_count > 3 else "C"
+
+                # Record upload in state store
+                self.orchestrator.state_store.record_upload(
+                    context.subscription_id,
+                    context.profile_id,
+                    filename,
+                    doc_tag,
+                    chunks_count,
+                    document_type=doc_type,
+                )
+
+            except Exception as exc:
+                logger.error("Embedding failed for %s: %s", filename, exc, exc_info=True)
+                await update_card(turn_context, card_id, error_card(filename, f"Embedding failed: {exc}"))
+                continue
+
+            # Done — show completion card with domain-aware actions
+            domain_actions = get_domain_actions(doc_type)
+            domain = _normalize_domain(doc_type)
+            questions = _fallback_questions(domain)
+
+            done_card = completion_card(
+                filename=filename,
+                chunks_count=chunks_count,
+                quality_grade=quality_grade,
+                doc_type=doc_type,
+                actions=domain_actions,
+                questions=questions,
+            )
+            await update_card(turn_context, card_id, done_card)
+            logger.info("Pipeline complete for %s: %d chunks, grade=%s, type=%s", filename, chunks_count, quality_grade, doc_type)
 
     async def _handle_onedrive_link(
         self,
