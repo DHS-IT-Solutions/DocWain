@@ -8,6 +8,104 @@
 
 A separate systemd service (`docwain-teams`) that handles Microsoft Teams bot interactions — document ingestion with auto-triggered pipeline, progress tracking via Adaptive Cards, and query proxying to the main app. Fully isolated from the main app at the process, data, and code level.
 
+## Azure Infrastructure (Current)
+
+| Resource | Name | Resource Group | Details |
+|----------|------|---------------|---------|
+| Azure Bot Service | `dhs-docwain-bot` | `rg-docwain-dev` | F0 SKU, SingleTenant |
+| API Management | `dhs-docwain-api` | `rg-docwain-dev` | UK South, TLS termination |
+| App ID | `384893f8-3cd6-4b9d-bdfe-038c64387a43` | — | Matches manifest.json |
+| Tenant | `13a1a520-d90b-4bfe-ada0-2be3d1f3c582` | — | dhsit.co.uk |
+| Subscription | `249bb11f-9b6e-4c0e-a844-500d627b80b3` | — | Microsoft Azure Sponsorship-DocWain |
+| Enabled Channels | webchat, directline, msteams | — | All active |
+
+### Current Request Flow
+
+```
+Teams Client
+    │
+    ▼
+Azure Bot Service (dhs-docwain-bot)
+  Endpoint: https://dhs-docwain-api.azure-api.net/teams/messages
+    │
+    ▼
+API Management (dhs-docwain-api.azure-api.net)
+  API: docwain_api (path: /)
+  Backend: http://4.213.139.185:8000/
+    │
+    ▼
+Main App (port 8000)
+  Route: POST /teams/messages → DocWainTeamsBot
+```
+
+### New Request Flow (After Migration)
+
+The Azure Bot Service endpoint stays the same. APIM routes `/teams/messages` to the new Teams service on port 8300 instead of the main app on port 8000.
+
+```
+Teams Client
+    │
+    ▼
+Azure Bot Service (dhs-docwain-bot)
+  Endpoint: https://dhs-docwain-api.azure-api.net/teams/messages
+    │
+    ▼
+API Management (dhs-docwain-api.azure-api.net)
+  Route: /teams/* → http://4.213.139.185:8300/
+  Route: /* (everything else) → http://4.213.139.185:8000/
+    │
+    ├─ Teams traffic → Teams Service (port 8300)
+    └─ All other traffic → Main App (port 8000)
+```
+
+### APIM Route Update (Deployment Step)
+
+```bash
+# Add/update APIM operation to route /teams/* to port 8300
+az apim api operation create \
+  --resource-group rg-docwain-dev \
+  --service-name dhs-docwain-api \
+  --api-id docwain-api \
+  --url-template "/teams/*" \
+  --method POST \
+  --display-name "Teams Bot Messages" \
+  --operation-id teams-messages
+
+# Set backend for this operation to port 8300
+az apim api operation update ...  # Policy to override backend URL
+```
+
+This is automated via `teams_app/deploy.py` which wraps the Azure CLI/SDK calls.
+
+### Existing Teams Code (src/teams/)
+
+The main app already has a mature Teams integration at `src/teams/` with:
+- `bot_app.py` — DocWainTeamsBot (TeamsActivityHandler), BotFrameworkAdapter
+- `pipeline.py` — 3-stage pipeline (Identify → Screen → Embed) with progress cards
+- `logic.py` — TeamsChatService for RAG queries
+- `state.py` — Redis-backed TeamsStateStore
+- `attachments.py` — File download and Document Intelligence
+- `tools.py` — TeamsToolRouter for Adaptive Card actions
+- `teams_storage.py` — MongoDB document storage
+- `insights.py` — Proactive insights
+- `cards/` — 16 Adaptive Card JSON templates
+
+The new `teams_app/` service extracts and extends this code. The existing `src/teams/` module stays untouched and the `/teams/messages` route in `src/main.py` can be deprecated once the standalone service is verified working.
+
+### Dependencies Installed
+
+```
+botbuilder-core==4.17.0
+botbuilder-schema==4.17.0
+botframework-connector==4.17.0
+botframework-streaming==4.17.0
+azure-mgmt-botservice==2.0.0
+azure-mgmt-resource==25.0.0
+azure-identity==1.25.3
+azure-storage-blob==12.28.0
+msgraph-sdk==1.55.0          ← NEW (OneDrive/SharePoint file download)
+```
+
 ## Architecture
 
 ### Directory Layout
@@ -356,6 +454,46 @@ WantedBy=multi-user.target
 - MongoDB connectivity
 - Redis connectivity
 - Main app reachability (`localhost:8000/api/health`)
+
+## Deployment & APIM Routing
+
+### Deployment Script (`teams_app/deploy.py`)
+
+Automates the APIM route update to split Teams traffic from main app traffic:
+
+1. Create a new APIM backend pointing to `http://4.213.139.185:8300`
+2. Add an APIM policy on `/teams/*` operations to route to the Teams backend
+3. Verify the route is active by hitting the health endpoint through APIM
+4. Optionally roll back by removing the policy (traffic falls back to main app)
+
+### Deployment Steps
+
+```bash
+# 1. Install and start the Teams service
+sudo cp deploy/docwain-teams.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable docwain-teams
+sudo systemctl start docwain-teams
+
+# 2. Verify it's healthy
+curl http://localhost:8300/health
+
+# 3. Update APIM routing (Teams traffic → port 8300)
+python -m teams_app.deploy route-teams
+
+# 4. Verify end-to-end
+python -m teams_app.deploy verify
+
+# 5. (Optional) Rollback — route Teams back to main app
+python -m teams_app.deploy rollback
+```
+
+### Migration from src/teams/
+
+Once the standalone service is verified:
+1. APIM routes Teams traffic to port 8300 — main app stops receiving Teams messages
+2. The `/teams/messages` route in `src/main.py` becomes dead code
+3. Remove it in a future cleanup — no rush, it's harmless
 
 ## Scale Considerations
 
