@@ -30,6 +30,54 @@ from teams_app.storage.tenant import TenantManager
 logger = logging.getLogger(__name__)
 
 
+def _format_for_teams(text: str) -> str:
+    """Convert Reasoner markdown output to Teams-friendly format.
+
+    Teams doesn't render markdown tables well. Convert them to structured lists.
+    """
+    import re
+
+    lines = text.split("\n")
+    result = []
+    in_table = False
+    headers = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Detect table separator row (|---|---|)
+        if re.match(r"^\|[\s\-:]+\|", stripped):
+            in_table = True
+            continue
+
+        # Table row
+        if stripped.startswith("|") and stripped.endswith("|") and in_table:
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if headers:
+                parts = []
+                for h, c in zip(headers, cells):
+                    if c and c != "-":
+                        parts.append(f"**{h}:** {c}")
+                if parts:
+                    result.append("- " + " | ".join(parts))
+            continue
+
+        # Table header row (first row before separator)
+        if stripped.startswith("|") and stripped.endswith("|") and not in_table:
+            headers = [c.strip() for c in stripped.strip("|").split("|")]
+            result.append("")  # blank line before table content
+            continue
+
+        # Not a table row — reset
+        if in_table and not stripped.startswith("|"):
+            in_table = False
+            headers = []
+
+        result.append(line)
+
+    return "\n".join(result)
+
+
 class StandaloneTeamsBot(DocWainTeamsBot):
     """Extends DocWainTeamsBot with auto-trigger pipeline and query proxy.
 
@@ -453,8 +501,8 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 if not has_docs:
                     result.response += "\n\n_I don't have any documents to search yet. Send me a file to get started!_"
 
-            # Send response as plain text — more reliable than Adaptive Cards for long content
-            response_text = result.response
+            # Format response for Teams (convert markdown tables to bullet lists)
+            response_text = _format_for_teams(result.response)
             if result.sources:
                 sources = "\n".join(f"- {s.get('title', 'Unknown')}" for s in result.sources[:5])
                 response_text += f"\n\n**Sources:**\n{sources}"
