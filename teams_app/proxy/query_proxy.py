@@ -59,12 +59,14 @@ class QueryResult:
 
     @classmethod
     def from_response(cls, data: Dict[str, Any]) -> QueryResult:
+        # Main app wraps response under "answer" key
+        answer = data.get("answer", data)
         return cls(
-            response=data.get("response", ""),
-            sources=data.get("sources", []),
-            grounded=data.get("grounded", False),
-            context_found=data.get("context_found", False),
-            metadata=data.get("metadata", {}),
+            response=answer.get("response", ""),
+            sources=answer.get("sources", []),
+            grounded=answer.get("grounded", False),
+            context_found=answer.get("context_found", False),
+            metadata=answer.get("metadata", {}),
         )
 
 
