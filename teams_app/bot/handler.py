@@ -206,11 +206,10 @@ class StandaloneTeamsBot(DocWainTeamsBot):
             _run_security_screening,
         )
         from src.teams.insights import get_domain_actions, _fallback_questions, _normalize_domain
-        from src.api.dataHandler import fileProcessor, train_on_document
+        from src.api.dataHandler import fileProcessor
         from src.teams.pipeline import _build_teams_collection_name
-        from src.api.vector_store import QdrantVectorStore
         from src.api.config import Config
-        from qdrant_client import QdrantClient
+        from teams_app.pipeline.embedder import embed_document
 
         for att in attachments:
             att_dict = att.as_dict() if hasattr(att, "as_dict") else {
@@ -286,41 +285,21 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 collection_name = _build_teams_collection_name(
                     context.subscription_id, context.profile_id,
                 )
-                client = QdrantClient(url=Config.Qdrant.URL, api_key=Config.Qdrant.API, timeout=120)
-                vector_store = QdrantVectorStore(client)
-                vector_size = int(getattr(Config.Model, "EMBEDDING_DIM", 1024))
-                vector_store.ensure_collection(collection_name, vector_size)
 
-                doc_tag = correlation_id
-                chunks_count = 0
-                doc_type = "general"
-
-                for doc_name, doc_content in extracted_docs.items():
-                    result = await asyncio.to_thread(
-                        train_on_document,
-                        doc_content,
-                        subscription_id=collection_name,
-                        profile_id=context.profile_id,
-                        doc_tag=doc_tag,
-                        doc_name=doc_name,
-                    )
-                    if isinstance(result, int):
-                        chunks_count += result
-                    else:
-                        chunks_count += 1
-
-                    # Try to get doc_type from the content
-                    if isinstance(doc_content, dict):
-                        doc_type = doc_content.get("doc_type", doc_type) or doc_type
-
-                quality_grade = "A" if chunks_count > 10 else "B" if chunks_count > 3 else "C"
+                chunks_count, quality_grade, doc_type = await embed_document(
+                    extracted_docs=extracted_docs,
+                    filename=filename,
+                    doc_tag=correlation_id,
+                    collection_name=collection_name,
+                    profile_id=context.profile_id,
+                )
 
                 # Record upload in state store
                 self.orchestrator.state_store.record_upload(
                     context.subscription_id,
                     context.profile_id,
                     filename,
-                    doc_tag,
+                    correlation_id,
                     chunks_count,
                     document_type=doc_type,
                 )
