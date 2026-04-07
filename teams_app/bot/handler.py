@@ -427,66 +427,58 @@ class StandaloneTeamsBot(DocWainTeamsBot):
         """Search Qdrant directly and generate a response via LLM."""
         started = time.monotonic()
 
-        await turn_context.send_activities([Activity(type=ActivityTypes.typing)])
+        try:
+            await turn_context.send_activities([Activity(type=ActivityTypes.typing)])
+        except Exception:
+            pass  # Typing indicator is non-critical
 
-        from src.teams.pipeline import _build_teams_collection_name
-        collection_name = _build_teams_collection_name(
-            context.subscription_id, context.profile_id,
-        )
+        try:
+            from src.teams.pipeline import _build_teams_collection_name
+            collection_name = _build_teams_collection_name(
+                context.subscription_id, context.profile_id,
+            )
 
-        result = await self.query_handler.answer(
-            query=query,
-            collection_name=collection_name,
-            user_id=context.user_id,
-        )
-        elapsed_ms = int((time.monotonic() - started) * 1000)
+            result = await self.query_handler.answer(
+                query=query,
+                collection_name=collection_name,
+                user_id=context.user_id,
+            )
+            elapsed_ms = int((time.monotonic() - started) * 1000)
 
-        if not result.context_found:
+            if not result.context_found:
+                try:
+                    has_docs = self.orchestrator.storage.get_document_count(tenant_id) > 0 if tenant_id else False
+                except Exception:
+                    has_docs = False
+                if not has_docs:
+                    result.response += "\n\n_I don't have any documents to search yet. Send me a file to get started!_"
+
+            # Send response as plain text — more reliable than Adaptive Cards for long content
+            response_text = result.response
+            if result.sources:
+                sources = "\n".join(f"- {s.get('title', 'Unknown')}" for s in result.sources[:5])
+                response_text += f"\n\n**Sources:**\n{sources}"
+
+            await turn_context.send_activity(response_text)
+
+            # Capture learning signal
+            self.signal_capture.record(
+                query=query,
+                response=result.response,
+                sources=result.sources,
+                grounded=result.grounded,
+                context_found=result.context_found,
+                signal="implicit",
+                tenant_id=tenant_id or "",
+                latency_ms=elapsed_ms,
+            )
+
+        except Exception as exc:
+            logger.error("_handle_query failed for '%s': %s", query[:50], exc, exc_info=True)
             try:
-                has_docs = self.orchestrator.storage.get_document_count(tenant_id) > 0 if tenant_id else False
+                await turn_context.send_activity("I encountered an error processing your question. Please try again.")
             except Exception:
-                has_docs = False
-            if not has_docs:
-                result.response += "\n\n_I don't have any documents to search yet. Send me a file to get started!_"
-
-        # Build response card with feedback buttons
-        card = {
-            "type": "AdaptiveCard",
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.4",
-            "body": [
-                {"type": "TextBlock", "text": result.response, "wrap": True},
-            ],
-            "actions": [
-                {
-                    "type": "Action.Submit",
-                    "title": "\ud83d\udc4d",
-                    "data": {"action": "feedback", "signal": "positive", "query": query},
-                },
-                {
-                    "type": "Action.Submit",
-                    "title": "\ud83d\udc4e",
-                    "data": {"action": "feedback", "signal": "negative", "query": query},
-                },
-            ],
-        }
-
-        if result.sources:
-            sources_text = "\n".join(f"- {s.get('title', 'Unknown')}" for s in result.sources[:5])
-            card["body"].append({"type": "TextBlock", "text": f"**Sources:**\n{sources_text}", "wrap": True, "size": "Small"})
-
-        await self._send_card_activity(turn_context, card)
-
-        self.signal_capture.record(
-            query=query,
-            response=result.response,
-            sources=result.sources,
-            grounded=result.grounded,
-            context_found=result.context_found,
-            signal="implicit",
-            tenant_id=tenant_id or "",
-            latency_ms=elapsed_ms,
-        )
+                pass
 
     async def _download_file(self, url: str, auth_token: str) -> bytes:
         """Download a file from a URL with auth token."""
