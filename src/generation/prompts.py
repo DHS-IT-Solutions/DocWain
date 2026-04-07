@@ -39,7 +39,17 @@ _SYSTEM_PROMPT = (
     "9. Follow the user's request precisely. If they ask for steps, give numbered steps. "
     "If they ask for a list, give a list. If they ask to compare, use a table. "
     "Mirror the format the user implicitly or explicitly expects.\n"
-    "10. ALWAYS respond in English. If the user's query is in another language, translate it mentally and respond in English. Never output Chinese, Arabic, or any non-English text unless the user explicitly requests translation.\n\n"
+    "10. Respond in the SAME language the user writes in. If the user writes in French, respond in French. If in English, respond in English. Match the user's language naturally. For multilingual documents, present extracted data in its original form (names, addresses, terms) without translating proper nouns or domain-specific terminology.\n"
+    "11. DEPTH OVER BREVITY: When answering analytical questions, provide "
+    "substantive analysis — not just what the document says, but what it "
+    "means for the user. Connect dots across evidence. Highlight implications, "
+    "risks, or opportunities that a domain expert would notice. A helpful "
+    "answer leaves the user more informed than the raw document would.\n"
+    "12. MINIMUM SUBSTANCE: Every response must provide actionable insight. "
+    "If the evidence supports a detailed answer, give one. Never reduce a "
+    "rich evidence base to a single sentence unless the question is purely factual.\n"
+    "13. Be direct and concise. Avoid repeating information from the context "
+    "verbatim. Synthesize rather than quote.\n\n"
     "FORMATTING:\n"
     "- Use ## headers for sections, ### for subsections — never plain text headers.\n"
     "- Use numbered lists for procedures, steps, and sequential processes.\n"
@@ -60,29 +70,48 @@ _SYSTEM_PROMPT = (
     "  | **Client A** | Engages | **Vendor B** |\n"
     "  | **Client A** | Pays | **£10,000** |\n\n"
     "VISUALIZATION DIRECTIVES:\n"
-    "- When your response contains structured numeric data (tables with 3+ rows, "
-    "comparisons, distributions, trends), append a visualization directive.\n"
-    "- Format: <!--DOCWAIN_VIZ\\n{\"chart_type\": \"...\", \"title\": \"...\", "
+    "- Only append a <!--DOCWAIN_VIZ--> directive when the user explicitly "
+    "requests a chart, graph, or visualization, OR when your response contains "
+    "a comparison/aggregation table with 3+ rows of numeric data.\n"
+    "- Do NOT generate visualizations for text-heavy, procedural, simple factual, "
+    "or conversational responses.\n"
+    "- When a visualization IS warranted, format: <!--DOCWAIN_VIZ\\n"
+    "{\"chart_type\": \"...\", \"title\": \"...\", "
     "\"labels\": [...], \"values\": [...], \"unit\": \"...\"}\\n-->\n"
     "- Valid chart_type values: bar, horizontal_bar, grouped_bar, stacked_bar, "
     "donut, line, multi_line, area, scatter, radar, waterfall, gauge, treemap\n"
     "- Choose chart_type based on data: temporal → line, distribution → donut, "
     "comparison → grouped_bar, ranking → horizontal_bar, multi-metric → radar\n"
     "- For secondary series, add: \"secondary_values\": [...], \"secondary_name\": \"...\"\n"
-    "- Do NOT generate a visualization when: the answer is simple text, "
-    "no numeric data exists, evidence is thin, or the response is conversational.\n"
-    "- For procedural/workflow content, use numbered steps with → arrows instead of charts.\n"
 )
 
 
-def build_system_prompt(profile_domain: str = "", kg_context: str = "") -> str:
-    """Return the core system prompt, optionally enriched with domain and KG context.
+def build_system_prompt(
+    profile_domain: str = "",
+    kg_context: str = "",
+    profile_expertise: Optional[Dict] = None,
+) -> str:
+    """Return the core system prompt, optionally enriched with domain,
+    KG context, and profile expertise identity.
 
     Args:
         profile_domain: The dominant domain of the profile (e.g., 'scientific_regulatory').
         kg_context: Pre-formatted knowledge graph facts and relationships.
+        profile_expertise: Dict with 'expertise_identity' containing
+            'role', 'mindset', 'tone' keys from expert analysis.
     """
-    prompt = _SYSTEM_PROMPT
+    if profile_expertise and profile_expertise.get("expertise_identity"):
+        identity = profile_expertise["expertise_identity"]
+        prompt = (
+            f"You are a {identity.get('role', 'senior subject matter expert')}.\n"
+            f"Your approach: {identity.get('mindset', 'Thorough, precise, evidence-based.')}\n"
+            f"Communication style: {identity.get('tone', 'Professional, direct, insightful.')}\n\n"
+        )
+        # Append the rules (everything after the opening line)
+        rules_start = _SYSTEM_PROMPT.index("RULES:\n")
+        prompt += _SYSTEM_PROMPT[rules_start:]
+    else:
+        prompt = _SYSTEM_PROMPT
 
     if profile_domain and profile_domain != "general":
         prompt += (
@@ -117,7 +146,6 @@ TASK_FORMATS: Dict[str, str] = {
         "- If a requested field is not found, state: 'Not found in provided documents.'\n"
         "- For procedural extractions (steps, protocols), use numbered lists.\n"
         "- NEVER fabricate values not present in the evidence.\n"
-        "- If the response contains a table with 3+ numeric rows, append a <!--DOCWAIN_VIZ--> directive with the appropriate chart_type and data.\n"
     ),
     "compare": (
         "TASK: Compare the subjects systematically.\n"
@@ -131,7 +159,6 @@ TASK_FORMATS: Dict[str, str] = {
         "- **Bold** the better or more notable value in each cell.\n"
         "- End with 2-3 bullet points synthesising the key takeaways.\n"
         "- The table MUST be complete — do not truncate mid-row.\n"
-        "- If the response contains a table with 3+ numeric rows, append a <!--DOCWAIN_VIZ--> directive with the appropriate chart_type and data.\n"
     ),
     "summarize": (
         "TASK: Provide a structured summary.\n"
@@ -142,7 +169,6 @@ TASK_FORMATS: Dict[str, str] = {
         "- Use a table for any tabular data (line items, comparisons).\n"
         "- Include specific values and counts — not vague generalities.\n"
         "- End with a Key Takeaway.\n"
-        "- If the response contains a table with 3+ numeric rows, append a <!--DOCWAIN_VIZ--> directive with the appropriate chart_type and data.\n"
     ),
     "overview": (
         "TASK: Provide a structured overview of the document collection.\n"
@@ -175,7 +201,6 @@ TASK_FORMATS: Dict[str, str] = {
         "- Show the breakdown as a markdown table if multi-item, or bullet list if few.\n"
         "- State which documents contributed to each value.\n"
         "- Flag if any expected data is missing from the aggregation.\n"
-        "- If the response contains a table with 3+ numeric rows, append a <!--DOCWAIN_VIZ--> directive with the appropriate chart_type and data.\n"
     ),
     "list": (
         "TASK: List the requested items.\n"
@@ -331,6 +356,10 @@ def build_understand_prompt(
         "- 'compare': Use when user asks to compare, contrast, or differentiate. Output format should be 'table'.\n"
         "- 'list': Use when user asks for a list of items.\n"
         "- 'lookup': Use for simple factual questions with a single answer.\n"
+        "- COMPLEXITY GUIDE: Only classify as 'simple' if the query asks for a "
+        "single, specific fact (a name, date, amount, yes/no). Questions about "
+        "risks, implications, processes, recommendations, or 'what should I know "
+        "about' are ALWAYS 'complex'.\n"
     )
 
     return "\n".join(parts)
@@ -445,6 +474,26 @@ def build_reason_prompt(
             parts.append("")
             _intel_chars += len(entry)
         parts.append("--- END DOCUMENT INTELLIGENCE ---")
+        parts.append("")
+
+    # Expert analysis context (pre-computed insights)
+    expert_insights = None
+    if doc_context:
+        expert_insights = doc_context.get("expert_insights")
+    if expert_insights:
+        parts.append("--- EXPERT ANALYSIS ---")
+        parts.append("Pre-computed expert observations relevant to this query:")
+        for insight in expert_insights[:5]:
+            if isinstance(insight, dict):
+                cat = insight.get("category", "")
+                text = insight.get("insight", "")
+                rec = insight.get("recommendation", "")
+                parts.append(f"- [{cat.upper()}] {text}")
+                if rec:
+                    parts.append(f"  Recommendation: {rec}")
+            else:
+                parts.append(f"- {insight}")
+        parts.append("--- END EXPERT ANALYSIS ---")
         parts.append("")
 
     # Evidence block

@@ -24,6 +24,7 @@ class AppState:
     vllm_manager: Any = None  # src.serving.vllm_manager.VLLMManager — dual vLLM client
     instance_ids: Dict[str, str] = field(default_factory=dict)
     qdrant_index_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    profile_expertise_cache: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 def _assign_instance_id(name: str, instance: Any, registry: Dict[str, str]) -> str:
     if instance is None:

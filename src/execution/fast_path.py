@@ -12,26 +12,16 @@ import time
 from typing import Any, Dict, Generator, List, Optional
 
 from src.api.vector_store import build_qdrant_filter
+from src.generation.prompts import build_system_prompt, TASK_FORMATS
+from src.generation.reasoner import _BASE_TOKENS
 from src.retrieval.reranker import rerank_chunks
 from src.retrieval.retriever import EvidenceChunk
 
 logger = logging.getLogger(__name__)
 
 _FAST_PATH_TOP_K = 10  # Qdrant retrieval limit
-_FAST_PATH_RERANK_K = 3  # Rerank to top-3
-_MAX_CONTEXT_CHARS = 4000  # Cap context window for fast responses
-
-
-# ---------------------------------------------------------------------------
-# Prompt construction
-# ---------------------------------------------------------------------------
-
-_SYSTEM_PROMPT = (
-    "You are DocWain, a document intelligence assistant. "
-    "Answer the user's question using ONLY the provided context. "
-    "Be concise and accurate. If the context does not contain enough "
-    "information, say so clearly. Do not make up information."
-)
+_FAST_PATH_RERANK_K = 5  # Rerank to top-5
+_MAX_CONTEXT_CHARS = 8000  # Richer context for substantive answers
 
 
 def _build_fast_context(chunks: List[Dict[str, Any]], max_chunks: int = 3) -> str:
@@ -224,13 +214,25 @@ def execute_fast_path(
     context = _build_fast_context(chunk_dicts, max_chunks=_FAST_PATH_RERANK_K)
     prompt = _build_prompt(query, context)
 
-    # 5. Generate response
+    # 5. Load profile expertise for dynamic system prompt
+    profile_expertise = None
+    expertise_cache = getattr(app_state, "profile_expertise_cache", None)
+    if expertise_cache:
+        profile_expertise = expertise_cache.get(profile_id)
+
+    system = build_system_prompt(profile_expertise=profile_expertise)
+    task_format = TASK_FORMATS.get("lookup", "")
+    system += "\n" + task_format
+
+    max_tokens = _BASE_TOKENS.get("lookup", 1536)
+
+    # 6. Generate response
     llm = app_state.llm_gateway
     answer_text = llm.generate(
         prompt,
-        system=_SYSTEM_PROMPT,
-        temperature=0.1,
-        max_tokens=1024,
+        system=system,
+        temperature=0.3,
+        max_tokens=max_tokens,
     )
 
     elapsed = time.monotonic() - t0
@@ -297,11 +299,23 @@ def execute_fast_path_stream(
         query[:80], len(reranked), elapsed_prep,
     )
 
-    # 5. Stream response
+    # 5. Load profile expertise for dynamic system prompt
+    profile_expertise = None
+    expertise_cache = getattr(app_state, "profile_expertise_cache", None)
+    if expertise_cache:
+        profile_expertise = expertise_cache.get(profile_id)
+
+    system = build_system_prompt(profile_expertise=profile_expertise)
+    task_format = TASK_FORMATS.get("lookup", "")
+    system += "\n" + task_format
+
+    max_tokens = _BASE_TOKENS.get("lookup", 1536)
+
+    # 6. Stream response
     llm = app_state.llm_gateway
     yield from llm.generate_stream(
         prompt,
-        system=_SYSTEM_PROMPT,
-        temperature=0.1,
-        max_tokens=1024,
+        system=system,
+        temperature=0.3,
+        max_tokens=max_tokens,
     )

@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from src.generation.prompts import build_reason_prompt, build_system_prompt
 
@@ -35,14 +35,14 @@ class ReasonerResult:
 # ---------------------------------------------------------------------------
 
 _BASE_TOKENS: Dict[str, int] = {
-    "lookup": 3072,
-    "extract": 6144,
-    "list": 6144,
-    "summarize": 6144,
-    "overview": 6144,
-    "compare": 6144,
-    "investigate": 6144,
-    "aggregate": 4096,
+    "lookup": 1536,
+    "extract": 3072,
+    "list": 3072,
+    "summarize": 2048,
+    "overview": 2048,
+    "compare": 3072,
+    "investigate": 3072,
+    "aggregate": 2048,
 }
 
 # ---------------------------------------------------------------------------
@@ -85,12 +85,14 @@ class Reasoner:
         use_thinking: bool = False,
         profile_domain: str = "",
         kg_context: str = "",
+        profile_expertise: Optional[Dict] = None,
     ) -> ReasonerResult:
         """Run the REASON step: prompt the LLM and return a grounded result."""
 
         system_msg = build_system_prompt(
             profile_domain=profile_domain,
             kg_context=kg_context,
+            profile_expertise=profile_expertise,
         )
         user_msg = build_reason_prompt(
             query=query,
@@ -139,6 +141,57 @@ class Reasoner:
             thinking=thinking_text,
             usage=usage,
         )
+
+    def reason_stream(
+        self,
+        query: str,
+        task_type: str,
+        output_format: str,
+        evidence: List[Dict[str, Any]],
+        doc_context: Optional[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, str]]],
+        use_thinking: bool = False,
+        profile_domain: str = "",
+        kg_context: str = "",
+    ) -> Generator[str, None, None]:
+        """Stream tokens from the REASON step.
+
+        Yields raw token strings as they arrive from the LLM.
+        The caller is responsible for post-processing (cleaning, grounding).
+        """
+        system_msg = build_system_prompt(
+            profile_domain=profile_domain,
+            kg_context=kg_context,
+        )
+        user_msg = build_reason_prompt(
+            query=query,
+            task_type=task_type,
+            output_format=output_format,
+            evidence=evidence,
+            doc_context=doc_context,
+            conversation_history=conversation_history,
+        )
+
+        # Streaming bypasses thinking mode — don't inflate the token budget
+        max_tokens = self._compute_token_budget(
+            task_type, len(evidence), thinking=False,
+        )
+
+        logger.info(
+            "[REASONER_STREAM] task=%s evidence_count=%d prompt_len=%d max_tokens=%d query=%r",
+            task_type, len(evidence), len(user_msg), max_tokens, query[:80],
+        )
+
+        try:
+            yield from self._llm.generate_stream(
+                user_msg,
+                system=system_msg,
+                temperature=0.4,
+                max_tokens=max_tokens,
+            )
+        except Exception:
+            logger.exception("LLM streaming failed during REASON step")
+            yield "Unable to generate an answer due to a processing error."
 
     # -- internal helpers ---------------------------------------------------
 
@@ -299,6 +352,6 @@ class Reasoner:
             # Qwen3's <think> blocks can consume 2000+ tokens of reasoning
             # before producing the actual answer. Double the budget to ensure
             # enough room for both thinking and answer generation.
-            base = int(base * 2.5)
+            base = int(base * 1.5)
 
         return min(base, 16384)

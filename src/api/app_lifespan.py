@@ -238,6 +238,20 @@ def initialize_app_state(app: FastAPI) -> AppState:
     )
     register_instance_ids(state)
 
+    # Pre-load profile expertise cache
+    try:
+        from pymongo import MongoClient as _ExpertiseMC
+        _emc = _ExpertiseMC(Config.MongoDB.URI)
+        _edb = _emc[Config.MongoDB.DB]
+        for exp in _edb["profile_expertise"].find({}, {"_id": 0}):
+            pid = exp.get("profile_id")
+            if pid:
+                state.profile_expertise_cache[pid] = exp
+        logger.info("Loaded %d profile expertise entries", len(state.profile_expertise_cache))
+        _emc.close()
+    except Exception:
+        logger.warning("Could not load profile expertise cache", exc_info=True)
+
     app.state.rag_state = state
     app.state.rag_system = rag_system
     app.state.instance_ids = state.instance_ids
@@ -390,8 +404,8 @@ async def lifespan(app: FastAPI):
     # Initialize intelligence router (cloud LLM tiered chain)
     try:
         from src.llm.intelligence_router import IntelligenceRouter, set_intelligence_router
-        from src.llm.clients import OllamaClient, GeminiClient, OpenAIClient, ClaudeClient
-        _local = OllamaClient()
+        from src.llm.clients import get_local_client, GeminiClient, OpenAIClient, ClaudeClient
+        _local = get_local_client()
         _gemini = None
         _openai = None
         _claude = None

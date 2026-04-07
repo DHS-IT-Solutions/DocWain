@@ -896,6 +896,20 @@ async def handle_teams_messages(request: Request):
     except teams_adapter.TeamsAuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_error("unauthorized", str(exc)))
 
+_VIZ_KEYWORDS = re.compile(
+    r"\b(chart|graph|plot|visuali[sz]e|diagram|show\s+me\s+a\s+(chart|graph|plot))\b",
+    re.IGNORECASE,
+)
+
+def _wants_visualization(query: str, task_type: str = "") -> bool:
+    """Return True if the user explicitly asked for a visualization or the
+    task type naturally produces chart-worthy data."""
+    if _VIZ_KEYWORDS.search(query):
+        return True
+    if task_type in ("compare", "aggregate"):
+        return True
+    return False
+
 def _prepare_execution(request: QuestionRequest, agent_mode_query: Optional[bool]):
     """
     Resolve session + mode and build a shared RequestContext for both streaming and JSON responses.
@@ -1005,13 +1019,14 @@ def ask_question_api(
                 "context_found": bool(full_text.strip()),
             })
 
-            try:
-                from src.visualization.enhancer import enhance_with_visualization
-                answer_payload = enhance_with_visualization(
-                    answer_payload, request.query, channel="web",
-                )
-            except Exception as _viz_exc:
-                logger.warning("Stream visualization failed: %s", _viz_exc)
+            if _wants_visualization(request.query):
+                try:
+                    from src.visualization.enhancer import enhance_with_visualization
+                    answer_payload = enhance_with_visualization(
+                        answer_payload, request.query, channel="web",
+                    )
+                except Exception as _viz_exc:
+                    logger.warning("Stream visualization failed: %s", _viz_exc)
 
             _persisted_sid = _persist_chat_turn(
                 user_id=request.user_id,
@@ -1040,17 +1055,16 @@ def ask_question_api(
 
     normalized = normalize_answer(result.answer)
 
-    # Post-generation visualization enhancement
-    try:
-        from src.visualization.enhancer import enhance_with_visualization
-        normalized = enhance_with_visualization(normalized, request.query, channel="web")
-        _media = normalized.get("media")
-        if _media:
-            logger.info("Visualization attached: %d media items", len(_media))
-        else:
-            logger.info("Visualization: no media generated for query")
-    except Exception as _viz_exc:
-        logger.warning("Visualization enhancement failed: %s", _viz_exc, exc_info=True)
+    # Post-generation visualization enhancement (conditional)
+    if _wants_visualization(request.query, result.answer.get("metadata", {}).get("task_type", "") if isinstance(result.answer, dict) else ""):
+        try:
+            from src.visualization.enhancer import enhance_with_visualization
+            normalized = enhance_with_visualization(normalized, request.query, channel="web")
+            _media = normalized.get("media")
+            if _media:
+                logger.info("Visualization attached: %d media items", len(_media))
+        except Exception as _viz_exc:
+            logger.warning("Visualization enhancement failed: %s", _viz_exc, exc_info=True)
 
     persisted_session_id = _persist_chat_turn(
         user_id=request.user_id,
@@ -1080,6 +1094,42 @@ def trigger_single_extraction(doc_id: str, subscription_id: str = "default"):
     except Exception as e:
         logging.error(f"Single extraction API error: {e}")
         raise HTTPException(status_code=500, detail="Single document extraction failed")
+
+@api_router.get("/profile/{profile_id}/insights", tags=["Profile"])
+def get_profile_insights(profile_id: str):
+    """Return proactive expert insights for a profile."""
+    from src.api.rag_state import get_app_state
+    app_state = get_app_state()
+    if not app_state:
+        return {"insights": [], "expertise_identity": None}
+
+    expertise = app_state.profile_expertise_cache.get(profile_id)
+    if not expertise:
+        try:
+            from src.intelligence_v2.expert_intelligence import get_cached_expertise
+            from pymongo import MongoClient as _InsightMongoClient
+            _mc = _InsightMongoClient(Config.MongoDB.URI)
+            _db = _mc[Config.MongoDB.DB]
+            expertise = get_cached_expertise(profile_id, _db)
+            _mc.close()
+            if expertise:
+                app_state.profile_expertise_cache[profile_id] = expertise
+        except Exception:
+            pass
+
+    if not expertise:
+        return {"insights": [], "expertise_identity": None}
+
+    insights = expertise.get("proactive_insights", [])
+    priority = {"critical": 0, "important": 1, "informational": 2}
+    insights = sorted(insights, key=lambda x: priority.get(x.get("category", ""), 99))
+
+    return {
+        "insights": insights[:5],
+        "expertise_identity": expertise.get("expertise_identity"),
+        "knowledge_gaps": expertise.get("knowledge_gaps", []),
+        "advisory_capabilities": expertise.get("advisory_capabilities", []),
+    }
 
 @api_router.post("/train/{doc_id}", tags=["Default"])
 def trigger_single_training(doc_id: str, subscription_id: str = "default"):

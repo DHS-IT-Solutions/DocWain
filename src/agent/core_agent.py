@@ -11,7 +11,7 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Generator, List, Optional, Set
 
 from src.agent.intent import IntentAnalyzer, QueryUnderstanding
 from src.agent.subagent import DynamicSubAgent
@@ -618,6 +618,23 @@ class CoreAgent:
         # Ollama Cloud qwen3.5:397b and Azure GPT-4o both support it.
         use_thinking = self._llm.backend in ("gemini", "openai", "azure", "azure_openai", "ollama")
 
+        # Inject expert insights into doc_context if available
+        profile_expertise = None
+        try:
+            from src.api.rag_state import get_app_state
+            from src.intelligence_v2.expert_intelligence import filter_insights_for_query
+            _app = get_app_state()
+            if _app and _app.profile_expertise_cache:
+                profile_expertise = _app.profile_expertise_cache.get(profile_id)
+                if profile_expertise:
+                    relevant_insights = filter_insights_for_query(profile_expertise, understanding.resolved_query)
+                    if relevant_insights:
+                        if doc_context is None:
+                            doc_context = {}
+                        doc_context["expert_insights"] = relevant_insights
+        except Exception:
+            logger.debug("Could not load expert insights", exc_info=True)
+
         # Single-GPU: skip sub-agent decomposition — parallel LLM calls
         # serialize on Ollama, causing timeouts. Use the reasoner directly.
         reason_result = self._reasoner.reason(
@@ -630,6 +647,7 @@ class CoreAgent:
             use_thinking=use_thinking,
             profile_domain=profile_domain,
             kg_context=kg_context_text,
+            profile_expertise=profile_expertise,
         )
         timing["reason_ms"] = round((time.monotonic() - t0) * 1000, 1)
 
@@ -675,6 +693,247 @@ class CoreAgent:
             logger.debug("Feedback signal recording skipped", exc_info=True)
 
         return result
+
+    # ------------------------------------------------------------------
+    # Streaming public API
+    # ------------------------------------------------------------------
+
+    def handle_stream(
+        self,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        user_id: str,
+        session_id: str,
+        conversation_history: Optional[List[Dict[str, str]]],
+        *,
+        agent_name: Optional[str] = None,
+        document_id: Optional[str] = None,
+    ) -> Generator[str, None, None]:
+        """Stream response tokens. UNDERSTAND+RETRIEVE run synchronously,
+        then REASON streams tokens as they arrive from the LLM.
+
+        Yields raw text chunks. The caller handles metadata/persistence.
+        """
+        if not subscription_id or not str(subscription_id).strip():
+            raise ValueError("subscription_id is required")
+        if not profile_id or not str(profile_id).strip():
+            raise ValueError("profile_id is required")
+
+        # --- UNDERSTAND (reuse full pipeline logic via non-streaming handle
+        #     up to the REASON step, then stream from there) ---
+
+        # Build the same pre-REASON state as handle()
+        doc_intelligence = self._load_doc_intelligence(subscription_id)
+        doc_intelligence_dict = {
+            d.get("document_id", ""): d.get("intelligence", d)
+            for d in doc_intelligence
+        }
+
+        kg_hints: Dict[str, Any] = {}
+        if self.kg_query_service:
+            try:
+                query_entities = self.kg_query_service.extract_entities(query)
+                if query_entities:
+                    kg_result = self.kg_query_service.query(
+                        subscription_id=subscription_id,
+                        profile_id=profile_id,
+                        domain_hint=None,
+                        entities=query_entities,
+                    )
+                    kg_hints = {
+                        "target_doc_ids": kg_result.doc_ids,
+                        "target_chunk_ids": kg_result.chunk_ids,
+                        "entities": query_entities,
+                    }
+            except Exception as exc:
+                logger.debug("KG probe failed (non-fatal): %s", exc)
+
+        trimmed_intel = []
+        for d in doc_intelligence[:10]:
+            trimmed = {
+                "document_id": d.get("document_id", ""),
+                "profile_id": d.get("profile_id", ""),
+                "profile_name": d.get("profile_name", ""),
+            }
+            intel = d.get("intelligence") or {}
+            trimmed["summary"] = (intel.get("summary") or "")[:200]
+            trimmed["answerable_topics"] = (intel.get("answerable_topics") or [])[:5]
+            trimmed["document_type"] = intel.get("document_type", "")
+            trimmed_intel.append(trimmed)
+
+        # Parallel UNDERSTAND + pre-fetch RETRIEVE
+        prefetch_result = None
+        understanding = None
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _par:
+                _intent_fut = _par.submit(
+                    self._intent_analyzer.analyze,
+                    query, subscription_id, profile_id, trimmed_intel,
+                    conversation_history, kg_hints,
+                )
+                _prefetch_kwargs = {
+                    "query": query,
+                    "subscription_id": subscription_id,
+                    "profile_ids": [profile_id],
+                }
+                _pf_doc_ids = kg_hints.get("target_doc_ids")
+                if _pf_doc_ids:
+                    _prefetch_kwargs["document_ids"] = _pf_doc_ids
+                _prefetch_fut = _par.submit(
+                    lambda kw=_prefetch_kwargs: self._retriever.retrieve(**kw),
+                )
+                understanding = _intent_fut.result(timeout=45.0)
+                prefetch_result = _prefetch_fut.result(timeout=45.0)
+        except Exception as _par_exc:
+            logger.warning("Parallel UNDERSTAND+RETRIEVE failed: %s", _par_exc)
+            if understanding is None:
+                if isinstance(_par_exc, (concurrent.futures.TimeoutError, TimeoutError)):
+                    understanding = self._intent_analyzer._safe_defaults(query)
+                    self._intent_analyzer._enrich_relevant_documents(
+                        understanding, query, trimmed_intel, kg_hints,
+                    )
+                else:
+                    understanding = self._intent_analyzer.analyze(
+                        query, subscription_id, profile_id, trimmed_intel,
+                        conversation_history, kg_hints=kg_hints,
+                    )
+
+        if understanding.is_conversational:
+            result = self._handle_conversational(query)
+            yield result.get("response", "")
+            return
+
+        # --- RETRIEVE ---
+        profile_ids = self._resolve_profile_scope(understanding, profile_id)
+        document_ids: Optional[List[str]] = None
+        if document_id:
+            document_ids = [document_id]
+        elif understanding.relevant_documents:
+            doc_ids = [d.get("document_id", "") for d in understanding.relevant_documents if d.get("document_id")]
+            if doc_ids:
+                document_ids = doc_ids
+
+        kg_doc_ids = kg_hints.get("target_doc_ids", [])
+        if kg_doc_ids:
+            if document_ids is None:
+                document_ids = list(kg_doc_ids)
+            else:
+                existing = set(document_ids)
+                for did in kg_doc_ids:
+                    if did not in existing:
+                        document_ids.append(did)
+
+        enhanced_query = self._enhance_query(
+            understanding.resolved_query, understanding.task_type,
+            doc_intelligence, understanding.entities,
+        )
+
+        if prefetch_result is not None:
+            if understanding.relevant_documents:
+                target_doc_ids = {d.get("document_id") for d in understanding.relevant_documents if d.get("document_id")}
+                if target_doc_ids:
+                    prefetch_result.chunks = [c for c in prefetch_result.chunks if getattr(c, "document_id", None) in target_doc_ids]
+            if document_id:
+                prefetch_result.chunks = [c for c in prefetch_result.chunks if getattr(c, "document_id", None) == document_id]
+            if len(prefetch_result.chunks) < 3 and (document_id or understanding.relevant_documents):
+                retrieval_result = self._retriever.retrieve(enhanced_query, subscription_id, profile_ids, document_ids=document_ids)
+            else:
+                retrieval_result = prefetch_result
+        else:
+            retrieval_result = self._retriever.retrieve(enhanced_query, subscription_id, profile_ids, document_ids=document_ids)
+
+        evidence_top_k = _EVIDENCE_TOP_K.get(understanding.task_type, 6)
+        reranked = rerank_chunks(
+            understanding.resolved_query, retrieval_result.chunks,
+            top_k=evidence_top_k, cross_encoder=self._cross_encoder,
+        )
+        evidence, doc_context = build_context(reranked, doc_intelligence_dict)
+
+        if kg_hints.get("target_doc_ids") and self.kg_query_service:
+            try:
+                kg_entities = kg_hints.get("entities", [])
+                if kg_entities:
+                    kg_context_items = [
+                        f"{e.get('value', '')} ({e.get('type', '')})"
+                        for e in (kg_entities if isinstance(kg_entities, list) else [])
+                        if isinstance(e, dict) and e.get("value")
+                    ]
+                    if kg_context_items:
+                        existing = doc_context.get("entities") or []
+                        for kc in kg_context_items[:5]:
+                            if kc not in existing:
+                                existing.append(kc)
+                        doc_context["entities"] = existing[:25]
+            except Exception:
+                pass
+
+        # doc_index / doc_intelligence enrichment
+        try:
+            from qdrant_client.models import Filter as _QFilter, FieldCondition as _QFC, MatchValue as _QMV
+            from src.api.vector_store import build_collection_name
+            _collection = build_collection_name(subscription_id)
+            _intel_points, _ = self._qdrant.scroll(
+                collection_name=_collection,
+                scroll_filter=_QFilter(must=[
+                    _QFC(key="profile_id", match=_QMV(value=str(profile_id))),
+                    _QFC(key="resolution", match=_QMV(value="doc_intelligence")),
+                ]),
+                limit=200, with_payload=True, with_vectors=False,
+            )
+            doc_intelligence_entries = [
+                (p.payload or {}).get("canonical_text", "")
+                for p in _intel_points if (p.payload or {}).get("canonical_text")
+            ]
+            if doc_intelligence_entries:
+                doc_context["doc_intelligence_summaries"] = doc_intelligence_entries
+        except Exception:
+            pass
+
+        # KG context
+        profile_domain = "general"
+        kg_context_text = ""
+        try:
+            from src.intelligence.hot_cache import get_profile_domain, lookup_entities, get_document_facts, get_top_relationships
+            redis_client = self._get_redis_client()
+            if redis_client:
+                profile_domain = get_profile_domain(redis_client, profile_id)
+                kg_parts = []
+                query_words = [w for w in understanding.resolved_query.split() if w.lower() not in _STOPWORDS and len(w) > 2]
+                cached_entities = lookup_entities(redis_client, profile_id, query_words)
+                if cached_entities:
+                    entity_lines = [f"- {e['name']} ({e.get('type', 'unknown')}): {e.get('context', '')}" for e in cached_entities[:8]]
+                    if entity_lines:
+                        kg_parts.append("Known entities:\n" + "\n".join(entity_lines))
+                evidence_doc_ids = list({e.get("document_id", "") for e in evidence if e.get("document_id")})
+                for did in evidence_doc_ids[:3]:
+                    facts = get_document_facts(redis_client, profile_id, did, max_facts=5)
+                    for f in facts:
+                        kg_parts.append(f"- Fact: {f.get('statement', '')}")
+                rels = get_top_relationships(redis_client, profile_id, max_results=5)
+                for r in rels:
+                    kg_parts.append(f"- Relationship: {r.get('subject', '')} {r.get('relation', '')} {r.get('object', '')}")
+                if kg_parts:
+                    kg_context_text = "\n".join(kg_parts[:20])
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        use_thinking = self._llm.backend in ("gemini", "openai", "azure", "azure_openai", "ollama")
+
+        # --- STREAM REASON ---
+        yield from self._reasoner.reason_stream(
+            query=understanding.resolved_query,
+            task_type=understanding.task_type,
+            output_format=understanding.output_format,
+            evidence=evidence,
+            doc_context=doc_context,
+            conversation_history=conversation_history,
+            use_thinking=use_thinking,
+            profile_domain=profile_domain,
+            kg_context=kg_context_text,
+        )
 
     # ------------------------------------------------------------------
     # Redis client helper

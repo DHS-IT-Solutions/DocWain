@@ -156,15 +156,11 @@ def classify_query(
         return QueryClassification(query_type="COMPLEX", confidence=0.80, signals=signals)
 
     # ------------------------------------------------------------------
-    # 4. SIMPLE — short factoid / single-entity lookup
+    # 4. SIMPLE — ONLY single-fact lookups (name, date, amount, yes/no)
     # ------------------------------------------------------------------
-    if _SINGLE_FACTOID.search(text) and words < 15 and not _MULTI_DOC.search(text):
+    if _SINGLE_FACTOID.search(text) and words < 10 and not _MULTI_DOC.search(text):
         signals.append("short_factoid")
         return QueryClassification(query_type="SIMPLE", confidence=0.85, signals=signals)
-
-    if words < 15 and _QUESTION_WORD.search(text) and not _MULTI_DOC.search(text):
-        signals.append("single_entity_lookup")
-        return QueryClassification(query_type="SIMPLE", confidence=0.75, signals=signals)
 
     # ------------------------------------------------------------------
     # 5. Default → COMPLEX (safe fallback)

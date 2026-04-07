@@ -168,6 +168,46 @@ def run_document_understanding(
             doc_type=identification.document_type,
         )
 
+        # Trigger background expert intelligence analysis
+        import threading
+        def _run_expert_analysis():
+            try:
+                from src.intelligence_v2.expert_intelligence import build_profile_expertise, is_stale
+                from src.api.rag_state import get_app_state
+                from pymongo import MongoClient as _ExpertMongoClient
+
+                app_state = get_app_state()
+                if not app_state or not app_state.vllm_manager:
+                    logger.info("[EXPERT] vllm_manager not available, skipping expert analysis")
+                    return
+
+                _mc = _ExpertMongoClient(Config.MongoDB.URI)
+                _db = _mc[Config.MongoDB.DB]
+
+                if not is_stale(profile_id, subscription_id, _db):
+                    logger.info("[EXPERT] Expertise still fresh for profile=%s", profile_id)
+                    _mc.close()
+                    return
+
+                expertise = build_profile_expertise(
+                    profile_id=profile_id,
+                    subscription_id=subscription_id,
+                    mongo_client=_db,
+                    vllm_manager=app_state.vllm_manager,
+                )
+
+                # Update the in-memory cache
+                if expertise and hasattr(app_state, "profile_expertise_cache"):
+                    app_state.profile_expertise_cache[profile_id] = expertise
+                    logger.info("[EXPERT] Updated in-memory cache for profile=%s", profile_id)
+
+                _mc.close()
+            except Exception:
+                logger.error("[EXPERT] Background expert analysis failed", exc_info=True)
+
+        threading.Thread(target=_run_expert_analysis, daemon=True, name="expert-analysis").start()
+        logger.info("[EXPERT] Background expert analysis triggered for profile=%s", profile_id)
+
     return {
         "document_id": document_id,
         "document_type": identification.document_type,
