@@ -24,14 +24,29 @@ def _build_teams_collection_name(subscription_id: str, profile_id: str) -> str:
     return f"teams_{safe_sub}_{safe_prof}"
 
 
+def _to_activity(card: Dict[str, Any], text: Optional[str] = None) -> "Activity":
+    """Build a proper Bot Framework Activity from an Adaptive Card dict."""
+    from botbuilder.schema import Activity, ActivityTypes, Attachment
+
+    return Activity(
+        type=ActivityTypes.message,
+        text=text or "",
+        attachments=[
+            Attachment(
+                content_type="application/vnd.microsoft.card.adaptive",
+                content=card,
+            )
+        ],
+    )
+
+
 async def _send_card(turn_context, card: Dict[str, Any], text: Optional[str], log) -> Optional[str]:
     """Send an Adaptive Card via the Bot Framework turn context.
 
     Returns the activity ID so the card can be updated in-place later.
     """
     try:
-        from src.teams.tools import _card_activity
-        activity = _card_activity(card, text=text)
+        activity = _to_activity(card, text)
         resp = await turn_context.send_activity(activity)
         return getattr(resp, "id", None)
     except Exception as exc:  # noqa: BLE001
@@ -44,18 +59,13 @@ async def _update_card(turn_context, activity_id: Optional[str], card: Dict[str,
 
     Returns the activity ID (same as input on success, new on fallback).
     """
-    from src.teams.tools import _card_activity
-    activity = _card_activity(card, text=text)
-
     if not activity_id:
         return await _send_card(turn_context, card, text, log)
 
     # Try in-place update first
     try:
-        if isinstance(activity, dict):
-            activity["id"] = activity_id
-        elif hasattr(activity, "id"):
-            activity.id = activity_id
+        activity = _to_activity(card, text)
+        activity.id = activity_id
         await turn_context.update_activity(activity)
         return activity_id
     except Exception:  # noqa: BLE001
