@@ -90,6 +90,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
         # Check for Adaptive Card actions
         if activity.value and isinstance(activity.value, dict):
             action = activity.value.get("action", "")
+
             # Handle feedback from response cards
             if action == "feedback":
                 signal = activity.value.get("signal", "implicit")
@@ -102,9 +103,31 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 await turn_context.send_activity(f"Thanks for the feedback! {emoji}")
                 return
 
-            result = await self.tool_router.handle_action(activity.value, context)
-            if result:
-                await turn_context.send_activity(Activity(**result))
+            # Route query-based actions through the proxy (not local RAG)
+            if action in ("domain_query", "summarize_recent"):
+                query = activity.value.get("query", "Summarize this document")
+                await self._handle_query(query, context, turn_context, tenant_id)
+                return
+
+            # Non-query actions (delete, preferences, tools menu) use the tool router
+            # but skip any that would trigger local RAG
+            if action in ("delete_documents", "confirm_delete", "tools", "show_preferences",
+                          "set_model", "set_persona", "list_docs"):
+                try:
+                    result = await self.tool_router.handle_action(activity.value, context)
+                    if result:
+                        await turn_context.send_activity(Activity(**result))
+                except Exception as exc:
+                    logger.error("Tool action '%s' failed: %s", action, exc)
+                    await turn_context.send_activity(f"Action failed: {exc}")
+                return
+
+            # Unknown action — try proxy as a query
+            query = activity.value.get("query", activity.value.get("text", ""))
+            if query:
+                await self._handle_query(query, context, turn_context, tenant_id)
+                return
+
             return
 
         # Check for OneDrive/SharePoint links in text
