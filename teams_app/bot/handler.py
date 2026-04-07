@@ -166,36 +166,38 @@ class StandaloneTeamsBot(DocWainTeamsBot):
         auth_token: str,
         tenant_id: str,
     ) -> None:
-        """Download and process file attachments through the auto-trigger orchestrator."""
-        prepared = []
+        """Process file attachments using the existing Teams pipeline with progress cards.
+
+        Uses src.teams.pipeline.TeamsDocumentPipeline.run_full_pipeline directly
+        because it already has proper progress card updates (stage 1/3, 2/3, 3/3).
+        """
+        from src.teams.pipeline import TeamsDocumentPipeline
+        from src.teams.teams_storage import TeamsDocumentStorage
+
+        pipeline = TeamsDocumentPipeline(
+            storage=TeamsDocumentStorage(),
+            state_store=self.orchestrator.state_store,
+        )
+
         for att in attachments:
             try:
-                # _resolve_download_url and _resolve_filename expect raw dicts, not
-                # Bot Framework Attachment objects — convert via as_dict() first.
+                # Convert Bot Framework Attachment to raw dict for the pipeline
                 att_dict = att.as_dict() if hasattr(att, "as_dict") else {
                     "contentType": getattr(att, "content_type", None),
                     "name": getattr(att, "name", None),
                     "contentUrl": getattr(att, "content_url", None),
+                    "content": getattr(att, "content", None),
                 }
-                url = _resolve_download_url(att_dict)
-                filename = _resolve_filename(att_dict)
-                if not url:
-                    await turn_context.send_activity(f"Could not resolve download URL for {filename}.")
-                    continue
-                file_bytes = await self._download_file(url, auth_token)
-                prepared.append({
-                    "file_bytes": file_bytes,
-                    "filename": filename,
-                    "content_type": att.content_type or "application/octet-stream",
-                })
+                await pipeline.run_full_pipeline(
+                    attachment=att_dict,
+                    context=context,
+                    turn_context=turn_context,
+                    correlation_id=correlation_id,
+                    auth_token=auth_token,
+                )
             except Exception as exc:
-                logger.error("Failed to download attachment %s: %s", getattr(att, "name", "?"), exc)
-                await turn_context.send_activity(f"Failed to download {getattr(att, 'name', 'file')}: {exc}")
-
-        if prepared:
-            await self.orchestrator.process_attachments(
-                prepared, context, turn_context, correlation_id, auth_token,
-            )
+                logger.error("Pipeline failed for %s: %s", getattr(att, "name", "?"), exc)
+                await turn_context.send_activity(f"Failed to process {getattr(att, 'name', 'file')}: {exc}")
 
     async def _handle_onedrive_link(
         self,
