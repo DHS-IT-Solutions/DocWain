@@ -40,9 +40,13 @@ async def teams_lifespan(app: FastAPI):
 
     # 1. Embedding model (~5s)
     logger.info("Loading embedding model...")
-    from src.api.dw_newron import get_model
-    state.embedding_model = await asyncio.to_thread(get_model)
-    logger.info("Embedding model loaded")
+    try:
+        from src.api.dw_newron import get_model
+        state.embedding_model = await asyncio.to_thread(get_model)
+        logger.info("Embedding model loaded")
+    except Exception as exc:
+        logger.warning("Embedding model not available (document ingestion will fail): %s", exc)
+        state.embedding_model = None
 
     # 2. Qdrant
     logger.info("Connecting to Qdrant...")
