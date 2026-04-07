@@ -19,19 +19,25 @@ class QueryRequest:
     user_id: str
     subscription_id: str
     tenant_id: str = ""
-    profile_id: Optional[str] = None
+    profile_id: str = "default"
     session_id: Optional[str] = None
-    stream: bool = True
+    model_name: str = "DocWain-Agent"
+    persona: str = "DocWain"
+    stream: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "query": self.query,
             "user_id": self.user_id,
             "subscription_id": self.subscription_id,
             "profile_id": self.profile_id,
-            "session_id": self.session_id,
+            "model_name": self.model_name,
+            "persona": self.persona,
             "stream": self.stream,
         }
+        if self.session_id:
+            payload["session_id"] = self.session_id
+        return payload
 
     def headers(self) -> Dict[str, str]:
         return {

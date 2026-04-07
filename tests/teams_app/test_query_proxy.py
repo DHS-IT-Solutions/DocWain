@@ -14,8 +14,8 @@ def test_query_request_builds_payload():
     assert payload["query"] == "what is revenue?"
     assert payload["user_id"] == "teams_user_123"
     assert payload["subscription_id"] == "teams_tenant_abc"
-    assert payload["stream"] is True
-    assert payload["profile_id"] is None
+    assert payload["stream"] is False
+    assert payload["profile_id"] == "default"
 
 
 def test_query_request_headers():
