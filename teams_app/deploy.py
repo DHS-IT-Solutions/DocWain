@@ -19,12 +19,21 @@ import os
 logger = logging.getLogger(__name__)
 
 # Azure resource details
+SUBSCRIPTION_ID = "249bb11f-9b6e-4c0e-a844-500d627b80b3"
 RESOURCE_GROUP = "rg-docwain-dev"
 APIM_SERVICE = "dhs-docwain-api"
 API_ID = "docwain-api"
+OPERATION_ID = "teamschat"  # Existing APIM operation for POST /teams/messages
 BACKEND_IP = "4.213.139.185"
 TEAMS_PORT = 8300
 MAIN_PORT = 8000
+
+POLICY_URL = (
+    f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}"
+    f"/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.ApiManagement"
+    f"/service/{APIM_SERVICE}/apis/{API_ID}/operations/{OPERATION_ID}"
+    f"/policies/policy?api-version=2022-08-01"
+)
 
 
 def _az(args: list) -> dict:
@@ -37,67 +46,33 @@ def _az(args: list) -> dict:
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
+def _az_rest(method: str, url: str, body: dict = None) -> str:
+    """Run az rest command and return output."""
+    cmd = ["az", "rest", "--method", method, "--url", url]
+    if body:
+        cmd += ["--body", json.dumps(body)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error("az rest failed: %s", result.stderr)
+        raise RuntimeError(f"az rest error: {result.stderr}")
+    return result.stdout
+
+
 def route_teams():
     """Update APIM to route /teams/* requests to the Teams service on port 8300."""
     logger.info("Setting up APIM route: /teams/* -> port %d", TEAMS_PORT)
 
-    policy_xml = f"""<policies>
-    <inbound>
-        <base />
-        <set-backend-service base-url="http://{BACKEND_IP}:{TEAMS_PORT}" />
-    </inbound>
-    <backend>
-        <base />
-    </backend>
-    <outbound>
-        <base />
-    </outbound>
-    <on-error>
-        <base />
-    </on-error>
-</policies>"""
+    policy_xml = (
+        f'<policies><inbound><base />'
+        f'<set-backend-service base-url="http://{BACKEND_IP}:{TEAMS_PORT}" />'
+        f'</inbound><backend><base /></backend>'
+        f'<outbound><base /></outbound>'
+        f'<on-error><base /></on-error></policies>'
+    )
 
-    # Ensure the operation exists
-    try:
-        _az([
-            "apim", "api", "operation", "show",
-            "--resource-group", RESOURCE_GROUP,
-            "--service-name", APIM_SERVICE,
-            "--api-id", API_ID,
-            "--operation-id", "teams-messages",
-        ])
-        logger.info("Operation teams-messages exists, updating policy...")
-    except RuntimeError:
-        logger.info("Creating APIM operation teams-messages...")
-        _az([
-            "apim", "api", "operation", "create",
-            "--resource-group", RESOURCE_GROUP,
-            "--service-name", APIM_SERVICE,
-            "--api-id", API_ID,
-            "--url-template", "/teams/messages",
-            "--method", "POST",
-            "--display-name", "Teams Bot Messages",
-            "--operation-id", "teams-messages",
-        ])
-
-    # Apply the policy to route to port 8300
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False) as f:
-        f.write(policy_xml)
-        policy_file = f.name
-
-    try:
-        subprocess.run([
-            "az", "apim", "api", "operation", "policy", "create",
-            "--resource-group", RESOURCE_GROUP,
-            "--service-name", APIM_SERVICE,
-            "--api-id", API_ID,
-            "--operation-id", "teams-messages",
-            "--xml-file", policy_file,
-        ], check=True)
-        logger.info("APIM policy applied: /teams/messages -> port %d", TEAMS_PORT)
-    finally:
-        os.unlink(policy_file)
-
+    body = {"properties": {"value": policy_xml, "format": "xml"}}
+    _az_rest("PUT", POLICY_URL, body)
+    logger.info("APIM policy applied: /teams/messages -> port %d", TEAMS_PORT)
     print(f"Done. Teams traffic now routes to http://{BACKEND_IP}:{TEAMS_PORT}")
 
 
@@ -106,16 +81,9 @@ def rollback():
     logger.info("Rolling back APIM route: /teams/* -> main app (port %d)", MAIN_PORT)
 
     try:
-        subprocess.run([
-            "az", "apim", "api", "operation", "policy", "delete",
-            "--resource-group", RESOURCE_GROUP,
-            "--service-name", APIM_SERVICE,
-            "--api-id", API_ID,
-            "--operation-id", "teams-messages",
-            "--yes",
-        ], check=True)
+        _az_rest("DELETE", POLICY_URL)
         logger.info("APIM policy removed. Teams traffic now goes to main app.")
-    except subprocess.CalledProcessError as exc:
+    except RuntimeError as exc:
         logger.warning("Policy delete failed (may not exist): %s", exc)
 
     print(f"Done. Teams traffic now routes to main app at http://{BACKEND_IP}:{MAIN_PORT}")
