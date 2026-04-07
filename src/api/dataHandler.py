@@ -2,6 +2,10 @@ import csv
 import hashlib
 import json
 import logging
+import warnings
+
+# Suppress CosmosDB compatibility notices from pymongo (fires on import)
+warnings.filterwarnings("ignore", message=".*CosmosDB.*")
 
 from src.utils.logging_utils import get_logger
 import math
@@ -2582,7 +2586,7 @@ def train_on_document(text, subscription_id, profile_id, doc_tag, doc_name, devi
                         chunk_texts=list(texts),
                         chunk_metadata=chunk_metadata,
                         metadata={
-                            "doc_type": doc_type or document_type,
+                            "doc_type": doc_type or "",
                             "source_name": doc_metadata.get("filename") or doc_name,
                         },
                     )
@@ -2625,7 +2629,7 @@ def train_on_document(text, subscription_id, profile_id, doc_tag, doc_name, devi
                         if added:
                             force_reembed = True
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("Section intelligence build skipped for %s: %s", doctag, exc)
+                    logger.debug("Section intelligence build skipped for %s: %s", doc_tag, exc)
             chunk_metadata = normalize_chunk_chain(
                 chunk_metadata,
                 subscription_id=subscription_id,
