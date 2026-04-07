@@ -23,7 +23,7 @@ class TeamsAppState:
     bot_adapter: Any = None
     tenant_manager: Any = None
     orchestrator: Any = None
-    query_proxy: Any = None
+    query_handler: Any = None
     signal_capture: Any = None
 
 
@@ -73,14 +73,14 @@ async def teams_lifespan(app: FastAPI):
     # 5. Teams components
     from teams_app.storage.tenant import TenantManager
     from teams_app.signals.capture import SignalCapture
-    from teams_app.proxy.query_proxy import QueryProxy
+    from teams_app.proxy.query_handler import TeamsQueryHandler
     from teams_app.pipeline.orchestrator import TeamsAutoOrchestrator
     from src.teams.state import TeamsStateStore
     from src.teams.teams_storage import TeamsDocumentStorage
 
     state.tenant_manager = TenantManager(db=state.mongo_db, qdrant_client=state.qdrant_client)
     state.signal_capture = SignalCapture(signals_dir=config.signals_dir)
-    state.query_proxy = QueryProxy(main_app_url=config.main_app_url, timeout=config.proxy_timeout)
+    state.query_handler = TeamsQueryHandler(qdrant_client=state.qdrant_client)
 
     storage = TeamsDocumentStorage()
     teams_state_store = TeamsStateStore()
@@ -100,7 +100,7 @@ async def teams_lifespan(app: FastAPI):
     state.bot_adapter = bot_adapter
     state.bot = StandaloneTeamsBot(
         orchestrator=state.orchestrator,
-        query_proxy=state.query_proxy,
+        query_handler=state.query_handler,
         tenant_manager=state.tenant_manager,
         signal_capture=state.signal_capture,
         config=config,

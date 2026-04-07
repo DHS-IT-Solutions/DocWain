@@ -23,7 +23,7 @@ from src.teams.attachments import _resolve_auth_token, _resolve_download_url, _r
 from teams_app.config import TeamsAppConfig
 from teams_app.graph.onedrive import is_onedrive_url, download_shared_file
 from teams_app.pipeline.orchestrator import TeamsAutoOrchestrator
-from teams_app.proxy.query_proxy import QueryProxy, QueryRequest
+from teams_app.proxy.query_handler import TeamsQueryHandler
 from teams_app.signals.capture import SignalCapture
 from teams_app.storage.tenant import TenantManager
 
@@ -44,7 +44,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
     def __init__(
         self,
         orchestrator: TeamsAutoOrchestrator,
-        query_proxy: QueryProxy,
+        query_handler: TeamsQueryHandler,
         tenant_manager: TenantManager,
         signal_capture: SignalCapture,
         config: Optional[TeamsAppConfig] = None,
@@ -53,7 +53,7 @@ class StandaloneTeamsBot(DocWainTeamsBot):
         # module-level singletons (chat_service, state_store, tool_router).
         super().__init__()
         self.orchestrator = orchestrator
-        self.query_proxy = query_proxy
+        self.query_handler = query_handler
         self.tenant_manager = tenant_manager
         self.signal_capture = signal_capture
         self.config = config or TeamsAppConfig()
@@ -353,20 +353,21 @@ class StandaloneTeamsBot(DocWainTeamsBot):
         turn_context: TurnContext,
         tenant_id: str,
     ) -> None:
-        """Proxy a text query to the main app and send the response."""
+        """Search Qdrant directly and generate a response via LLM."""
         started = time.monotonic()
 
         await turn_context.send_activities([Activity(type=ActivityTypes.typing)])
 
-        req = QueryRequest(
-            query=query,
-            user_id=context.user_id,
-            subscription_id=context.subscription_id,
-            tenant_id=tenant_id or "",
-            session_id=context.session_id,
+        from src.teams.pipeline import _build_teams_collection_name
+        collection_name = _build_teams_collection_name(
+            context.subscription_id, context.profile_id,
         )
 
-        result = await self.query_proxy.ask(req)
+        result = await self.query_handler.answer(
+            query=query,
+            collection_name=collection_name,
+            user_id=context.user_id,
+        )
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
         if not result.context_found:
