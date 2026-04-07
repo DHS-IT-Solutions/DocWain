@@ -111,7 +111,12 @@ class StandaloneTeamsBot(DocWainTeamsBot):
 
             # Non-query actions (delete, preferences, tools menu) use the tool router
             # but skip any that would trigger local RAG
-            if action in ("delete_documents", "confirm_delete", "tools", "show_preferences",
+            # Clear documents action
+            if action in ("delete_documents", "confirm_delete"):
+                await self._clear_documents(context, turn_context, tenant_id)
+                return
+
+            if action in ("tools", "show_preferences",
                           "set_model", "set_persona", "list_docs"):
                 try:
                     result = await self.tool_router.handle_action(activity.value, context)
@@ -151,9 +156,8 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                 if result:
                     await turn_context.send_activity(Activity(**result))
                 return
-            if any(phrase in lower for phrase in ("delete all", "remove all", "clear all")):
-                card = build_card("delete_confirm_card")
-                await self._send_card_activity(turn_context, card)
+            if any(phrase in lower for phrase in ("delete all", "remove all", "clear all", "clear documents", "reset")):
+                await self._clear_documents(context, turn_context, tenant_id)
                 return
 
             # Check for refresh command
@@ -254,13 +258,27 @@ class StandaloneTeamsBot(DocWainTeamsBot):
                     await update_card(turn_context, card_id, error_card(filename, "No extractable content found."))
                     continue
 
-                # Get extracted text for screening
+                # Get extracted text for screening and intelligence
                 all_text = ""
                 for doc_data in extracted_docs.values():
                     if isinstance(doc_data, dict):
-                        all_text += doc_data.get("full_text", "") or doc_data.get("text", "") or ""
+                        # Try full_text first, then texts list, then text field
+                        ft = doc_data.get("full_text") or doc_data.get("text") or doc_data.get("content") or ""
+                        if ft:
+                            all_text += ft + "\n\n"
+                        elif doc_data.get("texts"):
+                            for t in doc_data["texts"]:
+                                if isinstance(t, str):
+                                    all_text += t + "\n"
+                                elif isinstance(t, dict):
+                                    all_text += (t.get("text") or t.get("content") or "") + "\n"
                     elif isinstance(doc_data, str):
-                        all_text += doc_data
+                        all_text += doc_data + "\n\n"
+                    elif hasattr(doc_data, "full_text"):
+                        all_text += (getattr(doc_data, "full_text", "") or "") + "\n\n"
+
+                all_text = all_text.strip()
+                logger.info("Extracted %d chars from %s (%d docs)", len(all_text), filename, len(extracted_docs))
             except Exception as exc:
                 logger.error("Extraction failed for %s: %s", filename, exc)
                 await update_card(turn_context, card_id, error_card(filename, f"Extraction failed: {exc}"))
@@ -335,6 +353,48 @@ class StandaloneTeamsBot(DocWainTeamsBot):
             await update_card(turn_context, card_id, done_card)
             logger.info("Pipeline complete for %s: %d chunks, grade=%s, type=%s, entities=%s",
                          filename, chunks_count, quality_grade, doc_type, intel.key_entities[:3])
+
+    async def _clear_documents(
+        self,
+        context: TeamsChatContext,
+        turn_context: TurnContext,
+        tenant_id: str,
+    ) -> None:
+        """Clear all documents from the Teams Qdrant collection and state."""
+        try:
+            from src.teams.pipeline import _build_teams_collection_name
+            from qdrant_client import QdrantClient
+            from src.api.config import Config
+
+            collection_name = _build_teams_collection_name(
+                context.subscription_id, context.profile_id,
+            )
+
+            client = QdrantClient(url=Config.Qdrant.URL, api_key=Config.Qdrant.API, timeout=30)
+
+            # Delete the entire collection
+            try:
+                client.delete_collection(collection_name)
+                logger.info("Deleted Qdrant collection %s", collection_name)
+            except Exception:
+                pass  # Collection may not exist
+
+            # Clear state store uploads
+            try:
+                self.orchestrator.state_store.clear_uploads(
+                    context.subscription_id, context.profile_id,
+                )
+            except Exception:
+                pass
+
+            await turn_context.send_activity(
+                "All documents and memory cleared. Upload new documents to get started fresh."
+            )
+            logger.info("Documents cleared for collection %s", collection_name)
+
+        except Exception as exc:
+            logger.error("Clear documents failed: %s", exc)
+            await turn_context.send_activity(f"Failed to clear documents: {exc}")
 
     async def _handle_onedrive_link(
         self,

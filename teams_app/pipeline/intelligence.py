@@ -77,6 +77,8 @@ async def analyze_document(
             content=text[:6000],
         )
 
+        logger.info("Analyzing document %s (%d chars) via LLM...", filename, len(text))
+
         raw = await asyncio.to_thread(
             gateway.generate,
             prompt,
@@ -85,21 +87,27 @@ async def analyze_document(
             max_tokens=1024,
         )
 
+        logger.info("LLM analysis response for %s: %d chars", filename, len(raw or ""))
+        logger.debug("Raw LLM response: %s", (raw or "")[:500])
+
         # Parse JSON from response (handle markdown code blocks)
         parsed = _parse_json(raw)
         if not parsed:
-            logger.warning("Failed to parse LLM analysis JSON for %s", filename)
+            logger.warning("Failed to parse LLM analysis JSON for %s. Raw: %s", filename, (raw or "")[:300])
             return DocumentIntelligence(doc_type=fallback_doc_type)
 
-        return DocumentIntelligence(
+        result = DocumentIntelligence(
             doc_type=parsed.get("doc_type", fallback_doc_type) or fallback_doc_type,
             summary=parsed.get("summary", ""),
             key_entities=parsed.get("key_entities", [])[:5],
             questions=parsed.get("questions", [])[:5],
         )
+        logger.info("Document intelligence for %s: type=%s, entities=%d, questions=%d",
+                     filename, result.doc_type, len(result.key_entities), len(result.questions))
+        return result
 
     except Exception as exc:
-        logger.warning("Document analysis failed for %s: %s", filename, exc)
+        logger.error("Document analysis failed for %s: %s", filename, exc, exc_info=True)
         return DocumentIntelligence(doc_type=fallback_doc_type)
 
 
