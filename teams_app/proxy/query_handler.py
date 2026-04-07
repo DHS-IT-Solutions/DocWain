@@ -31,11 +31,13 @@ class TeamsQueryHandler:
         self._cross_encoder_checked = False
 
     def _get_reasoner(self):
-        """Lazy-initialize the Reasoner (production answer generator)."""
+        """Lazy-initialize the Reasoner with an LLM gateway."""
         if self._reasoner is None:
             from src.generation.reasoner import Reasoner
-            self._reasoner = Reasoner()
-            logger.info("TeamsQueryHandler: Reasoner initialized")
+            from src.llm.gateway import create_llm_gateway
+            gateway = create_llm_gateway()
+            self._reasoner = Reasoner(llm_gateway=gateway)
+            logger.info("TeamsQueryHandler: Reasoner + LLM gateway initialized")
         return self._reasoner
 
     def _get_cross_encoder(self):
@@ -193,18 +195,32 @@ class TeamsQueryHandler:
         evidence = []
         for hit in results.points:
             payload = hit.payload or {}
-            text = payload.get("content", "") or payload.get("embedding_text", "") or payload.get("text", "")
+            # Handle both old (train_on_document) and new (teams embedder) payload schemas
+            text = (
+                payload.get("embedding_text")
+                or payload.get("content")
+                or payload.get("canonical_text")
+                or payload.get("text_clean")
+                or payload.get("text")
+                or ""
+            )
             if not text.strip():
                 continue
+            source = (
+                payload.get("source_file")
+                or payload.get("source_name")
+                or payload.get("filename")
+                or "Document"
+            )
             evidence.append({
                 "text": text,
                 "score": hit.score,
-                "source_name": payload.get("source_file", payload.get("filename", "Document")),
+                "source_name": source,
                 "section_title": payload.get("section_title", ""),
-                "section_path": payload.get("section_path", ""),
-                "page": payload.get("page_number", payload.get("page_start", "")),
+                "section_path": payload.get("section_path", payload.get("section_kind", "")),
+                "page": str(payload.get("page_number", payload.get("page", payload.get("page_start", "")))),
                 "document_id": payload.get("document_id", ""),
-                "doc_type": payload.get("doc_type", ""),
+                "doc_type": payload.get("doc_type", payload.get("doc_domain", "")),
                 "chunk_index": payload.get("chunk_index", 0),
                 "source_index": len(evidence),
             })
