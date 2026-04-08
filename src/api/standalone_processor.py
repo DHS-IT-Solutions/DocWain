@@ -273,35 +273,83 @@ def retrieve_and_generate(
 ) -> Dict[str, Any]:
     """Run retrieval + generation for *query* against *collection_name*.
 
-    Builds lightweight SimpleNamespace request/ctx objects accepted by
-    ``execute_request`` and returns a normalised answer dict.
+    Searches directly in the standalone Qdrant collection (not via the main
+    app's retrieval pipeline which uses subscription-scoped collections).
+    Then calls the LLM gateway for generation.
     """
-    request = SimpleNamespace(
-        query=query,
-        subscription_id=subscription_id,
-        profile_id=profile_id,
-        document_id=document_id,
-        system_prompt=system_prompt,
-        collection_name=collection_name,
-    )
-    ctx = SimpleNamespace(
-        query=query,
-        subscription_id=subscription_id,
-        profile_id=profile_id,
-        session_id=None,
-        collection_name=collection_name,
-    )
+    from src.api.config import Config
+    from src.embedding.model_loader import get_embedding_model
 
     try:
-        result = execute_request(request, session_state=None, ctx=ctx, debug=debug)
-        answer_data = result.answer if hasattr(result, "answer") else {}
-        if isinstance(answer_data, dict):
-            return answer_data
-        return {"answer": str(answer_data), "sources": [], "confidence": 0.0, "grounded": False}
+        # 1. Embed the query
+        model, _dim = get_embedding_model()
+        query_vec = model.encode([query], normalize_embeddings=True)[0].tolist()
+
+        # 2. Search in the standalone collection
+        qdrant = QdrantClient(url=Config.Qdrant.URL, api_key=Config.Qdrant.API)
+        results = qdrant.search(
+            collection_name=collection_name,
+            query_vector=query_vec,
+            limit=12,
+        )
+
+        if not results:
+            return {
+                "response": "No relevant content found in the document.",
+                "sources": [],
+                "confidence": 0.0,
+                "grounded": False,
+                "context_found": False,
+            }
+
+        # 3. Build context from retrieved chunks
+        context_parts = []
+        sources = []
+        for hit in results:
+            payload = hit.payload or {}
+            text = payload.get("text", "")
+            if text.strip():
+                context_parts.append(text)
+                sources.append({
+                    "page": payload.get("page_start") or payload.get("page"),
+                    "section": payload.get("section_title", ""),
+                    "score": round(hit.score, 3),
+                    "source_filename": payload.get("source_filename", ""),
+                })
+
+        context = "\n\n---\n\n".join(context_parts)
+
+        # 4. Generate answer via LLM
+        from src.llm.gateway import get_llm_gateway
+        llm = get_llm_gateway()
+
+        sys_prompt = system_prompt or (
+            "You are DocWain, a document intelligence system. Answer the user's "
+            "question based solely on the provided document content. Cite specific "
+            "pages and sections. If the information is not in the document, say so."
+        )
+        user_prompt = f"Document content:\n\n{context}\n\n---\n\nQuestion: {query}"
+
+        response_text, metadata = llm.generate_with_metadata(
+            prompt=user_prompt,
+            system=sys_prompt,
+            max_tokens=2048,
+        )
+
+        confidence = 0.8 if context_parts else 0.0
+        return {
+            "response": response_text or "",
+            "sources": sources,
+            "confidence": confidence,
+            "grounded": bool(context_parts),
+            "context_found": bool(context_parts),
+            "metadata": metadata or {},
+        }
+
     except Exception as exc:  # noqa: BLE001
         logger.error("retrieve_and_generate failed: %s", exc)
         return {
-            "answer": "",
+            "response": "",
             "sources": [],
             "confidence": 0.0,
             "grounded": False,
@@ -539,7 +587,7 @@ def process_document(
     usage["generation_ms"] = int((time.monotonic() - t0) * 1000)
     usage["total_ms"] = int((time.monotonic() - t_start) * 1000)
 
-    answer_text: str = gen_result.get("answer", "") or ""
+    answer_text: str = gen_result.get("response", "") or gen_result.get("answer", "") or ""
     sources: List[Dict[str, Any]] = gen_result.get("sources", []) or []
     confidence: float = float(gen_result.get("confidence", 0.0) or 0.0)
     grounded: bool = bool(gen_result.get("grounded", False))
@@ -618,7 +666,7 @@ def query_persisted_document(
 
     total_ms = int((time.monotonic() - t_start) * 1000)
 
-    answer_text: str = gen_result.get("answer", "") or ""
+    answer_text: str = gen_result.get("response", "") or gen_result.get("answer", "") or ""
     sources: List[Dict[str, Any]] = gen_result.get("sources", []) or []
     confidence: float = float(gen_result.get("confidence", 0.0) or 0.0)
     grounded: bool = bool(gen_result.get("grounded", False))
