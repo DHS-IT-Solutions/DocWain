@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from src.api.config import Config
 from src.api.standalone_auth import require_api_key, track_document_processed, track_usage
 from src.api.standalone_schemas import (
+    ApiKeyCreateRequest,
+    ApiKeyCreateResponse,
     AsyncAcceptedResponse,
     BatchResponse,
     DocumentStatusResponse,
@@ -668,3 +670,53 @@ async def list_templates():
         for t in _list_templates()
     ]
     return TemplatesResponse(templates=templates)
+
+
+# ── POST /keys — generate a new API key ─────────────────────────
+
+@standalone_router.post("/keys", response_model=ApiKeyCreateResponse)
+async def create_api_key_endpoint(
+    body: ApiKeyCreateRequest,
+):
+    """Generate a new API key. The raw key is returned only once — save it.
+
+    No authentication required (this is how the first key gets created).
+    In production, protect this endpoint via network-level controls or
+    add a master secret header.
+    """
+    from pymongo import MongoClient
+    from src.api.standalone_auth import generate_api_key
+
+    raw_key, key_hash = generate_api_key()
+    key_prefix = raw_key[:10] + "..."
+    now = datetime.now(timezone.utc).isoformat()
+
+    doc = {
+        "key_hash": key_hash,
+        "key_prefix": key_prefix,
+        "name": body.name,
+        "created_at": now,
+        "active": True,
+        "permissions": ["process", "extract", "batch", "query"],
+        "usage": {
+            "total_requests": 0,
+            "last_used": None,
+            "requests_today": 0,
+            "documents_processed": 0,
+        },
+    }
+    if body.subscription_id:
+        doc["subscription_id"] = body.subscription_id
+
+    client = MongoClient(Config.MongoDB.URI)
+    db = client[Config.MongoDB.DB]
+    col = db[Config.Standalone.API_KEYS_COLLECTION]
+    col.insert_one(doc)
+
+    return ApiKeyCreateResponse(
+        api_key=raw_key,
+        name=body.name,
+        key_prefix=key_prefix,
+        subscription_id=body.subscription_id,
+        created_at=now,
+    )

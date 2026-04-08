@@ -202,6 +202,23 @@ class UsageResponse(BaseModel):
     recent: List[Dict[str, Any]]
 
 
+class ApiKeyCreateRequest(BaseModel):
+    """Request body for API key creation."""
+
+    name: str
+    subscription_id: Optional[str] = None
+
+
+class ApiKeyCreateResponse(BaseModel):
+    """Response after creating an API key. The raw key is shown only once."""
+
+    api_key: str
+    name: str
+    key_prefix: str
+    subscription_id: Optional[str] = None
+    created_at: str
+
+
 class StandaloneErrorDetail(BaseModel):
     """Detailed error information."""
 
