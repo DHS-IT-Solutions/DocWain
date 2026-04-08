@@ -65,7 +65,7 @@ class Config:
         API = _secret("QDRANT_API_KEY", "")
 
     class Neo4j:
-        URI = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
+        URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         USER = os.getenv("NEO4J_USER", "neo4j")
         PASSWORD = _secret("NEO4J_PASSWORD", "")
         DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
@@ -101,7 +101,7 @@ class Config:
     class Model:
         EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
         EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
-        OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3")
+        OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-large-en-v1.5")
         SENTENCE_TRANSFORMERS = EMBEDDING_MODEL
         SENTENCE_TRANSFORMERS_FALLBACK = SENTENCE_TRANSFORMERS
         SENTENCE_TRANSFORMERS_CANDIDATES = [
@@ -198,6 +198,16 @@ class Config:
         UNSAFE_KEY_PATTERNS = os.getenv("REDIS_UNSAFE_KEY_PATTERNS", "dw:plan:*,rag:*").strip()
         CLEAR_SCAN_COUNT = int(os.getenv("REDIS_CLEAR_SCAN_COUNT", "200"))
         CLEAR_MAX_KEYS = int(os.getenv("REDIS_CLEAR_MAX_KEYS", "5000"))
+
+    class Standalone:
+        ENABLED = os.getenv("DOCWAIN_STANDALONE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        TEMP_COLLECTION_TTL = int(os.getenv("STANDALONE_TEMP_TTL", "3600"))
+        MAX_BATCH_FILES = int(os.getenv("STANDALONE_MAX_BATCH", "10"))
+        MAX_FILE_SIZE_MB = int(os.getenv("STANDALONE_MAX_FILE_MB", "50"))
+        WEBHOOK_MAX_WORKERS = int(os.getenv("STANDALONE_WEBHOOK_WORKERS", "4"))
+        WEBHOOK_MAX_RETRIES = int(os.getenv("STANDALONE_WEBHOOK_RETRIES", "3"))
+        API_KEYS_COLLECTION = os.getenv("STANDALONE_KEYS_COLLECTION", "api_keys")
+        REQUESTS_COLLECTION = os.getenv("STANDALONE_REQUESTS_COLLECTION", "standalone_requests")
 
     class Teams:
         SHARED_SECRET = _secret("TEAMS_SHARED_SECRET", "")
