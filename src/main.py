@@ -179,6 +179,13 @@ app.add_middleware(
 # Add correlation ID middleware for request tracing
 app.add_middleware(CorrelationIdMiddleware)
 
+# Add IP auto-block middleware (outermost — added last so it runs first)
+try:
+    from src.middleware.ip_block import IPBlockMiddleware
+    app.add_middleware(IPBlockMiddleware)
+except ImportError:
+    pass
+
 api_router.include_router(documents_router, tags=["Documents"])
 api_router.include_router(profiles_router)
 api_router.include_router(profile_docs_router)

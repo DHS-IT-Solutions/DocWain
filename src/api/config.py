@@ -199,6 +199,12 @@ class Config:
         CLEAR_SCAN_COUNT = int(os.getenv("REDIS_CLEAR_SCAN_COUNT", "200"))
         CLEAR_MAX_KEYS = int(os.getenv("REDIS_CLEAR_MAX_KEYS", "5000"))
 
+    class Security:
+        BLOCK_THRESHOLD = int(os.getenv("SECURITY_BLOCK_THRESHOLD", "5"))
+        BLOCK_WINDOW_SECONDS = int(os.getenv("SECURITY_BLOCK_WINDOW", "60"))
+        WHITELIST_IPS = os.getenv("SECURITY_WHITELIST_IPS", "127.0.0.1,::1")
+        BLOCKED_IPS_FILE = os.getenv("SECURITY_BLOCKED_IPS_FILE", "data/blocked_ips.json")
+
     class Standalone:
         ENABLED = os.getenv("DOCWAIN_STANDALONE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         TEMP_COLLECTION_TTL = int(os.getenv("STANDALONE_TEMP_TTL", "3600"))
