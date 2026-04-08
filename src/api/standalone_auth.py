@@ -163,7 +163,7 @@ async def require_api_key(
     return {
         "key_hash": doc.get("key_hash"),
         "name": doc.get("name"),
-        "subscription_id": doc.get("subscription_id"),
+        "subscription_id": doc.get("subscription_id", "standalone"),
         "permissions": doc.get("permissions", []),
         "keys_collection": keys_collection,
     }

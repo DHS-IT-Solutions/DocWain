@@ -35,7 +35,6 @@ def cmd_create(args):
         "key_hash": key_hash,
         "key_prefix": key_prefix,
         "name": args.name,
-        "subscription_id": args.subscription_id,
         "created_at": datetime.now(tz=timezone.utc),
         "active": True,
         "permissions": ["process", "extract", "batch", "query"],
@@ -46,6 +45,8 @@ def cmd_create(args):
             "documents_processed": 0,
         },
     }
+    if args.subscription_id:
+        doc["subscription_id"] = args.subscription_id
 
     col = get_collection()
     col.insert_one(doc)
@@ -54,7 +55,8 @@ def cmd_create(args):
     print("API key created successfully.")
     print()
     print(f"  Name            : {args.name}")
-    print(f"  Subscription ID : {args.subscription_id}")
+    if args.subscription_id:
+        print(f"  Subscription ID : {args.subscription_id}")
     print(f"  Key prefix      : {key_prefix}")
     print()
     print("  *** SAVE THIS KEY — it will NOT be shown again ***")
@@ -179,8 +181,8 @@ def build_parser() -> argparse.ArgumentParser:
     # create
     p_create = subparsers.add_parser("create", help="Create a new API key.")
     p_create.add_argument("--name", required=True, help="Human-readable name for this key (e.g. 'Partner X').")
-    p_create.add_argument("--subscription-id", required=True, dest="subscription_id",
-                          help="Subscription ID to associate with this key.")
+    p_create.add_argument("--subscription-id", required=False, default=None, dest="subscription_id",
+                          help="Optional subscription ID to associate with this key.")
     p_create.set_defaults(func=cmd_create)
 
     # list
