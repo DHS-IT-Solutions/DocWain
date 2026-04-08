@@ -506,8 +506,8 @@ async def upload_document(
     filename = file.filename or name or "upload"
 
     extracted = extract_from_bytes(content, filename)
-    _intel = run_intelligence(extracted, document_id)
-    chunk_count = chunk_and_embed(extracted, document_id, collection_name)
+    _intel = run_intelligence(extracted, document_id, filename=filename)
+    chunk_count = chunk_and_embed(extracted, document_id, collection_name, filename=filename)
 
     pages = getattr(extracted, "pages", None) or 1
     document_type = getattr(extracted, "document_type", None) or "unknown"

@@ -205,15 +205,10 @@ def process_multi_documents(
                 content: bytes = file_dict["content"]
                 filename: str = file_dict.get("filename", "unknown")
 
-                extraction = extract_from_bytes(content, filename=filename)
-                intelligence = run_intelligence(extraction, mode=mode)
-                chunk_and_embed(
-                    extraction,
-                    intelligence,
-                    collection_name,
-                    document_id=filename,
-                    subscription_id=subscription_id,
-                )
+                extraction = extract_from_bytes(content, filename)
+                doc_id = f"doc-{uuid.uuid4().hex[:8]}"
+                run_intelligence(extraction, doc_id, filename=filename)
+                chunk_and_embed(extraction, doc_id, collection_name, filename=filename)
 
         # ------------------------------------------------------------------
         # Retrieve and generate across the shared collection

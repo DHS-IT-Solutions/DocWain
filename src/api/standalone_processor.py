@@ -148,14 +148,18 @@ def extract_from_bytes(content: bytes, filename: str):
 # ---------------------------------------------------------------------------
 
 
-def run_intelligence(extracted, document_id: str) -> Dict[str, Any]:
+def run_intelligence(extracted, document_id: str, filename: str = "document") -> Dict[str, Any]:
     """Run document intelligence on *extracted* if the module is available.
 
     Returns a result dict.  Gracefully handles ImportError and runtime errors.
     """
     try:
         from src.intelligence.integration import process_document_intelligence  # type: ignore
-        return process_document_intelligence(extracted, document_id) or {}
+        return process_document_intelligence(
+            document_id=document_id,
+            content=extracted.full_text,
+            filename=filename,
+        ) or {}
     except ImportError:
         logger.debug("Intelligence module not available — skipping")
         return {}
@@ -174,7 +178,7 @@ from qdrant_client import QdrantClient  # noqa: E402
 from qdrant_client.models import Distance, VectorParams, PointStruct  # noqa: E402
 
 
-def chunk_and_embed(extracted, document_id: str, collection_name: str) -> int:
+def chunk_and_embed(extracted, document_id: str, collection_name: str, filename: str = "document") -> int:
     """Chunk, embed, and index *extracted* into a Qdrant collection.
 
     Returns the number of chunks indexed.
@@ -182,16 +186,25 @@ def chunk_and_embed(extracted, document_id: str, collection_name: str) -> int:
     from src.api.config import Config
 
     chunker = SectionChunker()
-    chunks = chunker.chunk(extracted)
+    chunks = chunker.chunk_document(
+        extracted,
+        doc_internal_id=document_id,
+        source_filename=filename,
+    )
     if not chunks:
         return 0
 
-    model, dim = get_embedding_model()
-    texts = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in chunks]
-    texts = [t for t in texts if t.strip()]
-    if not texts:
+    # Filter to chunks with non-empty text
+    valid_chunks = []
+    for c in chunks:
+        text = c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "")
+        if text.strip():
+            valid_chunks.append(c)
+    if not valid_chunks:
         return 0
 
+    model, dim = get_embedding_model()
+    texts = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in valid_chunks]
     embeddings = model.encode(texts)
 
     qdrant = QdrantClient(url=Config.Qdrant.URL, api_key=Config.Qdrant.API)
@@ -206,19 +219,16 @@ def chunk_and_embed(extracted, document_id: str, collection_name: str) -> int:
         pass
 
     points = []
-    for idx, (chunk, vec) in enumerate(zip(chunks, embeddings)):
-        if isinstance(chunk, dict):
-            meta = chunk.get("metadata", {})
-            text = chunk.get("text", "")
-        else:
-            meta = getattr(chunk, "metadata", {}) or {}
-            text = getattr(chunk, "text", "")
-
+    for idx, (chunk, vec) in enumerate(zip(valid_chunks, embeddings)):
+        text = chunk.get("text", "") if isinstance(chunk, dict) else getattr(chunk, "text", "")
         payload = {
             "text": text,
             "document_id": document_id,
             "chunk_index": idx,
-            **meta,
+            "section_title": getattr(chunk, "section_title", ""),
+            "page_start": getattr(chunk, "page_start", None),
+            "page_end": getattr(chunk, "page_end", None),
+            "source_filename": getattr(chunk, "source_filename", filename),
         }
         points.append(
             PointStruct(
@@ -498,12 +508,12 @@ def process_document(
 
     # 2. Intelligence (optional enrichment)
     t0 = time.monotonic()
-    _intel = run_intelligence(extracted, document_id)
+    _intel = run_intelligence(extracted, document_id, filename=filename)
     usage["intelligence_ms"] = int((time.monotonic() - t0) * 1000)
 
     # 3. Chunk + embed
     t0 = time.monotonic()
-    chunk_count = chunk_and_embed(extracted, document_id, collection_name)
+    chunk_count = chunk_and_embed(extracted, document_id, collection_name, filename=filename)
     usage["retrieval_ms"] = int((time.monotonic() - t0) * 1000)
 
     # 4. Build prompt
