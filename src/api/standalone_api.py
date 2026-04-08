@@ -280,9 +280,14 @@ async def process(
         try:
             from src.api.standalone_output import convert_output
 
-            result["structured_output"] = convert_output(
+            converted = convert_output(
                 result["structured_output"], mode, output_format
             )
+            # convert_output returns str for non-json formats; wrap in dict for schema
+            if isinstance(converted, str):
+                result["structured_output"] = {"formatted": converted, "format": output_format}
+            else:
+                result["structured_output"] = converted
         except (ValueError, Exception) as exc:
             logger.warning("Output conversion failed: %s", exc)
 
@@ -463,7 +468,11 @@ async def extract(
         try:
             from src.api.standalone_output import convert_output
 
-            structured = convert_output(structured, mode, output_format)
+            converted = convert_output(structured, mode, output_format)
+            if isinstance(converted, str):
+                structured = {"formatted": converted, "format": output_format}
+            else:
+                structured = converted
         except (ValueError, Exception) as exc:
             logger.warning("Output conversion failed: %s", exc)
 
