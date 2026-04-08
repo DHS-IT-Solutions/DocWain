@@ -287,11 +287,13 @@ def retrieve_and_generate(
 
         # 2. Search in the standalone collection
         qdrant = QdrantClient(url=Config.Qdrant.URL, api_key=Config.Qdrant.API)
-        results = qdrant.search(
+        query_response = qdrant.query_points(
             collection_name=collection_name,
-            query_vector=query_vec,
+            query=query_vec,
             limit=12,
+            with_payload=True,
         )
+        results = query_response.points if hasattr(query_response, "points") else []
 
         if not results:
             return {
