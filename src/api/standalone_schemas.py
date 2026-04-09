@@ -115,6 +115,7 @@ class ProcessResponse(BaseModel):
     document_id: Optional[str] = None
     output_format: str = "json"
     partial_answer: Optional[str] = None
+    result_url: Optional[str] = None
     usage: UsageStats = Field(default_factory=UsageStats)
 
 

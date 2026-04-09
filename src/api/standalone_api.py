@@ -252,7 +252,7 @@ async def process(
 
     tmpl = get_template(template) if template else None
 
-    if callback_url:
+    if callback_url and callback_url.strip().startswith("http"):
         request_id = str(uuid.uuid4())
         _dispatch_async(
             callback_url=callback_url,
@@ -311,6 +311,7 @@ async def process(
     )
     _log_request(api_key, "process", mode, result, filename=file.filename)
 
+    result["result_url"] = f"/api/v1/docwain/requests/{result['request_id']}"
     return ProcessResponse(**result)
 
 
@@ -351,7 +352,7 @@ async def process_multi(
         "subscription_id": api_key.get("subscription_id", "standalone"),
     }
 
-    if callback_url:
+    if callback_url and callback_url.strip().startswith("http"):
         request_id = str(uuid.uuid4())
         _dispatch_async(
             callback_url=callback_url,
