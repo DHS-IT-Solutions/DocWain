@@ -202,6 +202,31 @@ class UsageResponse(BaseModel):
     recent: List[Dict[str, Any]]
 
 
+class ProcessedResultResponse(BaseModel):
+    """A stored processing result."""
+
+    request_id: Optional[str] = None
+    endpoint: Optional[str] = None
+    mode: Optional[str] = None
+    filename: Optional[str] = None
+    status: Optional[str] = None
+    answer: Optional[str] = None
+    sources: Optional[List[Dict[str, Any]]] = None
+    structured_output: Optional[Dict[str, Any]] = None
+    confidence: Optional[float] = None
+    document_id: Optional[str] = None
+    output_format: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None
+    logged_at: Optional[str] = None
+
+
+class ProcessedResultsListResponse(BaseModel):
+    """List of stored processing results."""
+
+    results: List[ProcessedResultResponse]
+    total: int
+
+
 class ApiKeyCreateRequest(BaseModel):
     """Request body for API key creation."""
 

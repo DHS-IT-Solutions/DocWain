@@ -26,6 +26,8 @@ from src.api.standalone_schemas import (
     DocumentUploadResponse,
     ExtractResponse,
     ProcessResponse,
+    ProcessedResultResponse,
+    ProcessedResultsListResponse,
     TemplateInfo,
     TemplatesResponse,
     UsageResponse,
@@ -136,8 +138,9 @@ def _log_request(
     endpoint: str,
     mode: str,
     result: Dict[str, Any],
+    filename: Optional[str] = None,
 ) -> None:
-    """Insert a request audit log entry into MongoDB."""
+    """Store the full processing result in MongoDB for later retrieval."""
     try:
         db = _get_db()
         collection = db[Config.Standalone.REQUESTS_COLLECTION]
@@ -148,9 +151,16 @@ def _log_request(
                 "subscription_id": api_key.get("subscription_id"),
                 "endpoint": endpoint,
                 "mode": mode,
-                "request_id": result.get("request_id"),
+                "filename": filename,
+                "request_id": result.get("request_id") or result.get("batch_id"),
                 "status": result.get("status"),
                 "confidence": result.get("confidence"),
+                "answer": result.get("answer"),
+                "sources": result.get("sources"),
+                "structured_output": result.get("structured_output"),
+                "document_id": result.get("document_id"),
+                "output_format": result.get("output_format", "json"),
+                "usage": result.get("usage"),
                 "logged_at": datetime.now(tz=timezone.utc).isoformat(),
             }
         )
@@ -299,7 +309,7 @@ async def process(
         endpoint="process",
         mode=mode,
     )
-    _log_request(api_key, "process", mode, result)
+    _log_request(api_key, "process", mode, result, filename=file.filename)
 
     return ProcessResponse(**result)
 
@@ -679,6 +689,93 @@ async def list_templates():
         for t in _list_templates()
     ]
     return TemplatesResponse(templates=templates)
+
+
+# ── GET /requests — list processed results ──────────────────────
+
+@standalone_router.get("/requests", response_model=ProcessedResultsListResponse)
+async def list_requests(
+    limit: int = 20,
+    offset: int = 0,
+    mode: Optional[str] = None,
+    api_key: Dict[str, Any] = Depends(require_api_key),
+):
+    """List all processed document results for this API key."""
+    db = _get_db()
+    col = db[Config.Standalone.REQUESTS_COLLECTION]
+
+    query_filter = {
+        "type": "request_log",
+        "key_hash": api_key["key_hash"],
+    }
+    if mode:
+        query_filter["mode"] = mode
+
+    total = col.count_documents(query_filter)
+    cursor = (
+        col.find(query_filter, {"_id": 0})
+        .sort("logged_at", -1)
+        .skip(offset)
+        .limit(limit)
+    )
+
+    results = []
+    for doc in cursor:
+        results.append(ProcessedResultResponse(
+            request_id=doc.get("request_id"),
+            endpoint=doc.get("endpoint"),
+            mode=doc.get("mode"),
+            filename=doc.get("filename"),
+            status=doc.get("status"),
+            answer=doc.get("answer"),
+            sources=doc.get("sources"),
+            structured_output=doc.get("structured_output"),
+            confidence=doc.get("confidence"),
+            document_id=doc.get("document_id"),
+            output_format=doc.get("output_format"),
+            usage=doc.get("usage"),
+            logged_at=doc.get("logged_at"),
+        ))
+
+    return ProcessedResultsListResponse(results=results, total=total)
+
+
+# ── GET /requests/{request_id} — get a specific result ──────────
+
+@standalone_router.get("/requests/{request_id}", response_model=ProcessedResultResponse)
+async def get_request(
+    request_id: str,
+    api_key: Dict[str, Any] = Depends(require_api_key),
+):
+    """Retrieve the full result of a previously processed document."""
+    db = _get_db()
+    col = db[Config.Standalone.REQUESTS_COLLECTION]
+
+    doc = col.find_one(
+        {"request_id": request_id, "key_hash": api_key["key_hash"]},
+        {"_id": 0},
+    )
+    if doc is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "NOT_FOUND", "message": f"Request {request_id} not found"}},
+        )
+
+    return ProcessedResultResponse(
+        request_id=doc.get("request_id"),
+        endpoint=doc.get("endpoint"),
+        mode=doc.get("mode"),
+        filename=doc.get("filename"),
+        status=doc.get("status"),
+        answer=doc.get("answer"),
+        sources=doc.get("sources"),
+        structured_output=doc.get("structured_output"),
+        confidence=doc.get("confidence"),
+        document_id=doc.get("document_id"),
+        output_format=doc.get("output_format"),
+        usage=doc.get("usage"),
+        logged_at=doc.get("logged_at"),
+    )
 
 
 # ── POST /keys — generate a new API key ─────────────────────────
