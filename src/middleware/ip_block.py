@@ -159,8 +159,26 @@ def get_block_manager() -> IPBlockManager:
 _BLOCKED_BODY = json.dumps({"error": {"code": "IP_BLOCKED", "message": "Access denied"}}).encode("utf-8")
 
 
+# Paths that no legitimate client would ever request.
+# A single hit on any of these triggers an instant permanent block.
+_HONEYPOT_PATTERNS = (
+    "/.env", "/.git/", "/wp-config", "/wp-admin", "/wp-login",
+    "/.aws/", "/credentials", "/master.key", "/secrets.",
+    "/terraform.", "/actuator/", "/debug/vars",
+    "/config.json", "/config.yaml", "/config.yml", "/config.toml",
+    "/application.properties", "/application.yml", "/application.yaml",
+    "/appsettings.", "/serverless.", "/docker-compose.",
+    "/.streamlit/", "/.flaskenv", "/.secrets",
+    "/backup/.env", "/backups/.env", "/old/.env", "/tmp/.env",
+    "/judge",
+)
+
+
 class IPBlockMiddleware:
-    """Pure ASGI middleware — blocks IPs with high 404 rates."""
+    """Pure ASGI middleware — blocks IPs with high 404 rates.
+
+    Also instantly blocks IPs that probe known scanner honeypot paths.
+    """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -175,6 +193,13 @@ class IPBlockMiddleware:
 
         # Fast reject for blocked IPs
         if self._manager.is_blocked(ip):
+            await self._send_403(send)
+            return
+
+        # Instant block for honeypot paths — no legitimate client requests these
+        path = scope.get("path", "")
+        if any(pattern in path for pattern in _HONEYPOT_PATTERNS):
+            self._manager.block(ip, reason=f"honeypot: {path}")
             await self._send_403(send)
             return
 

@@ -200,8 +200,8 @@ class Config:
         CLEAR_MAX_KEYS = int(os.getenv("REDIS_CLEAR_MAX_KEYS", "5000"))
 
     class Security:
-        BLOCK_THRESHOLD = int(os.getenv("SECURITY_BLOCK_THRESHOLD", "5"))
-        BLOCK_WINDOW_SECONDS = int(os.getenv("SECURITY_BLOCK_WINDOW", "60"))
+        BLOCK_THRESHOLD = int(os.getenv("SECURITY_BLOCK_THRESHOLD", "3"))
+        BLOCK_WINDOW_SECONDS = int(os.getenv("SECURITY_BLOCK_WINDOW", "300"))
         WHITELIST_IPS = os.getenv("SECURITY_WHITELIST_IPS", "127.0.0.1,::1")
         BLOCKED_IPS_FILE = os.getenv("SECURITY_BLOCKED_IPS_FILE", "data/blocked_ips.json")
 
