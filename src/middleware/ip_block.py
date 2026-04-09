@@ -198,10 +198,11 @@ class IPBlockMiddleware:
 
         # Instant block for honeypot paths — no legitimate client requests these
         path = scope.get("path", "")
-        if any(pattern in path for pattern in _HONEYPOT_PATTERNS):
-            self._manager.block(ip, reason=f"honeypot: {path}")
-            await self._send_403(send)
-            return
+        if not self._manager._whitelist or ip not in self._manager._whitelist:
+            if any(pattern in path for pattern in _HONEYPOT_PATTERNS):
+                self._manager.block(ip, reason=f"honeypot: {path}")
+                await self._send_403(send)
+                return
 
         # Intercept response to detect 404s
         response_status = 0
