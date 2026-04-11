@@ -12,6 +12,7 @@ from src.serving.config import (
 from src.serving.vllm_manager import VLLMManager
 from src.serving.model_router import IntentRouter, RouterResult
 from src.serving.fast_path import FastPathHandler
+from src.serving.metrics import record_request, get_metrics, reset_metrics
 
 __all__ = [
     "VLLMInstanceConfig",
@@ -25,4 +26,7 @@ __all__ = [
     "IntentRouter",
     "RouterResult",
     "FastPathHandler",
+    "record_request",
+    "get_metrics",
+    "reset_metrics",
 ]
