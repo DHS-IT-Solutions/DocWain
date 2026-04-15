@@ -190,10 +190,13 @@ class SprintTrainer:
             per_device_train_batch_size=self.config.sft_batch_size,
             gradient_accumulation_steps=self.config.sft_grad_accum,
             learning_rate=self.config.sft_lr,
+            lr_scheduler_type="cosine",
+            warmup_ratio=0.1,
             bf16=True,
             logging_steps=50,
             save_steps=500,
             save_total_limit=2,
+            report_to="none",
         )
 
         trainer = TRLSFTTrainer(
@@ -279,6 +282,7 @@ class SprintTrainer:
             logging_steps=50,
             save_steps=500,
             save_total_limit=2,
+            report_to="none",
         )
 
         trainer = TRLDPOTrainer(
