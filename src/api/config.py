@@ -205,16 +205,6 @@ class Config:
         WHITELIST_IPS = os.getenv("SECURITY_WHITELIST_IPS", "127.0.0.1,::1")
         BLOCKED_IPS_FILE = os.getenv("SECURITY_BLOCKED_IPS_FILE", "data/blocked_ips.json")
 
-    class Standalone:
-        ENABLED = os.getenv("DOCWAIN_STANDALONE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-        TEMP_COLLECTION_TTL = int(os.getenv("STANDALONE_TEMP_TTL", "3600"))
-        MAX_BATCH_FILES = int(os.getenv("STANDALONE_MAX_BATCH", "10"))
-        MAX_FILE_SIZE_MB = int(os.getenv("STANDALONE_MAX_FILE_MB", "50"))
-        WEBHOOK_MAX_WORKERS = int(os.getenv("STANDALONE_WEBHOOK_WORKERS", "4"))
-        WEBHOOK_MAX_RETRIES = int(os.getenv("STANDALONE_WEBHOOK_RETRIES", "3"))
-        API_KEYS_COLLECTION = os.getenv("STANDALONE_KEYS_COLLECTION", "api_keys")
-        REQUESTS_COLLECTION = os.getenv("STANDALONE_REQUESTS_COLLECTION", "standalone_requests")
-
     class Teams:
         SHARED_SECRET = _secret("TEAMS_SHARED_SECRET", "")
         SIGNATURE_ENABLED = os.getenv("TEAMS_SIGNATURE_ENABLED", "false").lower() == "true"

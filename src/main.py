@@ -214,11 +214,6 @@ def list_available_tools():
     return list_available_agents_with_capabilities()
 
 api_router.include_router(agents_router, tags=["Agents"])
-try:
-    from src.api.standalone_api import standalone_router
-    api_router.include_router(standalone_router, tags=["Standalone API"])
-except ImportError:
-    pass
 if _EXTRACTION_ROUTER_AVAILABLE and extraction_router:
     api_router.include_router(extraction_router, tags=["Extraction Pipeline"])
 if _INTELLIGENCE_ROUTER_AVAILABLE and intelligence_router:
