@@ -304,21 +304,35 @@ def _synthetic_fallback(
     difficulty: str = "medium",
     is_dpo: bool = False,
 ) -> Dict[str, Any]:
-    """Return placeholder example when Claude is not available."""
-    # Derive a rough topic from the first non-empty line of context
-    first_line = next((ln.strip() for ln in context.splitlines() if ln.strip()), "the document")
+    """Return placeholder example when Claude is not available.
+
+    Embeds the full document context in the question so every unique
+    document produces a unique training example (critical for dedup).
+    """
+    lines = [ln.strip() for ln in context.splitlines() if ln.strip()]
+    first_line = lines[0] if lines else "the document"
+    # Use enough context to make each example unique
+    snippet = "\n".join(lines[:20]) if len(lines) > 5 else context
+
     result: Dict[str, Any] = {
-        "question": f"What are the key details described in: {first_line[:60]}?",
-        "reasoning": (
-            f"Step 1: Read the document carefully.\n"
-            f"Step 2: Identify the main entities and values.\n"
-            f"Step 3: Summarise the findings at {difficulty} depth."
+        "question": (
+            f"Analyze the following document and extract all key information.\n\n"
+            f"{context}"
         ),
-        "answer": f"Based on the document, the key details are as described in the {difficulty}-level analysis.",
+        "reasoning": (
+            f"Step 1: I will read this document carefully. It begins with: {first_line}\n"
+            f"Step 2: Identify all entities, dates, amounts, and relationships.\n"
+            f"Step 3: Provide a {difficulty}-depth analysis covering all details."
+        ),
+        "answer": (
+            f"Based on analysis of the document, here are the key details:\n\n"
+            f"{snippet}\n\n"
+            f"The document contains the information shown above. All values are extracted directly from the source."
+        ),
     }
     if is_dpo:
-        result["rejected_reasoning"] = "I assume standard industry values without reading carefully."
-        result["rejected_answer"] = "0 items found."
+        result["rejected_reasoning"] = "I'll quickly scan without reading carefully."
+        result["rejected_answer"] = "0 items found. The document does not contain extractable information."
     return result
 
 

@@ -164,17 +164,17 @@ class SprintOrchestrator:
         sft_path = self.artifacts_dir / "phase1_sft.jsonl"
         output_dir = self.artifacts_dir / "phase1_sft_model"
         logger.info("Phase 1 SFT training → %s", output_dir)
-        self.trainer.train_sft(sft_path, output_dir)
-        self.state.best_checkpoint = str(output_dir)
+        merged_path = self.trainer.train_sft(sft_path, output_dir)
+        self.state.best_checkpoint = str(merged_path)
         self.state.save()
 
     def _run_phase1_dpo(self) -> None:
         dpo_path = self.artifacts_dir / "phase1_dpo.jsonl"
-        sft_model = Path(self.state.best_checkpoint) if self.state.best_checkpoint else self.artifacts_dir / "phase1_sft_model"
+        sft_model = self.state.best_checkpoint or str(self.artifacts_dir / "phase1_sft_model" / "merged_16bit")
         output_dir = self.artifacts_dir / "phase1_dpo_model"
         logger.info("Phase 1 DPO training → %s", output_dir)
-        self.trainer.train_dpo(dpo_path, sft_model, output_dir)
-        self.state.best_checkpoint = str(output_dir)
+        merged_path = self.trainer.train_dpo(dpo_path, sft_model, output_dir)
+        self.state.best_checkpoint = str(merged_path)
         self.state.save()
 
     def _run_phase1_gate(self) -> None:
@@ -225,20 +225,19 @@ class SprintOrchestrator:
 
     def _run_phase2_sft(self) -> None:
         sft_path = self.artifacts_dir / "phase2_sft.jsonl"
-        base_model = Path(self.state.best_checkpoint) if self.state.best_checkpoint else self.artifacts_dir / "phase1_dpo_model"
         output_dir = self.artifacts_dir / "phase2_sft_model"
         logger.info("Phase 2 SFT training → %s", output_dir)
-        self.trainer.train_sft(sft_path, output_dir)
-        self.state.best_checkpoint = str(output_dir)
+        merged_path = self.trainer.train_sft(sft_path, output_dir)
+        self.state.best_checkpoint = str(merged_path)
         self.state.save()
 
     def _run_phase2_dpo(self) -> None:
         dpo_path = self.artifacts_dir / "phase2_dpo.jsonl"
-        sft_model = Path(self.state.best_checkpoint) if self.state.best_checkpoint else self.artifacts_dir / "phase2_sft_model"
+        sft_model = self.state.best_checkpoint or str(self.artifacts_dir / "phase2_sft_model" / "merged_16bit")
         output_dir = self.artifacts_dir / "phase2_dpo_model"
         logger.info("Phase 2 DPO training → %s", output_dir)
-        self.trainer.train_dpo(dpo_path, sft_model, output_dir)
-        self.state.best_checkpoint = str(output_dir)
+        merged_path = self.trainer.train_dpo(dpo_path, sft_model, output_dir)
+        self.state.best_checkpoint = str(merged_path)
         self.state.save()
 
     def _run_final_gate(self) -> None:
