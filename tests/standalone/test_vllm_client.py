@@ -146,6 +146,33 @@ async def test_health_check():
 
 
 @pytest.mark.asyncio
+async def test_extract_image_sends_multimodal():
+    from standalone.vllm_client import VLLMClient
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": '{"document_type": "receipt"}'}}]
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client._client = mock_client
+
+    image_data_uri = "data:image/png;base64,iVBORw0KGgo="
+    await client.extract(image_data_uri, output_format="json", prompt=None)
+
+    body = mock_client.post.call_args.kwargs["json"]
+    user_content = body["messages"][1]["content"]
+    # Should be a list (multimodal) not a string
+    assert isinstance(user_content, list)
+    assert any(item["type"] == "image_url" for item in user_content)
+
+
+@pytest.mark.asyncio
 async def test_health_check_failure():
     from standalone.vllm_client import VLLMClient
     import httpx

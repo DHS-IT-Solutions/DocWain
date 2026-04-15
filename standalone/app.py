@@ -1,12 +1,19 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from standalone.config import Config
 from standalone.dependencies import cleanup, get_vllm_client
+
+logger = logging.getLogger("standalone")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.basicConfig(level=getattr(logging, Config.LOG_LEVEL.upper(), logging.INFO))
+    if not Config.ADMIN_SECRET:
+        logger.warning("STANDALONE_ADMIN_SECRET is not set — admin endpoints will reject all requests")
     yield
     await cleanup()
 

@@ -1,3 +1,4 @@
+import base64
 import csv
 import io
 from pathlib import Path
@@ -70,7 +71,7 @@ def read_file(filename: str, data: bytes) -> str:
         return _read_xlsx(data)
 
     if file_type == "image":
-        return f"[Image file: {filename}]"
+        return _read_image(filename, data)
 
     raise UnsupportedFileType(f"Unsupported file type: {filename}")
 
@@ -83,6 +84,10 @@ def read_file_with_metadata(filename: str, data: bytes) -> tuple[str, dict]:
         "filename": filename,
         "size_bytes": len(data),
     }
+    if file_type == "pdf":
+        meta["pages"] = _count_pdf_pages(data)
+    elif file_type == "image":
+        meta["pages"] = 1
     return content, meta
 
 
@@ -147,3 +152,30 @@ def _read_xlsx(data: bytes) -> str:
         raise ImportError(
             "openpyxl is required for Excel processing. Install with: pip install openpyxl"
         )
+
+
+def _read_image(filename: str, data: bytes) -> str:
+    ext = Path(filename).suffix.lower().lstrip(".")
+    mime_map = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "tiff": "image/tiff",
+        "tif": "image/tiff",
+        "bmp": "image/bmp",
+        "webp": "image/webp",
+    }
+    mime = mime_map.get(ext, "image/png")
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+
+
+def _count_pdf_pages(data: bytes) -> int:
+    try:
+        import fitz
+        doc = fitz.open(stream=data, filetype="pdf")
+        count = len(doc)
+        doc.close()
+        return count
+    except (ImportError, Exception):
+        return 1

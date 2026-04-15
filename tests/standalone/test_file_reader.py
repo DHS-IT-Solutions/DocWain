@@ -75,3 +75,27 @@ def test_read_file_metadata():
     assert isinstance(content, str)
     assert meta["file_type"] == "csv"
     assert meta["size_bytes"] == len(b"a,b\n1,2\n3,4\n")
+
+
+def test_read_image_returns_base64_data_uri():
+    from standalone.file_reader import read_file
+
+    # A tiny 1x1 PNG
+    png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 50
+    content = read_file("photo.png", png_data)
+    assert content.startswith("data:image/png;base64,")
+
+
+def test_read_image_jpeg_mime():
+    from standalone.file_reader import read_file
+
+    content = read_file("photo.jpg", b"\xff\xd8\xff dummy jpeg")
+    assert content.startswith("data:image/jpeg;base64,")
+
+
+def test_image_metadata_has_pages():
+    from standalone.file_reader import read_file_with_metadata
+
+    _, meta = read_file_with_metadata("photo.png", b"\x89PNG dummy")
+    assert meta["file_type"] == "image"
+    assert meta["pages"] == 1

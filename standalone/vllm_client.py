@@ -40,23 +40,13 @@ class VLLMClient:
 
     async def extract(self, text: str, output_format: str, prompt: str | None) -> str:
         system = EXTRACT_SYSTEM_PROMPT.format(output_format=output_format)
-        user_parts = []
-        if prompt:
-            user_parts.append(f"Additional instructions: {prompt}\n\n")
-        user_parts.append(f"Document content:\n{text}")
-        user_content = "".join(user_parts)
-
-        return await self._call(system, user_content)
+        user_msg = self._build_user_message(text, prompt)
+        return await self._call(system, user_msg)
 
     async def analyze(self, text: str, analysis_type: str, prompt: str | None) -> str:
         system = ANALYZE_SYSTEM_PROMPT.format(analysis_type=analysis_type)
-        user_parts = []
-        if prompt:
-            user_parts.append(f"Additional instructions: {prompt}\n\n")
-        user_parts.append(f"Document content:\n{text}")
-        user_content = "".join(user_parts)
-
-        return await self._call(system, user_content)
+        user_msg = self._build_user_message(text, prompt)
+        return await self._call(system, user_msg)
 
     async def health_check(self) -> bool:
         try:
@@ -66,7 +56,26 @@ class VLLMClient:
         except (httpx.ConnectError, httpx.TimeoutException):
             return False
 
-    async def _call(self, system: str, user: str) -> str:
+    @staticmethod
+    def _build_user_message(text: str, prompt: str | None) -> str | list:
+        parts = []
+        if prompt:
+            parts.append(f"Additional instructions: {prompt}\n\n")
+
+        if text.startswith("data:image/"):
+            # Multimodal: image as base64 data URI
+            if parts:
+                parts.append("Analyze this image:")
+            content = []
+            if parts:
+                content.append({"type": "text", "text": "".join(parts)})
+            content.append({"type": "image_url", "image_url": {"url": text}})
+            return content
+
+        parts.append(f"Document content:\n{text}")
+        return "".join(parts)
+
+    async def _call(self, system: str, user: str | list) -> str:
         resp = await self._client.post(
             f"{self._base_url}/chat/completions",
             json={
