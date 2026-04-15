@@ -169,6 +169,8 @@ class SprintOrchestrator:
         self.state.save()
 
     def _run_phase1_dpo(self) -> None:
+        from src.finetune.sprint.trainer import cleanup_old_model
+
         dpo_path = self.artifacts_dir / "phase1_dpo.jsonl"
         sft_model = self.state.best_checkpoint or str(self.artifacts_dir / "phase1_sft_model" / "merged_16bit")
         output_dir = self.artifacts_dir / "phase1_dpo_model"
@@ -176,6 +178,9 @@ class SprintOrchestrator:
         merged_path = self.trainer.train_dpo(dpo_path, sft_model, output_dir)
         self.state.best_checkpoint = str(merged_path)
         self.state.save()
+
+        # Clean up SFT model — DPO model supersedes it
+        cleanup_old_model(self.artifacts_dir / "phase1_sft_model")
 
     def _run_phase1_gate(self) -> None:
         passed = self._run_eval_gate(
@@ -224,6 +229,8 @@ class SprintOrchestrator:
         logger.info("Phase 2 data ready: sft=%s dpo=%s", sft_path, dpo_path)
 
     def _run_phase2_sft(self) -> None:
+        from src.finetune.sprint.trainer import cleanup_old_model
+
         sft_path = self.artifacts_dir / "phase2_sft.jsonl"
         output_dir = self.artifacts_dir / "phase2_sft_model"
         logger.info("Phase 2 SFT training → %s", output_dir)
@@ -231,7 +238,12 @@ class SprintOrchestrator:
         self.state.best_checkpoint = str(merged_path)
         self.state.save()
 
+        # Clean up Phase 1 DPO model — Phase 2 SFT supersedes it
+        cleanup_old_model(self.artifacts_dir / "phase1_dpo_model")
+
     def _run_phase2_dpo(self) -> None:
+        from src.finetune.sprint.trainer import cleanup_old_model
+
         dpo_path = self.artifacts_dir / "phase2_dpo.jsonl"
         sft_model = self.state.best_checkpoint or str(self.artifacts_dir / "phase2_sft_model" / "merged_16bit")
         output_dir = self.artifacts_dir / "phase2_dpo_model"
@@ -239,6 +251,9 @@ class SprintOrchestrator:
         merged_path = self.trainer.train_dpo(dpo_path, sft_model, output_dir)
         self.state.best_checkpoint = str(merged_path)
         self.state.save()
+
+        # Clean up Phase 2 SFT model — DPO model supersedes it
+        cleanup_old_model(self.artifacts_dir / "phase2_sft_model")
 
     def _run_final_gate(self) -> None:
         passed = self._run_eval_gate(

@@ -5,12 +5,34 @@ JSON and logs a warning) so the module remains importable in environments
 without GPU / Unsloth installed.
 """
 
+import gc
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _cleanup_checkpoints(checkpoints_dir: Path) -> None:
+    """Delete intermediate training checkpoints to free disk space."""
+    if checkpoints_dir.exists():
+        size_mb = sum(f.stat().st_size for f in checkpoints_dir.rglob("*") if f.is_file()) / (1024 * 1024)
+        shutil.rmtree(checkpoints_dir, ignore_errors=True)
+        logger.info("Cleaned up checkpoints at %s (freed ~%.0f MB)", checkpoints_dir, size_mb)
+
+
+def cleanup_old_model(model_dir: Path) -> None:
+    """Delete a previous phase's merged model to free disk space.
+
+    Call this after the next phase has successfully produced its own merged model.
+    """
+    if model_dir.exists() and model_dir.is_dir():
+        size_mb = sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file()) / (1024 * 1024)
+        shutil.rmtree(model_dir, ignore_errors=True)
+        logger.info("Cleaned up old model at %s (freed ~%.0f MB)", model_dir, size_mb)
+    gc.collect()
 
 # Difficulty ordering for curriculum learning
 _DIFFICULTY_ORDER = {"easy": 0, "medium": 1, "hard": 2}
@@ -212,6 +234,10 @@ class SprintTrainer:
         merged_dir = output_dir / "merged_16bit"
         model.save_pretrained_merged(str(merged_dir), tokenizer, save_method="merged_16bit")
         logger.info("SFT complete. Merged model saved to %s", merged_dir)
+
+        # Clean intermediate checkpoints to free disk
+        _cleanup_checkpoints(output_dir / "checkpoints")
+
         return merged_dir
 
     def train_dpo(
@@ -297,4 +323,8 @@ class SprintTrainer:
         merged_dir = output_dir / "merged_16bit"
         model.save_pretrained_merged(str(merged_dir), tokenizer, save_method="merged_16bit")
         logger.info("DPO complete. Merged model saved to %s", merged_dir)
+
+        # Clean intermediate checkpoints to free disk
+        _cleanup_checkpoints(output_dir / "checkpoints")
+
         return merged_dir
