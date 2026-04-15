@@ -31,8 +31,7 @@ def test_generate_api_key_format():
     assert len(key) == 6 + 48  # prefix + 48 hex chars
 
 
-@pytest.mark.asyncio
-async def test_validate_api_key_success():
+def test_validate_api_key_success():
     from standalone.auth import validate_api_key
 
     raw_key = "dw_sa_" + "a" * 48
@@ -43,19 +42,18 @@ async def test_validate_api_key_success():
         "key_hash": key_hash, "active": True, "name": "Test",
     })
 
-    result = await validate_api_key(raw_key, mock_collection)
+    result = validate_api_key(raw_key, mock_collection)
     assert result["name"] == "Test"
     mock_collection.find_one.assert_called_once_with({"key_hash": key_hash, "active": True})
 
 
-@pytest.mark.asyncio
-async def test_validate_api_key_not_found():
+def test_validate_api_key_not_found():
     from standalone.auth import validate_api_key
 
     mock_collection = MagicMock()
     mock_collection.find_one = MagicMock(return_value=None)
 
-    result = await validate_api_key("dw_sa_bad", mock_collection)
+    result = validate_api_key("dw_sa_bad", mock_collection)
     assert result is None
 
 

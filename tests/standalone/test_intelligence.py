@@ -34,7 +34,7 @@ def test_intelligence_success():
     app, _ = _make_app()
     client = TestClient(app)
 
-    with patch("standalone.endpoints.intelligence.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.intelligence.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/intelligence",
             headers={"X-Api-Key": "dw_sa_test"},
@@ -52,7 +52,7 @@ def test_intelligence_with_analysis_type():
     app, _ = _make_app()
     client = TestClient(app)
 
-    with patch("standalone.endpoints.intelligence.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.intelligence.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/intelligence",
             headers={"X-Api-Key": "dw_sa_test"},
@@ -69,7 +69,7 @@ def test_intelligence_with_prompt():
     app, mock_vllm = _make_app()
     client = TestClient(app)
 
-    with patch("standalone.endpoints.intelligence.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.intelligence.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/intelligence",
             headers={"X-Api-Key": "dw_sa_test"},
@@ -98,7 +98,7 @@ def test_intelligence_invalid_analysis_type():
     app, _ = _make_app()
     client = TestClient(app)
 
-    with patch("standalone.endpoints.intelligence.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.intelligence.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/intelligence",
             headers={"X-Api-Key": "dw_sa_test"},

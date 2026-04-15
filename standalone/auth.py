@@ -11,7 +11,7 @@ def generate_api_key() -> str:
     return "dw_sa_" + secrets.token_hex(24)
 
 
-async def validate_api_key(raw_key: str, keys_collection) -> Optional[dict]:
+def validate_api_key(raw_key: str, keys_collection) -> Optional[dict]:
     key_hash = hash_api_key(raw_key)
     return keys_collection.find_one({"key_hash": key_hash, "active": True})
 

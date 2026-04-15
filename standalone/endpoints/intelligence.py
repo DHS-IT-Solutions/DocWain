@@ -5,6 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 
+from standalone.config import Config
 from standalone.dependencies import get_db, get_vllm_client
 from standalone.auth import hash_api_key, validate_api_key
 from standalone.file_reader import UnsupportedFileType, read_file_with_metadata
@@ -26,7 +27,7 @@ async def intelligence(
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
 
-    key_doc = await validate_api_key(x_api_key, db["api_keys"])
+    key_doc = validate_api_key(x_api_key, db["api_keys"])
     if not key_doc:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -34,8 +35,9 @@ async def intelligence(
     start = time.time()
 
     data = await file.read()
-    if len(data) > 50 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+    max_bytes = Config.MAX_FILE_SIZE_MB * 1024 * 1024
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"File too large (max {Config.MAX_FILE_SIZE_MB}MB)")
 
     try:
         text, meta = read_file_with_metadata(file.filename or "unknown", data)
@@ -49,18 +51,20 @@ async def intelligence(
 
     elapsed_ms = int((time.time() - start) * 1000)
 
-    # Log request
+    # Log request and increment usage counter (fire-and-forget)
+    key_hash = hash_api_key(x_api_key)
     try:
         db.request_logs.insert_one({
             "request_id": request_id,
             "endpoint": "intelligence",
-            "key_hash": hash_api_key(x_api_key),
+            "key_hash": key_hash,
             "filename": file.filename,
             "file_type": meta["file_type"],
             "analysis_type": analysis_type.value,
             "processing_time_ms": elapsed_ms,
             "timestamp": time.time(),
         })
+        db.api_keys.update_one({"key_hash": key_hash}, {"$inc": {"total_requests": 1}})
     except Exception:
         pass
 

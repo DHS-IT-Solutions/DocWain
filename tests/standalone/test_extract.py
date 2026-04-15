@@ -34,7 +34,7 @@ def test_extract_success():
     app, mock_vllm = _make_app()
     client = TestClient(app)
 
-    with patch("standalone.endpoints.extract.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.extract.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/extract",
             headers={"X-Api-Key": "dw_sa_test"},
@@ -54,7 +54,7 @@ def test_extract_missing_file():
     app, _ = _make_app()
     client = TestClient(app)
 
-    with patch("standalone.endpoints.extract.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.extract.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/extract",
             headers={"X-Api-Key": "dw_sa_test"},
@@ -68,7 +68,7 @@ def test_extract_invalid_format():
     app, _ = _make_app()
     client = TestClient(app)
 
-    with patch("standalone.endpoints.extract.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.extract.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/extract",
             headers={"X-Api-Key": "dw_sa_test"},
@@ -99,7 +99,7 @@ def test_extract_csv_format():
     )
     client = TestClient(app)
 
-    with patch("standalone.endpoints.extract.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.extract.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/extract",
             headers={"X-Api-Key": "dw_sa_test"},

@@ -52,7 +52,7 @@ def test_health_check(full_app):
 def test_full_extract_flow(full_app):
     client, _, _ = full_app
 
-    with patch("standalone.endpoints.extract.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.extract.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/extract",
             headers={"X-Api-Key": "dw_sa_testkey123"},
@@ -69,7 +69,7 @@ def test_full_extract_flow(full_app):
 def test_full_intelligence_flow(full_app):
     client, _, _ = full_app
 
-    with patch("standalone.endpoints.intelligence.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.intelligence.validate_api_key", return_value={"name": "test"}):
         response = client.post(
             "/api/v1/standalone/intelligence",
             headers={"X-Api-Key": "dw_sa_testkey123"},
@@ -119,7 +119,7 @@ def test_extract_then_intelligence_same_file(full_app):
     client, _, _ = full_app
     file_content = b"Contract between Company A and Company B for $1M services."
 
-    with patch("standalone.endpoints.extract.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.extract.validate_api_key", return_value={"name": "test"}):
         extract_resp = client.post(
             "/api/v1/standalone/extract",
             headers={"X-Api-Key": "dw_sa_testkey123"},
@@ -127,7 +127,7 @@ def test_extract_then_intelligence_same_file(full_app):
             files={"file": ("contract.txt", file_content, "text/plain")},
         )
 
-    with patch("standalone.endpoints.intelligence.validate_api_key", new_callable=AsyncMock, return_value={"name": "test"}):
+    with patch("standalone.endpoints.intelligence.validate_api_key", return_value={"name": "test"}):
         intel_resp = client.post(
             "/api/v1/standalone/intelligence",
             headers={"X-Api-Key": "dw_sa_testkey123"},
