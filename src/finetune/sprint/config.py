@@ -19,15 +19,15 @@ class SprintConfig:
     # SFT training
     sft_epochs: int = 3
     sft_lr: float = 2e-5
-    sft_batch_size: int = 4
-    sft_grad_accum: int = 8
+    sft_batch_size: int = 8
+    sft_grad_accum: int = 4
 
     # DPO training
     dpo_epochs: int = 1
     dpo_lr: float = 5e-6
     dpo_beta: float = 0.1
-    dpo_batch_size: int = 2
-    dpo_grad_accum: int = 8
+    dpo_batch_size: int = 4
+    dpo_grad_accum: int = 4
 
     # Phase 1 data targets
     phase1_sft_target: int = 13000
