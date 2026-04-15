@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 
-from standalone.app import get_db, get_vllm_client
+from standalone.dependencies import get_db, get_vllm_client
 from standalone.auth import hash_api_key, validate_api_key
 from standalone.file_reader import UnsupportedFileType, read_file_with_metadata
 from standalone.schemas import AnalysisType, IntelligenceResponse, ResponseMetadata

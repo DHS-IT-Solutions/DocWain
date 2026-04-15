@@ -3,7 +3,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-from standalone.app import get_db
+from standalone.dependencies import get_db
 from standalone.auth import generate_api_key, hash_api_key, verify_admin_secret
 from standalone.config import Config
 from standalone.schemas import KeyCreateRequest, KeyCreateResponse, KeyListItem

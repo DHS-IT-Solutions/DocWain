@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 def _make_app():
     from standalone.endpoints.keys import router
-    from standalone.app import get_db
+    from standalone.dependencies import get_db
 
     app = FastAPI()
     app.include_router(router)

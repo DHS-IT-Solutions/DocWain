@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 def _make_app():
     from standalone.endpoints.extract import router
-    from standalone.app import get_db, get_vllm_client
+    from standalone.dependencies import get_db, get_vllm_client
 
     app = FastAPI()
     app.include_router(router)
