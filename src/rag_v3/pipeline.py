@@ -235,16 +235,27 @@ def _nlu_scope_is_all_profile(query: str, intent_hint: str = "") -> bool:
     """Determine if query scope is all_profile using NLU understanding.
 
     Uses the centralized NLU engine with:
-    1. spaCy quantifier/determiner analysis (all, every, each + plural nouns)
-    2. Embedding similarity against scope descriptions
-    3. Intent hint mapping (compare, rank, analytics → all_profile)
+    1. Keyword fast-path for explicit all-profile signals
+    2. spaCy quantifier/determiner analysis (all, every, each + plural nouns)
+    3. Embedding similarity against scope descriptions
+    4. Intent hint mapping (compare, rank, analytics → all_profile)
     """
     # Fast path: intent-based scope (these intents inherently need all docs)
     _ALL_INTENTS = frozenset({
         "compare", "rank", "list", "ranking", "comparison",
-        "analytics", "summary",
+        "analytics", "summary", "overview", "aggregate",
     })
     if intent_hint and intent_hint.lower() in _ALL_INTENTS:
+        return True
+
+    # Keyword fast-path: explicit all-profile quantifiers
+    _ql = query.lower()
+    _ALL_KEYWORDS = [
+        "all ", "every ", "each ", "list ", "how many",
+        "across all", "from all", "total ", "summarize ",
+        "summarise ", "overview", "entire ", "complete ",
+    ]
+    if any(kw in _ql for kw in _ALL_KEYWORDS):
         return True
 
     try:
