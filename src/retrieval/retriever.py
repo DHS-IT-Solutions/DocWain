@@ -223,6 +223,9 @@ class UnifiedRetriever:
             if doc_id:
                 covered.add(doc_id)
 
+        logger.info("_fill_missing: %d chunks covering %d docs initially", len(existing_chunks), len(covered))
+
+        added = 0
         for pid in profile_ids:
             qfilter = self._build_filter(subscription_id, pid)
             try:
@@ -233,17 +236,29 @@ class UnifiedRetriever:
                     with_payload=True,
                 )
                 records = scroll_result[0] if isinstance(scroll_result, tuple) else scroll_result
-            except Exception:
+            except Exception as exc:
+                logger.warning("_fill_missing scroll failed: %s", exc)
                 continue
+
+            logger.info("_fill_missing: scrolled %d records for profile %s", len(records or []), pid)
 
             for record in (records or []):
                 payload = record.payload or {}
-                doc_id = payload.get("document_id") or ""
+                # Try multiple field names for document_id
+                doc_id = (
+                    payload.get("document_id")
+                    or payload.get("doc_id")
+                    or (payload.get("chunk", {}) or {}).get("document_id", "")
+                    or ""
+                )
                 if doc_id and doc_id not in covered:
-                    # Found a document not in results — add its first chunk
                     chunk = self._point_to_chunk(record, pid)
-                    chunk.score = 0.1  # Low score so it doesn't dominate
+                    chunk.score = 0.1
                     existing_chunks.append(chunk)
+                    covered.add(doc_id)
+                    added += 1
+
+        logger.info("_fill_missing: added %d missing docs, now %d total docs", added, len(covered))
                     covered.add(doc_id)
 
         return existing_chunks
