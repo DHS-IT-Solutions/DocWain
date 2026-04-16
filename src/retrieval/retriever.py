@@ -259,8 +259,6 @@ class UnifiedRetriever:
                     added += 1
 
         logger.info("_fill_missing: added %d missing docs, now %d total docs", added, len(covered))
-                    covered.add(doc_id)
-
         return existing_chunks
 
     @staticmethod
