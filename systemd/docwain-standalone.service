@@ -14,7 +14,7 @@ Environment=VLLM_MODEL_NAME=docwain-fast
 Environment=STANDALONE_MONGODB_URI=mongodb://localhost:27017
 Environment=STANDALONE_MONGODB_DB=docwain_standalone
 EnvironmentFile=-/home/ubuntu/PycharmProjects/DocWain/.env.standalone
-ExecStart=/home/ubuntu/PycharmProjects/DocWain/venv/bin/python -m standalone
+ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python -m standalone
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
