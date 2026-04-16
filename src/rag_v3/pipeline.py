@@ -52,7 +52,15 @@ from .types import (
 
 logger = get_logger(__name__)
 
-NO_CHUNKS_MESSAGE = "Not enough information in the documents to answer that."
+NO_CHUNKS_MESSAGE = (
+    "I could not find sufficient evidence in the uploaded documents to provide "
+    "a grounded answer to this question. This could mean:\n\n"
+    "1. The relevant document hasn't been uploaded or embedded yet\n"
+    "2. The question requires information not present in the available documents\n"
+    "3. The search terms didn't match the document content\n\n"
+    "**Suggestion:** Please verify that the relevant documents are uploaded and embedded "
+    "in this profile, or rephrase the question with more specific terms."
+)
 
 # ── Query simplification for retry ───────────────────────────────────
 
