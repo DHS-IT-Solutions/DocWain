@@ -107,9 +107,17 @@ class Reasoner:
             task_type, len(evidence), use_thinking,
         )
 
+        # Adaptive temperature: factual tasks need consistency, creative tasks need diversity
+        _TASK_TEMPERATURE = {
+            "lookup": 0.1, "extract": 0.1, "list": 0.15,
+            "aggregate": 0.1, "compare": 0.2, "investigate": 0.2,
+            "summarize": 0.25, "overview": 0.25,
+        }
+        temperature = _TASK_TEMPERATURE.get(task_type, 0.2)
+
         logger.info(
-            "[REASONER_PROMPT] task=%s evidence_count=%d prompt_len=%d query=%r",
-            task_type, len(evidence), len(user_msg), query[:80],
+            "[REASONER_PROMPT] task=%s evidence_count=%d prompt_len=%d temp=%.2f query=%r",
+            task_type, len(evidence), len(user_msg), temperature, query[:80],
         )
 
         try:
@@ -117,7 +125,7 @@ class Reasoner:
                 user_msg,
                 system=system_msg,
                 think=use_thinking,
-                temperature=0.4,
+                temperature=temperature,
                 max_tokens=max_tokens,
             )
         except Exception:
@@ -177,16 +185,24 @@ class Reasoner:
             task_type, len(evidence), thinking=False,
         )
 
+        # Adaptive temperature for streaming too
+        _TASK_TEMPERATURE = {
+            "lookup": 0.1, "extract": 0.1, "list": 0.15,
+            "aggregate": 0.1, "compare": 0.2, "investigate": 0.2,
+            "summarize": 0.25, "overview": 0.25,
+        }
+        temperature = _TASK_TEMPERATURE.get(task_type, 0.2)
+
         logger.info(
-            "[REASONER_STREAM] task=%s evidence_count=%d prompt_len=%d max_tokens=%d query=%r",
-            task_type, len(evidence), len(user_msg), max_tokens, query[:80],
+            "[REASONER_STREAM] task=%s evidence_count=%d prompt_len=%d max_tokens=%d temp=%.2f query=%r",
+            task_type, len(evidence), len(user_msg), max_tokens, temperature, query[:80],
         )
 
         try:
             yield from self._llm.generate_stream(
                 user_msg,
                 system=system_msg,
-                temperature=0.4,
+                temperature=temperature,
                 max_tokens=max_tokens,
             )
         except Exception:
