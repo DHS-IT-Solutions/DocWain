@@ -230,6 +230,16 @@ def retrieve_chunks(
                if str((c.meta or {}).get("profile_id") or "") == str(profile_id)
                and str((c.meta or {}).get("subscription_id") or "") == str(subscription_id)]
 
+    # Fetch representative chunks from documents NOT yet in results
+    results = _fill_missing_documents(
+        qdrant_client=qdrant_client,
+        collection=collection,
+        existing_chunks=results,
+        subscription_id=str(subscription_id),
+        profile_id=str(profile_id),
+        correlation_id=correlation_id,
+    )
+
     # Ensure document diversity: at least 1 chunk per document in results
     results = _ensure_document_diversity(results, max_results=MAX_UNION_RESULTS)
 
@@ -1058,6 +1068,64 @@ def _expand_by_document(
     merged = _ensure_document_diversity(merged, max_results=MAX_UNION_RESULTS)
     _log_top5(merged, correlation_id, label="expand_doc")
     return merged
+
+def _fill_missing_documents(
+    *,
+    qdrant_client: Any,
+    collection: str,
+    existing_chunks: List[Chunk],
+    subscription_id: str,
+    profile_id: str,
+    correlation_id: Optional[str] = None,
+) -> List[Chunk]:
+    """Fetch one representative chunk from each document in the profile that
+    is NOT already represented in existing_chunks.
+
+    This ensures cross-document queries always have evidence from every
+    document, regardless of vector similarity scoring bias.
+    """
+    # Find doc_ids already covered
+    covered_doc_ids = set()
+    for c in existing_chunks:
+        doc_id = _chunk_doc_id(c)
+        if doc_id:
+            covered_doc_ids.add(doc_id)
+
+    # Scroll the profile to discover all document IDs
+    q_filter = build_qdrant_filter(
+        subscription_id=subscription_id,
+        profile_id=profile_id,
+    )
+    try:
+        all_points, _ = qdrant_client.scroll(
+            collection_name=collection,
+            scroll_filter=q_filter,
+            limit=MAX_PROFILE_SCAN_CHUNKS,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception:
+        return existing_chunks
+
+    # Group by doc_id, find missing ones
+    missing_doc_chunks: dict = {}
+    for point in (all_points or []):
+        payload = point.payload or {}
+        doc_id = payload.get("document_id") or payload.get("doc_id") or ""
+        if doc_id and doc_id not in covered_doc_ids and doc_id not in missing_doc_chunks:
+            missing_doc_chunks[doc_id] = _to_chunk(point)
+
+    if missing_doc_chunks:
+        logger.info(
+            "Filling %d missing documents (had %d, profile has %d total) | cid=%s",
+            len(missing_doc_chunks), len(covered_doc_ids),
+            len(covered_doc_ids) + len(missing_doc_chunks),
+            correlation_id,
+        )
+        existing_chunks.extend(missing_doc_chunks.values())
+
+    return existing_chunks
+
 
 def _ensure_document_diversity(chunks: List[Chunk], max_results: int = MAX_UNION_RESULTS) -> List[Chunk]:
     """Ensure every unique document has at least one chunk in the result set.
