@@ -10,11 +10,12 @@ WorkingDirectory=/home/ubuntu/PycharmProjects/DocWain
 Environment="PATH=/home/ubuntu/PycharmProjects/DocWain/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="CUDA_VISIBLE_DEVICES=0"
 ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python -m vllm.entrypoints.openai.api_server \
-    --model models/docwain-v2-active \
+    --model models/DocWain-14B-v2-AWQ \
     --served-model-name docwain-fast \
     --port 8100 \
     --host 0.0.0.0 \
-    --dtype bfloat16 \
+    --dtype auto \
+    --quantization awq \
     --max-model-len 32768 \
     --gpu-memory-utilization 0.90 \
     --enable-prefix-caching \
