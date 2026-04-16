@@ -86,8 +86,10 @@ def build_context(
     if not chunks:
         return [], {}
 
-    # Merge adjacent chunks for better context continuity
-    merged_chunks = _merge_adjacent_text(chunks)
+    # Keep chunks separate for better document-level visibility
+    # Previously merged adjacent chunks, but this reduced evidence_count
+    # and made the LLM unaware of how many distinct documents were present
+    merged_chunks = chunks
 
     evidence: List[Dict] = []
     seen_doc_ids: List[str] = []
