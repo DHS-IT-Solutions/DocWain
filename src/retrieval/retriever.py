@@ -124,9 +124,13 @@ class UnifiedRetriever:
             )
             all_chunks.extend(chunks)
 
-        # Sort globally by score descending and trim to top_k
-        all_chunks.sort(key=lambda c: c.score, reverse=True)
-        all_chunks = all_chunks[:top_k]
+        # Fill missing documents: fetch one chunk from each doc not yet in results
+        all_chunks = self._fill_missing_documents(
+            collection_name, all_chunks, subscription_id, profile_ids,
+        )
+
+        # Ensure document diversity: every document gets at least one chunk
+        all_chunks = self._ensure_document_diversity(all_chunks, top_k)
 
         return RetrievalResult(
             chunks=all_chunks,
@@ -204,6 +208,90 @@ class UnifiedRetriever:
             chunks.extend(fallback)
 
         return chunks
+
+    def _fill_missing_documents(
+        self,
+        collection_name: str,
+        existing_chunks: List[EvidenceChunk],
+        subscription_id: str,
+        profile_ids: List[str],
+    ) -> List[EvidenceChunk]:
+        """Scroll the profile to find documents not yet represented in results."""
+        covered = set()
+        for c in existing_chunks:
+            doc_id = c.document_id or (c.meta or {}).get("document_id", "")
+            if doc_id:
+                covered.add(doc_id)
+
+        for pid in profile_ids:
+            qfilter = self._build_filter(subscription_id, pid)
+            try:
+                scroll_result = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=qfilter,
+                    limit=500,
+                    with_payload=True,
+                )
+                records = scroll_result[0] if isinstance(scroll_result, tuple) else scroll_result
+            except Exception:
+                continue
+
+            for record in (records or []):
+                payload = record.payload or {}
+                doc_id = payload.get("document_id") or ""
+                if doc_id and doc_id not in covered:
+                    # Found a document not in results — add its first chunk
+                    chunk = self._point_to_chunk(record, pid)
+                    chunk.score = 0.1  # Low score so it doesn't dominate
+                    existing_chunks.append(chunk)
+                    covered.add(doc_id)
+
+        return existing_chunks
+
+    @staticmethod
+    def _ensure_document_diversity(
+        chunks: List[EvidenceChunk],
+        top_k: int,
+    ) -> List[EvidenceChunk]:
+        """Ensure every unique document has at least one chunk in the results.
+
+        Round-robin: take the best chunk from each document first, then fill
+        remaining slots with highest-scoring chunks regardless of document.
+        This prevents generic queries from being biased toward a few documents.
+        """
+        if not chunks:
+            return chunks
+
+        # Group by document_id
+        doc_groups: dict = {}
+        for c in chunks:
+            doc_id = c.document_id or (c.meta or {}).get("document_id", "unknown")
+            if doc_id not in doc_groups:
+                doc_groups[doc_id] = []
+            doc_groups[doc_id].append(c)
+
+        # Sort each group by score
+        for doc_id in doc_groups:
+            doc_groups[doc_id].sort(key=lambda x: x.score, reverse=True)
+
+        # Round 1: best chunk from each document
+        diverse = []
+        seen = set()
+        for doc_id, group in doc_groups.items():
+            if group:
+                diverse.append(group[0])
+                seen.add(id(group[0]))
+
+        # Round 2: fill remaining by score
+        all_sorted = sorted(chunks, key=lambda x: x.score, reverse=True)
+        for c in all_sorted:
+            if len(diverse) >= top_k:
+                break
+            if id(c) not in seen:
+                diverse.append(c)
+                seen.add(id(c))
+
+        return diverse
 
     def _keyword_fallback(
         self,
