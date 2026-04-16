@@ -86,8 +86,8 @@ class DomainAgent(ABC):
         # Fall back to base model
         if self._llm is None:
             try:
-                from src.llm.clients import OllamaClient
-                self._llm = OllamaClient()
+                from src.llm.clients import get_local_client
+                self._llm = get_local_client()
             except Exception as exc:
                 logger.warning("Failed to initialize LLM client: %s", exc)
         return self._llm
@@ -96,8 +96,8 @@ class DomainAgent(ABC):
         """Always return the base (DocWain-Agent) LLM, bypassing thinking model."""
         if self._llm is None:
             try:
-                from src.llm.clients import OllamaClient
-                self._llm = OllamaClient()
+                from src.llm.clients import get_local_client
+                self._llm = get_local_client()
             except Exception as exc:
                 logger.warning("Failed to initialize base LLM client: %s", exc)
         return self._llm

@@ -34,7 +34,12 @@ class Neo4jStore:
         self.user = user or Config.Neo4j.USER
         self.password = password or Config.Neo4j.PASSWORD
         self.database = database or Config.Neo4j.DATABASE
-        self.driver = driver or GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+        import warnings
+        warnings.filterwarnings("ignore", message=".*Received notification from DBMS server.*")
+        self.driver = driver or GraphDatabase.driver(
+            self.uri, auth=(self.user, self.password),
+            notifications_disabled_categories=["UNRECOGNIZED", "HINT", "GENERIC", "DEPRECATION"],
+        )
 
     def close(self) -> None:
         if self.driver:

@@ -65,20 +65,27 @@ _nlp_model = None
 _nlp_lock = threading.Lock()
 
 def _get_nlp():
-    """Get spaCy NLP model (singleton, thread-safe)."""
+    """Get spaCy NLP model (singleton, thread-safe).
+
+    Tries multilingual model first (xx_sent_ud_sm) for broad language
+    coverage, falls back to English (en_core_web_sm) if unavailable.
+    """
     global _nlp_model
     if _nlp_model is not None:
         return _nlp_model
     with _nlp_lock:
         if _nlp_model is not None:
             return _nlp_model
-        try:
-            import spacy
-            _nlp_model = spacy.load("en_core_web_sm", disable=["ner"])
-            return _nlp_model
-        except Exception as exc:
-            logger.debug("Failed to load spaCy NLP model", exc_info=True)
-            return None
+        import spacy
+        for model_name in ("xx_sent_ud_sm", "en_core_web_sm"):
+            try:
+                _nlp_model = spacy.load(model_name, disable=["ner"])
+                logger.info("Loaded spaCy model: %s", model_name)
+                return _nlp_model
+            except Exception:
+                continue
+        logger.debug("Failed to load any spaCy NLP model")
+        return None
 
 _embedder_instance = None
 _embedder_lock = threading.Lock()

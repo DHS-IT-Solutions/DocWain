@@ -2859,7 +2859,7 @@ def _process_blob(
                         _payload = build_qdrant_payload(extra["metadata"])
                         _mr_points.append(PointStruct(
                             id=str(_uuid.uuid4()),
-                            vector=[float(x) for x in _mr_vectors[i]],
+                            vector={"content_vector": [float(x) for x in _mr_vectors[i]]},
                             payload=_payload,
                         ))
                     from src.api.dataHandler import get_vector_store

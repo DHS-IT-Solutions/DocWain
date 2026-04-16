@@ -55,7 +55,10 @@ def update_profile(
 
 
 def get_profile(*, subscription_id: str, profile_id: str) -> Optional[Dict[str, Any]]:
-    return _profiles_collection().find_one({"profile_id": str(profile_id), "subscription_id": str(subscription_id)})
+    record = _profiles_collection().find_one({"profile_id": str(profile_id), "subscription_id": str(subscription_id)})
+    if record:
+        record.pop("_id", None)
+    return record
 
 
 def resolve_profile_name(*, subscription_id: str, profile_id: str) -> Optional[str]:

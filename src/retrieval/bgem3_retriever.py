@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Default model — BGE-M3 supports 8192 tokens, 1024-dim dense
-_DEFAULT_MODEL = "BAAI/bge-m3"
+_DEFAULT_MODEL = "BAAI/bge-large-en-v1.5"
 _DEFAULT_DENSE_DIM = 1024
 
 

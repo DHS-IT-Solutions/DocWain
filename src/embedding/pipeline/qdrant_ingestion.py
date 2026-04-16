@@ -3,7 +3,6 @@ from __future__ import annotations
 from src.utils.logging_utils import get_logger
 from typing import Any, Dict, Iterable, List, Optional
 
-import ollama
 from qdrant_client import QdrantClient
 
 from src.api.config import Config
@@ -164,19 +163,30 @@ def transform_payload(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in payload.items() if v is not None}
 
 def _ollama_embed(texts: List[str], model: Optional[str] = None) -> List[List[float]]:
-    model_name = model or getattr(Config.Model, "OLLAMA_EMBEDDING_MODEL", "bge-m3")
+    from src.embedding.model_loader import encode_with_fallback
+    import numpy as np
+
     vectors: List[List[float]] = []
-    for text in texts:
+    non_empty_texts = []
+    non_empty_indices = []
+
+    for i, text in enumerate(texts):
         if not text:
             vectors.append([])
-            continue
-        response = ollama.embeddings(model=model_name, prompt=text)
-        embedding = response.get("embedding")
-        if embedding is None and isinstance(response.get("data"), list):
-            embedding = response["data"][0].get("embedding") if response["data"] else None
-        if not embedding:
-            raise ValueError("Ollama embeddings response missing embedding vector")
-        vectors.append([float(x) for x in embedding])
+        else:
+            vectors.append([])  # placeholder
+            non_empty_texts.append(text)
+            non_empty_indices.append(i)
+
+    if non_empty_texts:
+        embeddings = encode_with_fallback(
+            non_empty_texts,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        )
+        for idx, emb in zip(non_empty_indices, embeddings):
+            vectors[idx] = emb.tolist() if isinstance(emb, np.ndarray) else list(emb)
+
     return vectors
 
 def ingest_payloads(

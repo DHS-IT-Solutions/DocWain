@@ -214,6 +214,15 @@ class BlobStore:
         except ResourceNotFoundError:
             return False
         except Exception as exc:  # noqa: BLE001
+            # If a stale lease is blocking deletion, break it and retry
+            if "LeaseIdMissing" in str(exc) or "LeaseIdMismatch" in str(exc):
+                try:
+                    blob_client.break_lease(lease_break_period=0)
+                    blob_client.delete_blob()
+                    return True
+                except Exception as retry_exc:  # noqa: BLE001
+                    logger.warning("Failed to delete blob %s after breaking lease: %s", blob_name, retry_exc)
+                    return False
             logger.warning("Failed to delete blob %s: %s", blob_name, exc)
             return False
 

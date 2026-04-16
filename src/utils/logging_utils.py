@@ -220,38 +220,69 @@ class JSONFormatter(logging.Formatter):
 
 class ConsoleFormatter(logging.Formatter):
     """
-    Enhanced console formatter with optional correlation ID.
+    Production console formatter — compact, scannable, systemd-friendly.
 
-    Format: [TIMESTAMP] LEVEL [correlation_id] logger - message
+    journalctl already supplies timestamp + hostname + unit, so we omit those.
+    Format:  LEVEL  short_logger [corr_id] message  {extras}
     """
 
-    def __init__(self, include_correlation_id: bool = True):
-        """
-        Initialize the console formatter.
+    # Shorten common logger prefixes for readability
+    _PREFIX_MAP = {
+        "src.api.": "",
+        "src.llm.": "llm.",
+        "src.intelligence.": "intel.",
+        "src.serving.": "serve.",
+        "src.doc_understanding.": "docai.",
+        "src.storage.": "store.",
+        "src.embedding.": "embed.",
+        "src.kg.": "kg.",
+        "src.middleware.": "mw.",
+    }
 
-        Args:
-            include_correlation_id: Whether to include correlation ID in output.
-        """
+    _LEVEL_SYMBOLS = {
+        "DEBUG": "DBG",
+        "INFO": "INF",
+        "WARNING": "WRN",
+        "ERROR": "ERR",
+        "CRITICAL": "CRT",
+    }
+
+    def __init__(self, include_correlation_id: bool = True):
         self.include_correlation_id = include_correlation_id
         super().__init__()
 
+    def _short_name(self, name: str) -> str:
+        for prefix, replacement in self._PREFIX_MAP.items():
+            if name.startswith(prefix):
+                return replacement + name[len(prefix):]
+        return name
+
     def format(self, record: logging.LogRecord) -> str:
-        """Format the log record for console output."""
-        timestamp = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
-        correlation_id = getattr(record, "correlation_id", "n/a")
-
-        if self.include_correlation_id:
-            prefix = f"[{timestamp}] {record.levelname:<8} [{correlation_id[:8]}] {record.name}"
-        else:
-            prefix = f"[{timestamp}] {record.levelname:<8} {record.name}"
-
+        lvl = self._LEVEL_SYMBOLS.get(record.levelname, record.levelname[:3])
+        logger_name = self._short_name(record.name)
         message = record.getMessage()
+
+        # Build correlation snippet
+        corr = ""
+        if self.include_correlation_id:
+            cid = getattr(record, "correlation_id", None) or ""
+            if cid and cid not in ("unknown", "n/a"):
+                corr = f" [{cid[:8]}]"
+
+        # Build extras snippet (only for meaningful extra fields)
+        extras = ""
+        extra_fields = getattr(record, "_extra_fields", None)
+        if extra_fields:
+            pairs = " ".join(f"{k}={v}" for k, v in extra_fields.items())
+            extras = f"  {{{pairs}}}"
+
+        line = f"{lvl}  {logger_name}{corr}  {message}{extras}"
 
         if record.exc_info:
             exc_text = self.formatException(record.exc_info)
-            return f"{prefix} - {message}\n{exc_text}"
+            return f"{line}\n{exc_text}"
 
-        return f"{prefix} - {message}"
+        return line
 
 
 # ---------------------------------------------------------------------------
@@ -391,11 +422,10 @@ def configure_logging(
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    # Choose formatter
-    if json_format:
-        formatter = JSONFormatter(include_extra=True)
-    else:
-        formatter = ConsoleFormatter(include_correlation_id=include_correlation_id)
+    # Console: human-readable (journalctl adds timestamp/host/unit already)
+    # File: JSON for machine parsing / log aggregation
+    console_formatter = ConsoleFormatter(include_correlation_id=include_correlation_id)
+    json_formatter = JSONFormatter(include_extra=True)
 
     # Resolve correlation ID filter (shared across handlers)
     correlation_filter = None
@@ -405,15 +435,15 @@ def configure_logging(
     except ImportError:
         pass
 
-    # --- Console handler ---
+    # --- Console handler (human-readable for systemd/journalctl) ---
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_formatter)
     if correlation_filter:
         console_handler.addFilter(correlation_filter)
     root_logger.addHandler(console_handler)
 
-    # --- Rotating file handler ---
+    # --- Rotating file handler (JSON for log aggregation) ---
     log_dir = log_dir or os.getenv("LOG_DIR", "logs")
     try:
         log_path = Path(log_dir)
@@ -425,13 +455,11 @@ def configure_logging(
             encoding="utf-8",
         )
         file_handler.setLevel(level)
-        # Always use JSON for file logs (easier to parse/aggregate)
-        file_handler.setFormatter(JSONFormatter(include_extra=True))
+        file_handler.setFormatter(json_formatter)
         if correlation_filter:
             file_handler.addFilter(correlation_filter)
         root_logger.addHandler(file_handler)
     except OSError as exc:
-        # Don't fail startup if log dir is unwritable (e.g. read-only container)
         root_logger.warning("Could not create file log handler at %s: %s", log_dir, exc)
 
     # --- Redis log handler (captures terminal output for live progress) ---
@@ -440,15 +468,29 @@ def configure_logging(
         redis_handler.addFilter(correlation_filter)
     root_logger.addHandler(redis_handler)
 
-    # Reduce noise from third-party libraries
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
-    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
-    logging.getLogger("pymongo.client").setLevel(logging.WARNING)
-    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+    # Route Python warnings through logging so they get formatted properly
+    logging.captureWarnings(True)
+
+    # Suppress noisy third-party loggers
+    _noisy_loggers = {
+        "httpx": logging.WARNING,
+        "httpcore": logging.WARNING,
+        "urllib3": logging.WARNING,
+        "uvicorn.access": logging.WARNING,
+        "uvicorn.error": logging.INFO,
+        "neo4j.notifications": logging.ERROR,
+        "neo4j.pool": logging.ERROR,
+        "azure.core.pipeline.policies.http_logging_policy": logging.WARNING,
+        "pymongo.client": logging.WARNING,
+        "pymongo.connection": logging.WARNING,
+        "sentence_transformers": logging.WARNING,
+        "py.warnings": logging.ERROR,          # suppress CosmosDB/Qdrant UserWarnings
+        "qdrant_client": logging.WARNING,
+        "transformers": logging.WARNING,
+        "torch": logging.WARNING,
+    }
+    for logger_name, lvl_override in _noisy_loggers.items():
+        logging.getLogger(logger_name).setLevel(lvl_override)
 
 
 def get_logger(

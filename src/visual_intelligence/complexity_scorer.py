@@ -108,7 +108,8 @@ class ComplexityScorer:
         aggregates per-page signals from ``extracted_doc.tables`` and
         ``extracted_doc.figures``.
         """
-        total_pages: int = extracted_doc.metrics.get("total_pages", 0)
+        metrics = getattr(extracted_doc, "metrics", None) or (extracted_doc.get("metrics") if isinstance(extracted_doc, dict) else None) or {}
+        total_pages: int = metrics.get("total_pages", 0)
         if total_pages == 0:
             logger.warning("score_document called with 0 total_pages")
             return []

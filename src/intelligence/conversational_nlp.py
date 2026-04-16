@@ -867,10 +867,10 @@ def _llm_conversational_response(
     Returns None if LLM is unavailable or takes too long (>3s).
     """
     try:
-        from src.llm.clients import OllamaClient
+        from src.llm.clients import get_local_client
         import asyncio
 
-        client = OllamaClient()
+        client = get_local_client()
         ctx_info = (
             f"User has {context.document_count} document(s) loaded"
             + (f" covering {_format_domains(context.dominant_domains)}" if context.dominant_domains else "")

@@ -84,12 +84,13 @@ class V2Embedder:
 
         logger.info("Loading V2 model: %s", self.model_name)
         self._tokenizer = AutoTokenizer.from_pretrained(
-            self.model_name, trust_remote_code=True
+            self.model_name, trust_remote_code=True, local_files_only=True,
         )
         self._model = AutoModel.from_pretrained(
             self.model_name,
             output_hidden_states=True,
             trust_remote_code=True,
+            local_files_only=True,
         ).to(self.device)
         self._model.eval()  # type: ignore[union-attr]
         logger.info("V2 model loaded on %s", self.device)

@@ -165,14 +165,32 @@ class DocumentExtractor:
             "ocr_upgrade_suggested": bool(has_images and quality == "LOW"),
         }
 
-    def _ensure_easyocr(self):
+    def _ensure_easyocr(self, langs: Optional[list] = None):
         if easyocr and self._easyocr_reader is None:
-            self._easyocr_reader = easyocr.Reader(["en"], gpu=False)
+            ocr_langs = langs or ["en", "fr", "de", "es", "it", "pt", "ar", "hi", "ja", "ko", "zh-sim", "ru", "tr"]
+            try:
+                self._easyocr_reader = easyocr.Reader(ocr_langs, gpu=False)
+            except Exception:
+                # Fall back to English if multilingual init fails
+                self._easyocr_reader = easyocr.Reader(["en"], gpu=False)
 
-    def _ocr_pytesseract(self, image: Image.Image) -> Tuple[str, Optional[float]]:
+    # Mapping from langdetect/ISO codes to tesseract language codes
+    _TESSERACT_LANG_MAP = {
+        "en": "eng", "fr": "fra", "de": "deu", "es": "spa", "it": "ita",
+        "pt": "por", "nl": "nld", "ru": "rus", "ar": "ara", "hi": "hin",
+        "ja": "jpn", "ko": "kor", "zh-cn": "chi_sim", "zh-tw": "chi_tra",
+        "zh": "chi_sim", "tr": "tur", "pl": "pol", "vi": "vie", "th": "tha",
+    }
+
+    def _ocr_pytesseract(self, image: Image.Image, lang: Optional[str] = None) -> Tuple[str, Optional[float]]:
         """Run pytesseract OCR on *image* and return (text, confidence%)."""
         try:
-            data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+            # Convert CMYK/palette images to RGB — pytesseract cannot write these as PNG
+            if image.mode in ("CMYK", "P", "PA", "LA"):
+                image = image.convert("RGB")
+            # Resolve tesseract language code; default to eng+osd for auto-detection
+            tess_lang = self._TESSERACT_LANG_MAP.get(lang, "eng") if lang else "eng"
+            data = pytesseract.image_to_data(image, lang=tess_lang, output_type=pytesseract.Output.DICT)
             words = [w.strip() for w in data.get("text", []) if w.strip()]
             confidences = []
             for conf in data.get("conf", []):

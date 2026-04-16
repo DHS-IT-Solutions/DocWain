@@ -14,17 +14,9 @@ logger = get_logger(__name__)
 _NO_RETRIEVAL_INTENTS = frozenset({"greeting", "identity"})
 
 # Greetings / identity prompts.
-_GREETING_SYSTEM = (
-    "You are DocWain, an intelligent document analysis assistant. "
-    "Respond warmly and concisely to greetings. Keep it to one or two sentences."
-)
+_GREETING_SYSTEM = "You are DocWain."
 
-_IDENTITY_SYSTEM = (
-    "You are DocWain, an intelligent document analysis assistant built for "
-    "professional document intelligence. When asked about yourself, explain "
-    "your capabilities briefly: document analysis, search, summarisation, "
-    "comparison, data extraction, and visualisation. Keep it concise."
-)
+_IDENTITY_SYSTEM = "You are DocWain."
 
 
 class FastPathHandler:

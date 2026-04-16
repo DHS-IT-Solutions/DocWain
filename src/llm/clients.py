@@ -80,30 +80,252 @@ _local_client = None
 _local_client_lock = threading.Lock()
 
 def get_local_client():
-    """Return a local Ollama client for document processing (qwen3:14b).
+    """Return a local client for document processing.
 
-    This client always talks to the LOCAL Ollama instance (no cloud),
-    using a lightweight model optimised for fast extraction, classification,
-    summarisation and entity extraction during document ingestion.
+    Prefers the vLLM-served finetuned model when available, falling back
+    to local Ollama only if vLLM is unreachable.
     """
     global _local_client
     if _local_client is None:
         with _local_client_lock:
             if _local_client is None:
-                local_model = os.getenv("OLLAMA_LOCAL_MODEL", "qwen3:14b")
-                _local_client = OllamaClient(model_name=local_model)
-                # Override to ensure local-only (no cloud auth headers)
+                # Try vLLM first — serves our finetuned DocWain model
                 try:
-                    import ollama as _ollama
-                    import httpx as _httpx
-                    _local_client._client = _ollama.Client(
-                        host=os.getenv("OLLAMA_LOCAL_HOST", "http://localhost:11434"),
-                        timeout=_httpx.Timeout(OllamaClient._OLLAMA_HTTP_TIMEOUT_S),
-                    )
-                except Exception:
-                    pass
-                logger.info("Local document processing client ready (model=%s)", local_model)
+                    vllm_client = VLLMClient()
+                    if vllm_client.health_check():
+                        _local_client = vllm_client
+                        logger.info("Local document processing client ready (vLLM model=%s)", vllm_client.model_name)
+                    else:
+                        raise ConnectionError("vLLM health check failed")
+                except Exception as exc:
+                    logger.warning("vLLM unavailable for extraction (%s), falling back to Ollama", exc)
+                    local_model = os.getenv("OLLAMA_LOCAL_MODEL", "qwen3:14b")
+                    _local_client = OllamaClient(model_name=local_model)
+                    try:
+                        import ollama as _ollama
+                        import httpx as _httpx
+                        _local_client._client = _ollama.Client(
+                            host=os.getenv("OLLAMA_LOCAL_HOST", "http://localhost:11434"),
+                            timeout=_httpx.Timeout(OllamaClient._OLLAMA_HTTP_TIMEOUT_S),
+                        )
+                    except Exception:
+                        pass
+                    logger.info("Local document processing client ready (Ollama model=%s)", local_model)
     return _local_client
+
+# ── VLLMClient ─────────────────────────────────────────────────────
+
+class VLLMClient:
+    """Drop-in replacement for OllamaClient that routes through vLLM.
+
+    Implements the same duck-typed interface (generate, generate_with_metadata,
+    chat_with_metadata) so extraction pipelines can use the finetuned model
+    served by vLLM without code changes.
+    """
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ):
+        Config = _get_config()
+        self.base_url = base_url or getattr(Config.VLLM, "FAST_URL", "http://localhost:8100")
+        self.model_name = model_name or getattr(Config.VLLM, "FAST_MODEL", "docwain-fast")
+        self.backend = "vllm"
+        self._timeout = float(getattr(Config.VLLM, "TIMEOUT", 300))
+
+    def health_check(self) -> bool:
+        try:
+            req = request.Request(f"{self.base_url}/health", method="GET")
+            with request.urlopen(req, timeout=5) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    def _chat_completions(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 4096,
+        temperature: float = 0.2,
+    ) -> str:
+        """Call vLLM OpenAI-compatible chat/completions endpoint."""
+        url = f"{self.base_url}/v1/chat/completions"
+        body = {
+            "model": self.model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        data = json.dumps(body).encode()
+        req = request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with request.urlopen(req, timeout=self._timeout) as resp:
+            result = json.loads(resp.read().decode())
+        text = result["choices"][0]["message"]["content"].strip()
+        # Strip thinking blocks
+        return _THINK_RE.sub("", text).strip()
+
+    def _build_messages(self, prompt: str, system: str = "") -> List[Dict[str, str]]:
+        msgs = []
+        sys_content = f"/no_think\n{system}" if system else "/no_think"
+        msgs.append({"role": "system", "content": sys_content})
+        msgs.append({"role": "user", "content": prompt})
+        return msgs
+
+    def generate_with_metadata(
+        self,
+        prompt: str,
+        *,
+        options: Optional[Dict[str, Any]] = None,
+        max_retries: int = 3,
+        backoff: float = 1.0,
+        thinking: bool = False,
+    ) -> Tuple[str, Dict[str, Any]]:
+        Config = _get_config()
+        metrics_store = _get_metrics_store()
+        request_started = time.time()
+        if metrics_store.available:
+            metrics_store.record(
+                counters={"llm_request_count": 1},
+                distributions={"model_usage": {self.model_name: 1}},
+                model_id=self.model_name,
+            )
+        max_tokens = (options or {}).get("max_tokens") or (options or {}).get("num_predict") or getattr(Config.LLM, "MAX_TOKENS", 4096)
+        temperature = (options or {}).get("temperature") or getattr(Config.LLM, "TEMPERATURE", 0.2)
+
+        messages = self._build_messages(prompt)
+
+        last_exc = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                text = self._chat_completions(messages, max_tokens=max_tokens, temperature=temperature)
+                if metrics_store.available:
+                    latency_ms = (time.time() - request_started) * 1000
+                    metrics_store.record(
+                        values={"llm_latency_ms": latency_ms},
+                        histograms={"llm_latency_ms": latency_ms},
+                        model_id=self.model_name,
+                    )
+                meta = {"model": self.model_name, "backend": "vllm"}
+                return text, meta
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("vLLM attempt %d/%d failed: %s", attempt, max_retries, exc)
+                if attempt < max_retries:
+                    time.sleep(backoff * attempt)
+                else:
+                    logger.error("All vLLM retries failed")
+                    if metrics_store.available:
+                        latency_ms = (time.time() - request_started) * 1000
+                        metrics_store.record(
+                            counters={"llm_failure": 1},
+                            values={"llm_latency_ms": latency_ms},
+                            histograms={"llm_latency_ms": latency_ms},
+                            model_id=self.model_name,
+                        )
+                    raise
+
+        return "", {"model": self.model_name, "backend": "vllm"}
+
+    def generate(self, prompt: str, max_retries: int = 1, backoff: float = 0.5, **kwargs) -> str:
+        extra = {}
+        if "options" in kwargs:
+            extra["options"] = kwargs.pop("options")
+        text, _ = self.generate_with_metadata(prompt, max_retries=max_retries, backoff=backoff, **extra)
+        if not text:
+            return "I don't have enough information in the documents to answer that."
+        return text
+
+    def chat_with_metadata(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        options: Optional[Dict[str, Any]] = None,
+        max_retries: int = 3,
+        backoff: float = 1.0,
+        thinking: bool = False,
+    ) -> Tuple[str, Dict[str, Any]]:
+        Config = _get_config()
+        max_tokens = (options or {}).get("max_tokens") or (options or {}).get("num_predict") or getattr(Config.LLM, "MAX_TOKENS", 4096)
+        temperature = (options or {}).get("temperature") or getattr(Config.LLM, "TEMPERATURE", 0.2)
+
+        # Prepend /no_think to system message if present
+        chat_messages = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                chat_messages.append({"role": "system", "content": f"/no_think\n{msg['content']}"})
+            else:
+                chat_messages.append(msg)
+        # Ensure there's a system message with /no_think
+        if not any(m.get("role") == "system" for m in chat_messages):
+            chat_messages.insert(0, {"role": "system", "content": "/no_think"})
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                text = self._chat_completions(chat_messages, max_tokens=max_tokens, temperature=temperature)
+                meta = {"model": self.model_name, "backend": "vllm"}
+                return text, meta
+            except Exception as exc:
+                logger.warning("vLLM chat attempt %d/%d failed: %s", attempt, max_retries, exc)
+                if attempt < max_retries:
+                    time.sleep(backoff * attempt)
+                else:
+                    raise
+        return "", {"model": self.model_name, "backend": "vllm"}
+
+    def generate_stream(
+        self,
+        prompt: str,
+        *,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Generator[str, None, None]:
+        """Stream tokens from vLLM via SSE."""
+        Config = _get_config()
+        max_tokens = (options or {}).get("max_tokens") or getattr(Config.LLM, "MAX_TOKENS", 4096)
+        temperature = (options or {}).get("temperature") or getattr(Config.LLM, "TEMPERATURE", 0.2)
+
+        url = f"{self.base_url}/v1/chat/completions"
+        messages = self._build_messages(prompt)
+        body = {
+            "model": self.model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        data = json.dumps(body).encode()
+        req = request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+            method="POST",
+        )
+        resp = request.urlopen(req, timeout=self._timeout)
+        with resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content", "")
+                    if token:
+                        yield token
+                except (json.JSONDecodeError, IndexError, KeyError):
+                    continue
+
+    def warm_up(self):
+        try:
+            self.generate("ping", max_retries=1, backoff=0.0)
+        except Exception as exc:
+            logger.warning("vLLM warm-up failed (continuing): %s", exc)
+
 
 # ── OllamaClient ───────────────────────────────────────────────────
 

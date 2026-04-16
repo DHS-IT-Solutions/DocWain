@@ -209,25 +209,29 @@ def _load_chunks_from_qdrant(document_id: str, subscription_id: str, profile_id:
     """Load canonical text from Qdrant chunks for a document."""
     try:
         from qdrant_client import QdrantClient
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
         from src.api.config import Config
+        from src.api.vector_store import build_collection_name
         qc = QdrantClient(url=Config.Qdrant.URL, api_key=Config.Qdrant.API)
 
-        filters = {"must": [{"key": "document_id", "match": {"value": document_id}}]}
+        must_conditions = [FieldCondition(key="document_id", match=MatchValue(value=document_id))]
         if profile_id:
-            filters["must"].append({"key": "profile_id", "match": {"value": profile_id}})
+            must_conditions.append(FieldCondition(key="profile_id", match=MatchValue(value=profile_id)))
 
+        collection_name = build_collection_name(subscription_id)
         points, _ = qc.scroll(
-            collection_name=subscription_id,
-            scroll_filter=filters,
-            limit=50,
+            collection_name=collection_name,
+            scroll_filter=Filter(must=must_conditions),
+            limit=200,
             with_payload=True,
         )
 
         texts = []
-        for p in sorted(points, key=lambda x: x.payload.get("chunk_index", 0)):
+        nav_key = lambda x: x.payload.get("navigation", {}).get("chunk_index", 0)
+        for p in sorted(points, key=nav_key):
             text = (p.payload.get("canonical_text")
                     or p.payload.get("embedding_text")
-                    or p.payload.get("text")
+                    or p.payload.get("content")
                     or "")
             if text.strip():
                 texts.append(text.strip())
@@ -238,22 +242,56 @@ def _load_chunks_from_qdrant(document_id: str, subscription_id: str, profile_id:
         return ""
 
 
+def _try_extract_from_obj(obj) -> str:
+    """Try to get text from an ExtractedDocument or dict."""
+    if hasattr(obj, "full_text") and obj.full_text:
+        return obj.full_text
+    if isinstance(obj, dict):
+        text = obj.get("full_text") or obj.get("text") or obj.get("content") or ""
+        if text:
+            return text
+        # Check filename-keyed dicts: {"file.pdf": ExtractedDocument(...)}
+        for v in obj.values():
+            if hasattr(v, "full_text") and v.full_text:
+                return v.full_text
+            if isinstance(v, dict):
+                text = v.get("full_text") or v.get("text") or v.get("content") or ""
+                if text:
+                    return text
+    if isinstance(obj, str) and len(obj.strip()) > 50:
+        return obj
+    return ""
+
+
+def _extract_text_from_pickle(data: dict) -> str:
+    """Extract text from pickle data in any known format."""
+    # Try well-known keys first
+    for key in ("raw", "structured"):
+        val = data.get(key)
+        if val:
+            text = _try_extract_from_obj(val)
+            if text:
+                return text
+
+    # Try all top-level values (handles {"filename.pdf": ExtractedDocument})
+    for val in data.values():
+        text = _try_extract_from_obj(val)
+        if text:
+            return text
+
+    return ""
+
+
 def _extract_text(extraction_data: dict) -> str:
     """Get clean text from extraction data — best source wins."""
     if not extraction_data:
         return ""
 
-    # From pickle (raw field)
-    raw = extraction_data.get("raw")
-    if raw:
-        if isinstance(raw, dict):
-            text = raw.get("full_text") or raw.get("text") or raw.get("content") or ""
-            if text:
-                return text
-        if hasattr(raw, "full_text") and raw.full_text:
-            return raw.full_text
-        if isinstance(raw, str) and raw.strip():
-            return raw
+    # From pickle — try multiple formats since extraction data structure varies
+    if not extraction_data.get("from_fallback"):
+        text = _extract_text_from_pickle(extraction_data)
+        if text:
+            return text
 
     # From Qdrant chunks (fallback after pickle purge)
     chunks = extraction_data.get("chunks_text", "")
@@ -437,3 +475,48 @@ def _update_report(profile_id: str, subscription_id: str, overview: Optional[dic
         {"profile_id": profile_id, "subscription_id": subscription_id},
         {"$set": updates},
     )
+
+
+# ---------------------------------------------------------------------------
+# Regeneration — fix stale / broken briefs for existing profiles
+# ---------------------------------------------------------------------------
+
+def regenerate_all_profiles() -> dict:
+    """Re-generate intelligence for every profile that has 'insufficient content' briefs.
+
+    Returns summary of what was processed.
+    """
+    collection = _get_collection()
+    reports = list(collection.find({}))
+    stats = {"profiles_checked": 0, "profiles_regenerated": 0, "docs_regenerated": 0, "errors": 0}
+
+    for report in reports:
+        stats["profiles_checked"] += 1
+        profile_id = report.get("profile_id")
+        subscription_id = report.get("subscription_id")
+        briefs = report.get("document_briefs", [])
+
+        stale_doc_ids = [
+            b["document_id"] for b in briefs
+            if b.get("brief", "").startswith("Document has insufficient content")
+        ]
+
+        if not stale_doc_ids:
+            continue
+
+        logger.info(
+            "Regenerating %d stale briefs for profile=%s",
+            len(stale_doc_ids), profile_id,
+        )
+        stats["profiles_regenerated"] += 1
+
+        for doc_id in stale_doc_ids:
+            try:
+                generate_profile_intelligence(doc_id, profile_id, subscription_id)
+                stats["docs_regenerated"] += 1
+            except Exception:
+                logger.exception("Regeneration failed for doc=%s", doc_id)
+                stats["errors"] += 1
+
+    logger.info("Regeneration complete: %s", stats)
+    return stats
