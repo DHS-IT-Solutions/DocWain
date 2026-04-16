@@ -466,13 +466,25 @@ class CoreAgent:
             profile_id, len(_raw_chunks), list(_chunk_sources)[:10], list(_chunk_profiles),
         )
 
+        logger.info(
+            "[RAG_DEBUG] pre-rerank: %d chunks from %d docs, evidence_top_k=%d",
+            len(retrieval_result.chunks),
+            len(set(c.document_id for c in retrieval_result.chunks if c.document_id)),
+            evidence_top_k,
+        )
         reranked = rerank_chunks(
             understanding.resolved_query,  # rerank against original query, not expanded
             retrieval_result.chunks,
             top_k=evidence_top_k,
             cross_encoder=self._cross_encoder,
         )
+        logger.info(
+            "[RAG_DEBUG] post-rerank: %d chunks from %d docs",
+            len(reranked),
+            len(set(c.document_id for c in reranked if c.document_id)),
+        )
         evidence, doc_context = build_context(reranked, doc_intelligence_dict)
+        logger.info("[RAG_DEBUG] evidence items: %d", len(evidence))
 
         # Inject KG entity relationships into doc_context for richer reasoning
         if kg_hints.get("target_doc_ids") and self.kg_query_service:
