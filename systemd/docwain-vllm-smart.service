@@ -1,7 +1,9 @@
 [Unit]
 Description=DocWain vLLM Smart Instance (27B)
-After=network.target docwain-vllm-fast.service
+After=network.target
 Wants=network-online.target
+# Smart and Fast conflict on GPU — only run one at a time
+Conflicts=docwain-vllm-fast.service
 
 [Service]
 Type=simple
@@ -14,12 +16,10 @@ ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python -m vllm.entrypoi
     --served-model-name docwain-smart \
     --port 8200 \
     --host 0.0.0.0 \
-    --dtype fp8 \
-    --kv-cache-dtype fp8 \
+    --dtype bfloat16 \
     --max-model-len 32768 \
-    --gpu-memory-utilization 0.65 \
+    --gpu-memory-utilization 0.85 \
     --enable-chunked-prefill \
-    --guided-decoding-backend outlines \
     --tensor-parallel-size 1
 Restart=on-failure
 RestartSec=10

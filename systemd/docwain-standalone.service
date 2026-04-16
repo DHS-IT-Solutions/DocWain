@@ -9,8 +9,8 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/PycharmProjects/DocWain
 Environment=STANDALONE_PORT=8400
-Environment=VLLM_BASE_URL=http://localhost:8100/v1
-Environment=VLLM_MODEL_NAME=docwain-fast
+Environment=VLLM_BASE_URL=http://localhost:8200/v1
+Environment=VLLM_MODEL_NAME=docwain-smart
 Environment=STANDALONE_MONGODB_URI=mongodb://localhost:27017
 Environment=STANDALONE_MONGODB_DB=docwain_standalone
 EnvironmentFile=-/home/ubuntu/PycharmProjects/DocWain/.env.standalone
