@@ -11,11 +11,11 @@ from .types import Chunk, ChunkSource
 
 logger = get_logger(__name__)
 
-# Retrieval configuration - tuned for accuracy over recall
-MIN_RESULTS = 6  # Reduced: prefer quality over quantity
-FALLBACK_LIMIT = 100  # Reduced from 200
-MAX_UNION_RESULTS = 16  # Reduced from 24
-LOW_SCORE_THRESHOLD = 0.30  # Balanced: reject garbage, keep borderline-relevant chunks
+# Retrieval configuration - tuned for intelligence and completeness
+MIN_RESULTS = 12  # Increased: complex queries need more context
+FALLBACK_LIMIT = 250  # Increased: keyword fallback needs broader scope
+MAX_UNION_RESULTS = 30  # Increased: preserve dense + keyword union for complex tasks
+LOW_SCORE_THRESHOLD = 0.25  # Lowered slightly: let reranker decide quality, don't pre-filter aggressively
 HIGH_SCORE_THRESHOLD = 0.7  # High-confidence threshold
 MAX_EXPANDED_DOCS = 4
 MAX_DOC_CHUNKS = 20  # Allow more chunks per doc for complete context
@@ -263,7 +263,7 @@ def retrieve_entity_scoped(
     # (was limited to 200, causing silent fallback to unscoped search)
     points: list = []
     try:
-        _scroll_limit = min(MAX_PROFILE_SCAN_CHUNKS, 500)
+        _scroll_limit = MAX_PROFILE_SCAN_CHUNKS  # Scan full profile for entity matches
         _offset = None
         _scrolled = 0
         while _scrolled < _scroll_limit:

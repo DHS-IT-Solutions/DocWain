@@ -33,9 +33,9 @@ def get_domain_min_score(domain_hint: str | None = None) -> float:
 # Fail fast (6s) to avoid blocking the response; fallback to bi-encoder scores.
 try:
     from src.api.config import Config as _Cfg
-    _RERANK_TIMEOUT_S = getattr(getattr(_Cfg, "Reranker", None), "TIMEOUT_S", 6.0)
+    _RERANK_TIMEOUT_S = getattr(getattr(_Cfg, "Reranker", None), "TIMEOUT_S", 12.0)
 except Exception:
-    _RERANK_TIMEOUT_S = float(os.getenv("RERANKER_TIMEOUT_S", "6.0"))
+    _RERANK_TIMEOUT_S = float(os.getenv("RERANKER_TIMEOUT_S", "12.0"))
 
 def _tag_rerank_confidence(chunks: List[Chunk], min_score: float) -> None:
     """Tag chunks with rerank confidence signal.
