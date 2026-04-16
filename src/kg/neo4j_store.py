@@ -196,11 +196,11 @@ class Neo4jStore:
     def get_status(self, name: str) -> Dict[str, Any]:
         state = self.get_state(name)
         counts_query = (
-            "RETURN "
-            "size([(d:Document) | d]) AS documents, "
-            "size([(s:Section) | s]) AS sections, "
-            "size([(c:Chunk) | c]) AS chunks, "
-            "size([(e:Entity) | e]) AS entities"
+            "MATCH (d:Document) WITH count(d) AS documents "
+            "MATCH (s:Section) WITH documents, count(s) AS sections "
+            "MATCH (c:Chunk) WITH documents, sections, count(c) AS chunks "
+            "OPTIONAL MATCH (e:Entity) "
+            "RETURN documents, sections, chunks, count(e) AS entities"
         )
         with self._session() as session:
             record = session.run(counts_query).single()
