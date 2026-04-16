@@ -251,11 +251,9 @@ def _nlu_scope_is_all_profile(query: str, intent_hint: str = "") -> bool:
     # Keyword fast-path: explicit all-profile quantifiers
     _ql = query.lower()
     _ALL_KEYWORDS = [
-        "all ", "every ", "each ", "list ", "how many",
-        "across all", "from all", "total ", "summarize ",
-        "summarise ", "overview", "entire ", "complete ",
-        "who are", "names", "candidates", "show me all",
-        "give me all", "what are all", "documents",
+        "all ", "every ", "each ", "list all", "how many",
+        "across all", "from all", "summarize all",
+        "summarise all", "overview of all", "entire ",
     ]
     if any(kw in _ql for kw in _ALL_KEYWORDS):
         return True
