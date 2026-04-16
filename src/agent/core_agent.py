@@ -54,14 +54,14 @@ _STOPWORDS: Set[str] = {
 # ---------------------------------------------------------------------------
 
 _EVIDENCE_TOP_K: Dict[str, int] = {
-    "lookup": 8,
-    "extract": 12,
-    "list": 20,
-    "summarize": 20,
-    "overview": 25,
-    "compare": 12,
-    "investigate": 12,
-    "aggregate": 10,
+    "lookup": 15,
+    "extract": 20,
+    "list": 30,
+    "summarize": 25,
+    "overview": 30,
+    "compare": 20,
+    "investigate": 20,
+    "aggregate": 15,
 }
 
 _TASK_SYNONYMS: Dict[str, List[str]] = {
@@ -440,7 +440,7 @@ class CoreAgent:
             )
 
         # Dynamic evidence count by task type
-        evidence_top_k = _EVIDENCE_TOP_K.get(understanding.task_type, 6)
+        evidence_top_k = _EVIDENCE_TOP_K.get(understanding.task_type, 15)
 
         # --- Profile isolation audit on retrieved chunks ---
         _raw_chunks = retrieval_result.chunks or []
@@ -843,7 +843,7 @@ class CoreAgent:
         else:
             retrieval_result = self._retriever.retrieve(enhanced_query, subscription_id, profile_ids, document_ids=document_ids)
 
-        evidence_top_k = _EVIDENCE_TOP_K.get(understanding.task_type, 6)
+        evidence_top_k = _EVIDENCE_TOP_K.get(understanding.task_type, 15)
         reranked = rerank_chunks(
             understanding.resolved_query, retrieval_result.chunks,
             top_k=evidence_top_k, cross_encoder=self._cross_encoder,
