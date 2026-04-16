@@ -17,7 +17,7 @@ FALLBACK_LIMIT = 250  # Increased: keyword fallback needs broader scope
 MAX_UNION_RESULTS = 30  # Increased: preserve dense + keyword union for complex tasks
 LOW_SCORE_THRESHOLD = 0.25  # Lowered slightly: let reranker decide quality, don't pre-filter aggressively
 HIGH_SCORE_THRESHOLD = 0.7  # High-confidence threshold
-MAX_EXPANDED_DOCS = 4
+MAX_EXPANDED_DOCS = 8  # Expand more docs for better cross-document coverage
 MAX_DOC_CHUNKS = 20  # Allow more chunks per doc for complete context
 MAX_FULL_SCAN_DOCS = 3
 MAX_FULL_SCAN_CHUNKS = 60  # Moderate scan to capture relevant chunks without noise
@@ -229,6 +229,9 @@ def retrieve_chunks(
     results = [c for c in results
                if str((c.meta or {}).get("profile_id") or "") == str(profile_id)
                and str((c.meta or {}).get("subscription_id") or "") == str(subscription_id)]
+
+    # Ensure document diversity: at least 1 chunk per document in results
+    results = _ensure_document_diversity(results, max_results=MAX_UNION_RESULTS)
 
     # Apply quality filtering pipeline for accuracy
     results = apply_quality_pipeline(results, raw_query, correlation_id)
@@ -1052,9 +1055,52 @@ def _expand_by_document(
                 continue
 
     merged = _merge_dedupe(base_chunks, expanded)
-    merged = sorted(merged, key=lambda c: c.score, reverse=True)[:MAX_UNION_RESULTS]
+    merged = _ensure_document_diversity(merged, max_results=MAX_UNION_RESULTS)
     _log_top5(merged, correlation_id, label="expand_doc")
     return merged
+
+def _ensure_document_diversity(chunks: List[Chunk], max_results: int = MAX_UNION_RESULTS) -> List[Chunk]:
+    """Ensure every unique document has at least one chunk in the result set.
+
+    Uses round-robin selection: take the best chunk from each document first,
+    then fill remaining slots with highest-scoring chunks regardless of document.
+    This prevents generic queries from being biased toward a few high-scoring documents.
+    """
+    if not chunks:
+        return chunks
+
+    # Group by document
+    doc_groups: dict = {}
+    for chunk in chunks:
+        doc_id = _chunk_doc_id(chunk) or "unknown"
+        if doc_id not in doc_groups:
+            doc_groups[doc_id] = []
+        doc_groups[doc_id].append(chunk)
+
+    # Sort each group by score
+    for doc_id in doc_groups:
+        doc_groups[doc_id].sort(key=lambda c: c.score, reverse=True)
+
+    # Round 1: Take best chunk from each document
+    diverse: list = []
+    seen_ids: set = set()
+    for doc_id, group in doc_groups.items():
+        if group:
+            best = group[0]
+            diverse.append(best)
+            seen_ids.add(id(best))
+
+    # Round 2: Fill remaining slots with highest-scoring chunks
+    remaining = sorted(chunks, key=lambda c: c.score, reverse=True)
+    for chunk in remaining:
+        if len(diverse) >= max_results:
+            break
+        if id(chunk) not in seen_ids:
+            diverse.append(chunk)
+            seen_ids.add(id(chunk))
+
+    return diverse
+
 
 def _filter_section_chunks(chunks: List[Chunk], domain: str) -> List[Chunk]:
     keywords = SECTION_KEYWORDS_BY_DOMAIN.get(domain) or []
