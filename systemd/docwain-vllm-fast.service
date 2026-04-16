@@ -15,13 +15,11 @@ ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python -m vllm.entrypoi
     --port 8100 \
     --host 0.0.0.0 \
     --dtype bfloat16 \
-    --max-model-len 40960 \
-    --gpu-memory-utilization 0.82 \
+    --max-model-len 32768 \
+    --gpu-memory-utilization 0.90 \
     --enable-prefix-caching \
-    --tensor-parallel-size 1 \
-    --speculative-model yuhuili/EAGLE3-Qwen3-14B \
-    --num-speculative-tokens 5 \
-    --speculative-draft-tensor-parallel-size 1
+    --enable-chunked-prefill \
+    --tensor-parallel-size 1
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=300
