@@ -109,11 +109,11 @@ class Reasoner:
 
         # Adaptive temperature: factual tasks need consistency, creative tasks need diversity
         _TASK_TEMPERATURE = {
-            "lookup": 0.1, "extract": 0.1, "list": 0.15,
-            "aggregate": 0.1, "compare": 0.2, "investigate": 0.2,
-            "summarize": 0.25, "overview": 0.25,
+            "lookup": 0.05, "extract": 0.05, "list": 0.05,
+            "aggregate": 0.05, "compare": 0.1, "investigate": 0.1,
+            "summarize": 0.15, "overview": 0.15,
         }
-        temperature = _TASK_TEMPERATURE.get(task_type, 0.2)
+        temperature = _TASK_TEMPERATURE.get(task_type, 0.1)
 
         logger.info(
             "[REASONER_PROMPT] task=%s evidence_count=%d prompt_len=%d temp=%.2f query=%r",
@@ -187,11 +187,11 @@ class Reasoner:
 
         # Adaptive temperature for streaming too
         _TASK_TEMPERATURE = {
-            "lookup": 0.1, "extract": 0.1, "list": 0.15,
-            "aggregate": 0.1, "compare": 0.2, "investigate": 0.2,
-            "summarize": 0.25, "overview": 0.25,
+            "lookup": 0.05, "extract": 0.05, "list": 0.05,
+            "aggregate": 0.05, "compare": 0.1, "investigate": 0.1,
+            "summarize": 0.15, "overview": 0.15,
         }
-        temperature = _TASK_TEMPERATURE.get(task_type, 0.2)
+        temperature = _TASK_TEMPERATURE.get(task_type, 0.1)
 
         logger.info(
             "[REASONER_STREAM] task=%s evidence_count=%d prompt_len=%d max_tokens=%d temp=%.2f query=%r",
