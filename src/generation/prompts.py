@@ -50,6 +50,15 @@ def build_system_prompt(
 # Task-type formatting instructions
 # ---------------------------------------------------------------------------
 
+_UNIVERSAL_INSTRUCTION = (
+    "ALWAYS provide comprehensive, detailed responses. Never give one-line or "
+    "single-value answers. Every response must include:\n"
+    "1. The direct answer to the query\n"
+    "2. Supporting context and relevant details from the document(s)\n"
+    "3. A brief insight or observation that adds value\n"
+    "Cite source document names when referencing specific facts.\n\n"
+)
+
 TASK_FORMATS: Dict[str, str] = {
     "extract": (
         "TASK: Extract the requested information precisely.\n"
@@ -109,10 +118,12 @@ TASK_FORMATS: Dict[str, str] = {
         "- Be precise about severity: **Critical** vs. **Minor** vs. **Informational**.\n"
     ),
     "lookup": (
-        "TASK: Provide a direct factual answer.\n"
-        "- Answer in 1-3 sentences maximum.\n"
-        "- **Bold** the key value.\n"
-        "- No decoration, no extended analysis.\n"
+        "TASK: Provide a direct, comprehensive answer.\n"
+        "- Lead with the direct answer in **bold**.\n"
+        "- Then provide supporting context: relevant details, related facts, and key observations from the document.\n"
+        "- Use structured formatting (bold values, bullet points) for clarity.\n"
+        "- Cite which document(s) the answer comes from.\n"
+        "- End with a brief insight or observation that adds value beyond the raw fact.\n"
     ),
     "aggregate": (
         "TASK: Aggregate and quantify from the evidence.\n"
@@ -452,7 +463,8 @@ def build_reason_prompt(
             parts.append(f"  DocWain: {str(resp)[:200]}")
         parts.append("")
 
-    # Task instruction
+    # Universal instruction + task-specific format
+    parts.append(_UNIVERSAL_INSTRUCTION)
     task_instruction = TASK_FORMATS.get(task_type, TASK_FORMATS["lookup"])
     parts.append(task_instruction)
 
