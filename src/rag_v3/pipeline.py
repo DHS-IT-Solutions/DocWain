@@ -254,6 +254,8 @@ def _nlu_scope_is_all_profile(query: str, intent_hint: str = "") -> bool:
         "all ", "every ", "each ", "list ", "how many",
         "across all", "from all", "total ", "summarize ",
         "summarise ", "overview", "entire ", "complete ",
+        "who are", "names", "candidates", "show me all",
+        "give me all", "what are all", "documents",
     ]
     if any(kw in _ql for kw in _ALL_KEYWORDS):
         return True
