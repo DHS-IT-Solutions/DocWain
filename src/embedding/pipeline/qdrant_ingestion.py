@@ -274,7 +274,8 @@ def ingest_payloads(
             from src.api.rag_state import get_app_state
             _app_state = get_app_state()
             _sparse_encoder = _app_state.sparse_encoder if _app_state else None
-        except Exception:
+        except Exception as exc:
+            logger.debug("AppState fetch failed, falling back to dense-only ingestion: %s", exc)
             _sparse_encoder = None
 
         records: List[ChunkRecord] = []
