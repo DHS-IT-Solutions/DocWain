@@ -331,10 +331,17 @@ class Reasoner:
 
         # Concise "not-found" answers: legitimate negation responses whose
         # vocabulary does not overlap with on-topic evidence chunks.
-        if len(answer_words) < 20 and re.search(
-            r'\bnot\s+(?:found|specified|present|provided|available|mentioned|listed|stated|given|included)\b',
-            answer,
-            re.IGNORECASE,
+        # Require at least one shared topical word so fabricated-entity answers
+        # that embed a negation phrase ("X is not listed") still hit the ratio
+        # gate below when none of their content appears in evidence.
+        if (
+            len(answer_words) < 20
+            and re.search(
+                r'\bnot\s+(?:found|specified|present|provided|available|mentioned|listed|stated|given|included)\b',
+                answer,
+                re.IGNORECASE,
+            )
+            and len(answer_words & evidence_words) >= 1
         ):
             return True
 
