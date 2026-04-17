@@ -51,7 +51,7 @@ def initialize_app_state(app: FastAPI) -> AppState:
     ollama_client = None
     rag_system = None
 
-    # Load embedding model + cross-encoder in parallel (they're CPU-bound and independent)
+    # Load embedding model + cross-encoder + sparse-encoder in parallel (CPU-bound, independent)
     def _load_embedding():
         nonlocal embedding_model
         try:
