@@ -53,9 +53,11 @@ class UnifiedRetriever:
     # without requiring a server restart.
     _NEGATIVE_CACHE_TTL = 30
 
-    def __init__(self, qdrant_client, embedder):
+    def __init__(self, qdrant_client, embedder, sparse_encoder=None, graph_augmenter=None):
         self.qdrant_client = qdrant_client
         self.embedder = embedder
+        self.sparse_encoder = sparse_encoder
+        self.graph_augmenter = graph_augmenter  # used by Task 9
         # Maps collection_name → (exists: bool, checked_at: float)
         self._collection_exists_cache: dict[str, tuple[bool, float]] = {}
 
@@ -172,9 +174,10 @@ class UnifiedRetriever:
         top_k: int = 30,
         correlation_id: Optional[str] = None,
     ) -> List[EvidenceChunk]:
-        """Dense search for a single profile, with keyword fallback."""
+        """Dense + sparse hybrid search with RRF fusion, keyword fallback."""
         qfilter = self._build_filter(subscription_id, profile_id, document_ids)
 
+        # Dense (existing path)
         try:
             result = self.qdrant_client.query_points(
                 collection_name=collection_name,
@@ -184,30 +187,120 @@ class UnifiedRetriever:
                 limit=top_k,
                 with_payload=True,
             )
-            points = result.points if hasattr(result, "points") else []
+            dense_points = result.points if hasattr(result, "points") else []
         except Exception:
             logger.exception(
                 "Dense search failed collection=%s profile=%s cid=%s",
                 collection_name, profile_id, correlation_id,
             )
-            points = []
+            dense_points = []
 
-        # Filter out doc_index/doc_intelligence points — those are fetched separately
-        points = [
-            pt for pt in points
+        dense_points = [
+            pt for pt in dense_points
             if (pt.payload or {}).get("resolution", "chunk") not in ("doc_index", "doc_intelligence")
         ]
-        chunks = [self._point_to_chunk(pt, profile_id) for pt in points]
+        dense_chunks = [self._point_to_chunk(pt, profile_id) for pt in dense_points]
 
-        # Keyword fallback when dense returns too few high-quality hits
+        # Sparse (new — empty list when encoder is None or fails)
+        sparse_chunks = self._sparse_search(
+            collection_name, query, subscription_id, profile_id,
+            document_ids=document_ids, top_k=top_k,
+        )
+
+        # RRF fusion when we have both; otherwise pass through dense
+        if sparse_chunks:
+            chunks = self._rrf_merge(dense_chunks, sparse_chunks, top_k=top_k)
+        else:
+            chunks = dense_chunks
+
+        # Keyword fallback path (unchanged) — only fires when hybrid returned few high-quality hits
         high_quality = [c for c in chunks if c.score >= self._HIGH_QUALITY_THRESHOLD]
         if len(high_quality) < self._DENSE_MIN:
             fallback = self._keyword_fallback(
-                collection_name, query, qfilter, top_k, existing_ids={c.chunk_id for c in chunks},
+                collection_name, query, qfilter, top_k,
+                existing_ids={c.chunk_id for c in chunks},
             )
             chunks.extend(fallback)
 
         return chunks
+
+    def _sparse_search(
+        self,
+        collection_name: str,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        *,
+        document_ids: Optional[List[str]] = None,
+        top_k: int = 30,
+    ) -> List[EvidenceChunk]:
+        """SPLADE sparse search against Qdrant's keywords_vector named sparse slot."""
+        if self.sparse_encoder is None:
+            return []
+        try:
+            from qdrant_client.models import SparseVector
+            sparse_dict = self.sparse_encoder.encode(query)
+            sparse_query = SparseVector(
+                indices=sparse_dict["indices"],
+                values=sparse_dict["values"],
+            )
+        except Exception as exc:
+            logger.warning("Sparse encode failed for query: %s", exc)
+            return []
+
+        qfilter = self._build_filter(subscription_id, profile_id, document_ids)
+
+        try:
+            result = self.qdrant_client.query_points(
+                collection_name=collection_name,
+                query=sparse_query,
+                using="keywords_vector",
+                query_filter=qfilter,
+                limit=top_k,
+                with_payload=True,
+            )
+            points = result.points if hasattr(result, "points") else []
+        except Exception as exc:
+            logger.warning(
+                "Sparse search failed collection=%s profile=%s: %s",
+                collection_name, profile_id, exc,
+            )
+            return []
+
+        points = [
+            pt for pt in points
+            if (pt.payload or {}).get("resolution", "chunk") not in ("doc_index", "doc_intelligence")
+        ]
+        return [self._point_to_chunk(pt, profile_id) for pt in points]
+
+    @staticmethod
+    def _rrf_merge(
+        dense: List[EvidenceChunk],
+        sparse: List[EvidenceChunk],
+        top_k: int = 30,
+        k: int = 60,
+        dense_weight: float = 0.6,
+        sparse_weight: float = 0.4,
+    ) -> List[EvidenceChunk]:
+        """Reciprocal Rank Fusion of dense + sparse chunk lists by chunk_id."""
+        scores: dict[str, float] = {}
+        chunks_by_id: dict[str, EvidenceChunk] = {}
+
+        for rank, c in enumerate(dense):
+            scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + dense_weight / (k + rank + 1)
+            chunks_by_id[c.chunk_id] = c
+
+        for rank, c in enumerate(sparse):
+            scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + sparse_weight / (k + rank + 1)
+            chunks_by_id.setdefault(c.chunk_id, c)
+
+        fused_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)
+        merged: List[EvidenceChunk] = []
+        for cid in fused_ids[:top_k]:
+            c = chunks_by_id[cid]
+            c.score = scores[cid]
+            merged.append(c)
+        return merged
 
     def _fill_missing_documents(
         self,
