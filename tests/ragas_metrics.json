@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-17T09:16:03",
+  "timestamp": "2026-04-17T10:24:45",
   "source": "/tmp/intensive_test_results.json",
   "total_queries": 106,
   "aggregate": {
-    "answer_faithfulness": 0.519,
+    "answer_faithfulness": 0.538,
     "hallucination_rate": 0.0,
-    "context_recall": 0.84,
+    "context_recall": 0.807,
     "grounding_bypass_rate": 0.0
   },
   "thresholds": {
@@ -35,16 +35,22 @@
       "context_recall": 0.0
     },
     {
-      "id": "CTR-08",
+      "id": "CTR-01",
       "grade": "D",
       "faithfulness": 0.25,
       "context_recall": 0.5
     },
     {
-      "id": "GEN-03",
-      "grade": "C",
+      "id": "CROSS-01",
+      "grade": "F",
       "faithfulness": 0.25,
-      "context_recall": 1.0
+      "context_recall": 0.0
+    },
+    {
+      "id": "LAW-10",
+      "grade": "D",
+      "faithfulness": 0.25,
+      "context_recall": 0.5
     },
     {
       "id": "TRANS-02",
@@ -55,14 +61,14 @@
   ],
   "low_context_recall": [
     {
-      "id": "HR-06",
+      "id": "HR-04",
       "grade": "F",
       "faithfulness": 0.5,
       "context_recall": 0.0
     },
     {
-      "id": "HR-13",
-      "grade": "D",
+      "id": "HR-06",
+      "grade": "F",
       "faithfulness": 0.5,
       "context_recall": 0.0
     },
@@ -80,38 +86,38 @@
     },
     {
       "id": "CTR-07",
+      "grade": "D",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "EDGE-03",
+      "grade": "F",
+      "faithfulness": 0.75,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CGEN-02",
       "grade": "F",
       "faithfulness": 0.5,
       "context_recall": 0.0
     },
     {
-      "id": "CTR-09",
+      "id": "CROSS-01",
       "grade": "F",
-      "faithfulness": 0.5,
+      "faithfulness": 0.25,
       "context_recall": 0.0
     },
     {
       "id": "LAW-03",
       "grade": "F",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 0.0
     },
     {
       "id": "LAW-09",
       "grade": "F",
       "faithfulness": 0.5,
-      "context_recall": 0.0
-    },
-    {
-      "id": "REC-04",
-      "grade": "D",
-      "faithfulness": 0.5,
-      "context_recall": 0.0
-    },
-    {
-      "id": "TRANS-02",
-      "grade": "F",
-      "faithfulness": 0.25,
       "context_recall": 0.0
     }
   ],
@@ -136,14 +142,14 @@
     },
     {
       "id": "HR-04",
-      "grade": "B",
+      "grade": "F",
       "faithfulness": 0.5,
-      "context_recall": 1.0
+      "context_recall": 0.0
     },
     {
       "id": "HR-05",
-      "grade": "A",
-      "faithfulness": 0.75,
+      "grade": "B",
+      "faithfulness": 0.5,
       "context_recall": 1.0
     },
     {
@@ -166,13 +172,13 @@
     },
     {
       "id": "HR-09",
-      "grade": "B",
+      "grade": "A",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
     {
       "id": "HR-10",
-      "grade": "A",
+      "grade": "B",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
@@ -190,9 +196,9 @@
     },
     {
       "id": "HR-13",
-      "grade": "D",
+      "grade": "B",
       "faithfulness": 0.5,
-      "context_recall": 0.0
+      "context_recall": 0.5
     },
     {
       "id": "HR-14",
@@ -215,7 +221,7 @@
     {
       "id": "HR-17",
       "grade": "B",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
@@ -226,8 +232,8 @@
     },
     {
       "id": "CTR-01",
-      "grade": "B",
-      "faithfulness": 0.5,
+      "grade": "D",
+      "faithfulness": 0.25,
       "context_recall": 0.5
     },
     {
@@ -257,42 +263,42 @@
     {
       "id": "CTR-06",
       "grade": "B",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
       "id": "CTR-07",
-      "grade": "F",
+      "grade": "D",
       "faithfulness": 0.5,
       "context_recall": 0.0
     },
     {
       "id": "CTR-08",
-      "grade": "D",
-      "faithfulness": 0.25,
+      "grade": "C",
+      "faithfulness": 0.5,
       "context_recall": 0.5
     },
     {
       "id": "CTR-09",
-      "grade": "F",
+      "grade": "B",
       "faithfulness": 0.5,
-      "context_recall": 0.0
+      "context_recall": 1.0
     },
     {
       "id": "CTR-10",
-      "grade": "B",
-      "faithfulness": 0.5,
+      "grade": "A",
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
       "id": "CTR-11",
       "grade": "B",
-      "faithfulness": 0.75,
+      "faithfulness": 0.5,
       "context_recall": 1.0
     },
     {
       "id": "CTR-12",
-      "grade": "A",
+      "grade": "B",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
@@ -316,20 +322,20 @@
     },
     {
       "id": "GEN-01",
-      "grade": "B",
-      "faithfulness": 0.5,
-      "context_recall": 1.0
+      "grade": "C",
+      "faithfulness": 0.75,
+      "context_recall": 0.5
     },
     {
       "id": "GEN-02",
-      "grade": "B",
+      "grade": "A",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
     {
       "id": "GEN-03",
-      "grade": "C",
-      "faithfulness": 0.25,
+      "grade": "B",
+      "faithfulness": 0.5,
       "context_recall": 1.0
     },
     {
@@ -382,19 +388,19 @@
     },
     {
       "id": "EDGE-03",
-      "grade": "A",
-      "faithfulness": 0.5,
-      "context_recall": 1.0
+      "grade": "F",
+      "faithfulness": 0.75,
+      "context_recall": 0.0
     },
     {
       "id": "EDGE-04",
       "grade": "B",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
       "id": "EDGE-05",
-      "grade": "B",
+      "grade": "C",
       "faithfulness": 0.5,
       "context_recall": 0.5
     },
@@ -406,15 +412,15 @@
     },
     {
       "id": "CGEN-02",
-      "grade": "B",
+      "grade": "F",
       "faithfulness": 0.5,
-      "context_recall": 1.0
+      "context_recall": 0.0
     },
     {
       "id": "CGEN-03",
       "grade": "B",
       "faithfulness": 0.5,
-      "context_recall": 1.0
+      "context_recall": 0.5
     },
     {
       "id": "CGEN-04",
@@ -430,7 +436,7 @@
     },
     {
       "id": "CGEN-06",
-      "grade": "A",
+      "grade": "B",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
@@ -442,8 +448,8 @@
     },
     {
       "id": "CGEN-08",
-      "grade": "B",
-      "faithfulness": 0.5,
+      "grade": "A",
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
@@ -479,14 +485,14 @@
     {
       "id": "REASON-06",
       "grade": "B",
-      "faithfulness": 0.75,
+      "faithfulness": 0.5,
       "context_recall": 1.0
     },
     {
       "id": "CROSS-01",
-      "grade": "A",
-      "faithfulness": 0.5,
-      "context_recall": 1.0
+      "grade": "F",
+      "faithfulness": 0.25,
+      "context_recall": 0.0
     },
     {
       "id": "CROSS-02",
@@ -520,14 +526,14 @@
     },
     {
       "id": "LAW-02",
-      "grade": "B",
-      "faithfulness": 0.5,
+      "grade": "C",
+      "faithfulness": 0.75,
       "context_recall": 0.5
     },
     {
       "id": "LAW-03",
       "grade": "F",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 0.0
     },
     {
@@ -545,19 +551,19 @@
     {
       "id": "LAW-06",
       "grade": "B",
-      "faithfulness": 0.75,
+      "faithfulness": 0.5,
       "context_recall": 1.0
     },
     {
       "id": "LAW-07",
       "grade": "B",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
       "id": "LAW-08",
       "grade": "B",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
@@ -568,8 +574,8 @@
     },
     {
       "id": "LAW-10",
-      "grade": "C",
-      "faithfulness": 0.5,
+      "grade": "D",
+      "faithfulness": 0.25,
       "context_recall": 0.5
     },
     {
@@ -586,7 +592,7 @@
     },
     {
       "id": "REC-03",
-      "grade": "A",
+      "grade": "B",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
@@ -604,13 +610,13 @@
     },
     {
       "id": "SCREEN-01",
-      "grade": "B",
+      "grade": "A",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
     {
       "id": "SCREEN-02",
-      "grade": "A",
+      "grade": "B",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
@@ -623,7 +629,7 @@
     {
       "id": "TRANS-01",
       "grade": "B",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
@@ -647,7 +653,7 @@
     {
       "id": "EXTRACT-02",
       "grade": "F",
-      "faithfulness": 0.5,
+      "faithfulness": 0.75,
       "context_recall": 0.0
     },
     {
@@ -682,7 +688,7 @@
     },
     {
       "id": "CONV-03",
-      "grade": "A",
+      "grade": "B",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
@@ -707,7 +713,7 @@
     {
       "id": "CS-03",
       "grade": "F",
-      "faithfulness": 0.75,
+      "faithfulness": 0.5,
       "context_recall": 0.0
     },
     {
@@ -724,8 +730,8 @@
     },
     {
       "id": "VIZ-01",
-      "grade": "A",
-      "faithfulness": 0.5,
+      "grade": "B",
+      "faithfulness": 0.75,
       "context_recall": 1.0
     },
     {
@@ -736,7 +742,7 @@
     },
     {
       "id": "VIZ-03",
-      "grade": "B",
+      "grade": "A",
       "faithfulness": 0.5,
       "context_recall": 1.0
     },
