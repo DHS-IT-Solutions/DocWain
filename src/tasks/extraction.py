@@ -19,10 +19,37 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _download_document_bytes(document_id: str, source_file: str) -> bytes:
-    """Download raw document bytes from Azure Blob storage."""
-    from src.api.blob_content_store import get_blob_client
+def _download_document_bytes(
+    document_id: str,
+    source_file: str,
+    location: str = "",
+) -> bytes:
+    """Download raw document bytes from Azure Blob storage.
 
+    Resolves the blob location in priority order:
+      1) ``location`` (the authoritative field on the Mongo doc record —
+         format ``az://{container}/{blob_path}``, written at upload time).
+      2) Fallback: legacy convention ``raw/{document_id}/{source_file}``
+         in the default container returned by ``get_blob_client``.
+
+    The fallback is kept for docs uploaded before ``location`` was a
+    stable field. For current uploads, path (1) is the only one that
+    matches where the blob actually lives.
+    """
+    from src.api.blob_content_store import get_blob_client
+    from src.storage.azure_blob_client import get_container_client
+
+    if location and location.startswith("az://"):
+        # az://CONTAINER/BLOB_PATH  — split on the first slash after the scheme
+        without_scheme = location[len("az://"):]
+        parts = without_scheme.split("/", 1)
+        if len(parts) == 2:
+            container_name, blob_path = parts[0], parts[1]
+            container = get_container_client(container_name)
+            blob_client = container.get_blob_client(blob_path)
+            return blob_client.download_blob().readall()
+
+    # Legacy convention
     container = get_blob_client()
     blob_name = f"raw/{document_id}/{source_file}"
     blob_client = container.get_blob_client(blob_name)
@@ -123,14 +150,29 @@ def extract_document(self, document_id: str, subscription_id: str,
         if not doc_record:
             raise ValueError(f"Document record not found for {document_id}")
 
-        source_file = doc_record.get("source_file") or doc_record.get("filename") or "document"
-        file_type = doc_record.get("doc_type") or doc_record.get("file_type") or "pdf"
+        source_file = (
+            doc_record.get("source_file")
+            or doc_record.get("filename")
+            or doc_record.get("name")
+            or "document"
+        )
+        # Prefer file_type when set; else derive the FILE EXTENSION from the
+        # filename. doc_type carries a CLASSIFICATION label (invoice, legal,
+        # etc.) not a file-format extension, so it must not be used here —
+        # deterministic extraction dispatches on extension.
+        file_type = doc_record.get("file_type") or ""
+        if not file_type:
+            import os as _os
+            ext = _os.path.splitext(source_file)[1].lstrip(".").lower()
+            file_type = ext or "pdf"
         content_type = doc_record.get("content_type") or ""
+        location = doc_record.get("location") or ""
 
         # 2. Download document bytes from Azure Blob
         try:
-            document_bytes = _download_document_bytes(document_id, source_file)
-            logger.info("Downloaded document %s (%d bytes)", document_id, len(document_bytes))
+            document_bytes = _download_document_bytes(document_id, source_file, location=location)
+            logger.info("Downloaded document %s (%d bytes) via location=%s",
+                        document_id, len(document_bytes), bool(location))
         except Exception as exc:
             raise RuntimeError(f"Failed to download document from blob: {exc}") from exc
 

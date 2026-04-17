@@ -695,8 +695,14 @@ def update_stage(document_id: str, stage: str, patch: Optional[Dict[str, Any]] =
         if celery_task_id is not None:
             flat[f"{stage}.celery_task_id"] = celery_task_id
         if summary is not None:
+            # Fold blob_path into the summary dict rather than setting both the
+            # parent path ({stage}.summary) and a child path
+            # ({stage}.summary.blob_path) in the same $set. MongoDB rejects
+            # that as ConflictingUpdateOperators.
+            if blob_path is not None:
+                summary = {**summary, "blob_path": blob_path}
             flat[f"{stage}.summary"] = summary
-        if blob_path is not None:
+        elif blob_path is not None:
             flat[f"{stage}.summary.blob_path"] = blob_path
         for key, value in extra.items():
             flat[f"{stage}.{key}"] = value
