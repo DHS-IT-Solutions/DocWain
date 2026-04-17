@@ -173,6 +173,8 @@ class UnifiedRetriever:
         subscription_id: str,
         profile_id: str,
         document_ids: Optional[List[str]] = None,
+        *,
+        chunks_only: bool = False,
     ) -> Filter:
         """Build Qdrant filter scoped to subscription + single profile."""
         must = [
@@ -184,6 +186,12 @@ class UnifiedRetriever:
                 must.append(FieldCondition(key="document_id", match=MatchValue(value=document_ids[0])))
             else:
                 must.append(FieldCondition(key="document_id", match=MatchAny(any=document_ids)))
+        if chunks_only:
+            # Without this, doc_index points (which are whole-document summaries
+            # optimised for query similarity) tend to dominate the top-K and
+            # push real chunks out before the post-filter can see them. They
+            # score higher than chunk-level embeddings by design.
+            must.append(FieldCondition(key="resolution", match=MatchValue(value="chunk")))
         return Filter(must=must)
 
     def _search_profile(
@@ -199,7 +207,8 @@ class UnifiedRetriever:
         correlation_id: Optional[str] = None,
     ) -> List[EvidenceChunk]:
         """Dense search for a single profile, with keyword fallback."""
-        qfilter = self._build_filter(subscription_id, profile_id, document_ids)
+        qfilter = self._build_filter(subscription_id, profile_id, document_ids,
+                                     chunks_only=True)
 
         try:
             result = self.qdrant_client.query_points(
@@ -287,50 +296,56 @@ class UnifiedRetriever:
         logger.info("_fill_missing: added %d missing docs, now %d total docs", added, len(covered))
         return existing_chunks
 
-    @staticmethod
+    # Fraction of top_k reserved for score-sorted dense/PPR hits before any
+    # diversity round-robin kicks in. With ratio=0.6 and top_k=10, the first
+    # 6 slots respect score order strictly; diversity fill gets the bottom 4.
+    _SCORE_PRIORITY_RATIO = 0.6
+    # Score-0.1 fill chunks (from _fill_missing_documents) are demoted below
+    # any real retrieval hit; anything at/above this threshold is a real hit.
+    _REAL_HIT_SCORE = 0.15
+
+    @classmethod
     def _ensure_document_diversity(
+        cls,
         chunks: List[EvidenceChunk],
         top_k: int,
     ) -> List[EvidenceChunk]:
-        """Ensure every unique document has at least one chunk in the results.
+        """Respect score order first, fill doc diversity only in the tail.
 
-        Round-robin: take the best chunk from each document first, then fill
-        remaining slots with highest-scoring chunks regardless of document.
-        This prevents generic queries from being biased toward a few documents.
+        The previous policy round-robined "best chunk per document" into the
+        head, which was the right call for generic queries but destroyed
+        ranking for specific queries: a score-0.1 fill chunk from an
+        unrelated doc could land above the dense-top-scored chunks. Now the
+        head of the result list is strictly score-ordered (real hits stay on
+        top), and diversity fill only reaches the tail slots.
         """
         if not chunks:
             return chunks
 
-        # Group by document_id
-        doc_groups: dict = {}
-        for c in chunks:
-            doc_id = c.document_id or (c.meta or {}).get("document_id", "unknown")
-            if doc_id not in doc_groups:
-                doc_groups[doc_id] = []
-            doc_groups[doc_id].append(c)
+        score_sorted = sorted(chunks, key=lambda x: x.score, reverse=True)
+        head_limit = max(1, int(top_k * cls._SCORE_PRIORITY_RATIO))
 
-        # Sort each group by score
-        for doc_id in doc_groups:
-            doc_groups[doc_id].sort(key=lambda x: x.score, reverse=True)
-
-        # Round 1: best chunk from each document
-        diverse = []
+        head: List[EvidenceChunk] = []
         seen = set()
-        for doc_id, group in doc_groups.items():
-            if group:
-                diverse.append(group[0])
-                seen.add(id(group[0]))
-
-        # Round 2: fill remaining by score
-        all_sorted = sorted(chunks, key=lambda x: x.score, reverse=True)
-        for c in all_sorted:
-            if len(diverse) >= top_k:
+        for c in score_sorted:
+            if len(head) >= head_limit:
                 break
-            if id(c) not in seen:
-                diverse.append(c)
-                seen.add(id(c))
+            head.append(c)
+            seen.add(id(c))
 
-        return diverse
+        # Tail: prefer chunks from documents not yet represented, but only
+        # among "real" hits; score-0.1 fill chunks remain last-resort.
+        head_docs = {c.document_id for c in head}
+        tail_candidates = [c for c in score_sorted if id(c) not in seen]
+        new_doc_real = [c for c in tail_candidates
+                        if c.document_id not in head_docs and c.score >= cls._REAL_HIT_SCORE]
+        new_doc_fill = [c for c in tail_candidates
+                        if c.document_id not in head_docs and c.score < cls._REAL_HIT_SCORE]
+        same_doc = [c for c in tail_candidates if c.document_id in head_docs]
+
+        tail_order = new_doc_real + same_doc + new_doc_fill
+        result = head + tail_order
+        return result[:top_k]
 
     def _keyword_fallback(
         self,
