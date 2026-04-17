@@ -1890,8 +1890,6 @@ def save_embeddings_to_qdrant(
 
 # Replace your existing train_on_document function with this:
 
-from src.api.enhanced_retrieval import chunk_text_for_embedding
-
 def _safe_basename(value: Optional[str]) -> str:
     if not value:
         return ""
@@ -3230,23 +3228,22 @@ def train_on_document(text, subscription_id, profile_id, doc_tag, doc_name, devi
             doc_metadata = _fetch_document_metadata(doc_tag, doc_name, None)
             doc_type = doc_metadata.get("doc_type")
 
+            # One chunking contract (impact #2): SectionChunker is the only
+            # chunker. The previous sliding-window fallback produced chunks
+            # with a different metadata shape (chunk_id / prev_chunk_id /
+            # next_chunk_id) than SectionChunker (section_title / page_start
+            # / page_end), and any fallback run would poison Qdrant with
+            # inconsistent payloads. Fail loud instead — the SectionChunker
+            # itself handles malformed inputs defensively.
             chunking_mode = "section_aware"
-            try:
-                chunks, chunk_metadata, _ = _chunk_with_section_chunker(
-                    text,
-                    doc_tag=doc_tag,
-                    doc_name=doc_name,
-                    doc_type=doc_type,
-                    doc_ocr_confidence=None,
-                    chunking_mode=chunking_mode,
-                )
-            except Exception as exc:  # noqa: BLE001
-                # Fallback to the legacy chunker to avoid total failure on edge cases.
-                logger.warning("Section chunking failed for %s: %s; falling back", doc_name, exc)
-                chunks_with_meta = chunk_text_for_embedding(text, doc_name, document_id=doc_tag)
-                chunks = [chunk_text for chunk_text, _meta in chunks_with_meta if (chunk_text or "").strip()]
-                chunk_metadata = [meta for chunk_text, meta in chunks_with_meta if (chunk_text or "").strip()]
-                chunking_mode = "sliding_window_fallback"
+            chunks, chunk_metadata, _ = _chunk_with_section_chunker(
+                text,
+                doc_tag=doc_tag,
+                doc_name=doc_name,
+                doc_type=doc_type,
+                doc_ocr_confidence=None,
+                chunking_mode=chunking_mode,
+            )
 
             if not chunks:
                 raise ValueError(f"No valid chunks in {doc_name}")
