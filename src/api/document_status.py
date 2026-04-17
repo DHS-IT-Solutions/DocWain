@@ -599,6 +599,27 @@ def update_document_fields(document_id: str, fields: Dict[str, Any]):
     update["updated_at"] = now
     unset_fields: Dict[str, Any] = {}
 
+    # Keep pipeline_status aligned with status whenever a recognised
+    # terminal status is written. Multiple call sites (screening_service,
+    # embedding_service, extraction_service) transition status without
+    # always setting pipeline_status; syncing here means all of them stay
+    # consistent with the UI contract without duplicating the map. Do not
+    # override an explicit pipeline_status the caller passed in.
+    status_value = update.get("status")
+    if status_value and "pipeline_status" not in update:
+        _status_to_pipeline = {
+            "EXTRACTION_COMPLETED": "EXTRACTION_COMPLETED",
+            "EXTRACTION_FAILED": "EXTRACTION_FAILED",
+            "SCREENING_COMPLETED": "SCREENING_COMPLETED",
+            "EMBEDDING_COMPLETED": "TRAINING_COMPLETED",
+            "EMBEDDING_FAILED": "EMBEDDING_FAILED",
+            "TRAINING_COMPLETED": "TRAINING_COMPLETED",
+            "TRAINING_FAILED": "EMBEDDING_FAILED",
+        }
+        mapped = _status_to_pipeline.get(str(status_value))
+        if mapped:
+            update["pipeline_status"] = mapped
+
     # Enforce: error is either missing or an object (never null).
     error_value = update.pop("error", _MISSING)
     if error_value is not _MISSING:

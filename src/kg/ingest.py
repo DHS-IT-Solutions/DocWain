@@ -264,6 +264,7 @@ def build_graph_payload(
     tenant_prefix = f"{subscription_id}::{profile_id}::"
 
     document = {
+        "document_id": str(document_id),
         "doc_id": str(document_id),
         "profile_id": str(profile_id),
         "subscription_id": str(subscription_id),
@@ -422,14 +423,19 @@ def ingest_graph_payload(store: Neo4jStore, payload: GraphIngestPayload) -> None
 
     store.ensure_graph_constraints()
 
+    # MERGE on (document_id, subscription_id, profile_id) so this path
+    # converges on the same Document node that the intelligence KG path
+    # (``src/kg/kg_store.py`` + ``src/intelligence/kg_updater.py``) uses.
+    # ``doc_id`` is kept as a compatibility property for older readers.
     doc_query = (
         "UNWIND $docs AS doc "
-        "MERGE (d:Document {doc_id: doc.doc_id}) "
-        "SET d.profile_id = doc.profile_id, "
-        "    d.subscription_id = doc.subscription_id, "
-        "    d.doc_name = doc.doc_name, "
-        "    d.document_category = doc.document_category, "
-        "    d.detected_language = doc.detected_language, "
+        "MERGE (d:Document {document_id: doc.document_id, "
+        "                   subscription_id: doc.subscription_id, "
+        "                   profile_id: doc.profile_id}) "
+        "SET d.doc_id = doc.doc_id, "
+        "    d.doc_name = coalesce(d.doc_name, doc.doc_name), "
+        "    d.document_category = coalesce(d.document_category, doc.document_category), "
+        "    d.detected_language = coalesce(d.detected_language, doc.detected_language), "
         "    d.graph_version = doc.graph_version, "
         "    d.created_at = coalesce(d.created_at, doc.created_at, datetime())"
     )
