@@ -33,12 +33,15 @@ def test_short_answer_grounded_when_evidence_exists():
 def test_concise_not_found_answer_grounded_when_evidence_present():
     """Short legitimate 'not-found' answers must not be marked ungrounded.
 
-    This is the exact failure mode from Task 1's diagnostic on NO_DATA:
-    answer = 'Not found in the documents.' (4 meaningful words) was returning
-    grounded=False because of the `overlap < 5` floor.
+    Mirrors the Apr 11 FIELD_PHONE failure: the user asked for Gokul's phone
+    number, retrieval returned on-topic chunks about Gokul, and the model
+    correctly said 'not specified'. The answer shares a topical word
+    ('Gokul') with the evidence — the `overlap >= 1` requirement on the
+    negation short-circuit is satisfied, and the short-answer gate fires.
+    Previously the `overlap < 5` absolute floor made this ungrounded.
     """
-    answer = "**Not specified in the documents.** The requested field was not present in any uploaded file."
-    evidence = [{"text": "Resume for Jane Smith includes work history and education but no phone number."}]
+    answer = "**Gokul's phone number is not specified in the documents.**"
+    evidence = [{"text": "Gokul's resume includes education, work experience, and email but no phone."}]
     assert _reasoner()._check_grounding(answer, evidence) is True
 
 
@@ -84,3 +87,17 @@ def test_grounded_when_evidence_paraphrases_answer():
                  "Patient comfortable. Temperature 36.8 C. Oxygen sat 98%."}
     ]
     assert _reasoner()._check_grounding(answer, evidence) is True
+
+
+def test_negation_short_circuit_requires_topical_overlap():
+    """Fabricated entities that embed a negation phrase must NOT short-circuit.
+
+    Example: 'The emergency contact John Doe Smith Jones is not listed in
+    employee records' shares zero topical words with the evidence (a resume
+    for Jane Doe). The negation short-circuit alone would mark this grounded;
+    the `len(answer_words & evidence_words) >= 1` additional requirement
+    forces it to fall through to the 5% ratio gate, which rejects it.
+    """
+    answer = "The emergency contact Kareem Abdul Quincy is not listed in employee records."
+    evidence = [{"text": "Jane Doe's resume includes work history at Acme Corp and a degree."}]
+    assert _reasoner()._check_grounding(answer, evidence) is False
