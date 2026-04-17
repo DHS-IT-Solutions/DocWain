@@ -93,6 +93,20 @@ def _iter_batches(
     """
     from qdrant_client.models import Filter, IsEmptyCondition, PayloadField
 
+    # Qdrant requires a payload index before IsEmptyCondition can filter on the
+    # field. Create the index idempotently (no-op if it already exists).
+    try:
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name="sparse_backfilled_at",
+            field_schema="datetime",
+        )
+    except Exception as exc:
+        logger.debug(
+            "create_payload_index(sparse_backfilled_at) on %s: %s (likely already exists)",
+            collection_name, exc,
+        )
+
     scroll_filter = Filter(
         must=[IsEmptyCondition(is_empty=PayloadField(key="sparse_backfilled_at"))]
     )
