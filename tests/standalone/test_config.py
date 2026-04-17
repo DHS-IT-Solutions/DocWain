@@ -36,8 +36,8 @@ def test_config_defaults():
 def test_config_respects_env_vars():
     """Config reads values from environment variables."""
     os.environ["STANDALONE_PORT"] = "9999"
-    os.environ["VLLM_BASE_URL"] = "http://gpu-server:8200/v1"
-    os.environ["VLLM_MODEL_NAME"] = "docwain-smart"
+    os.environ["VLLM_BASE_URL"] = "http://gpu-server:8100/v1"
+    os.environ["VLLM_MODEL_NAME"] = "docwain"
 
     try:
         import importlib
@@ -46,8 +46,8 @@ def test_config_respects_env_vars():
         from standalone.config import Config
 
         assert Config.PORT == 9999
-        assert Config.VLLM_BASE_URL == "http://gpu-server:8200/v1"
-        assert Config.VLLM_MODEL_NAME == "docwain-smart"
+        assert Config.VLLM_BASE_URL == "http://gpu-server:8100/v1"
+        assert Config.VLLM_MODEL_NAME == "docwain"
     finally:
         del os.environ["STANDALONE_PORT"]
         del os.environ["VLLM_BASE_URL"]

@@ -358,25 +358,20 @@ class LLMGateway:
         temperature = temperature if temperature is not None else Config.LLM.TEMPERATURE
         max_tokens = max_tokens if max_tokens is not None else Config.LLM.MAX_TOKENS
 
-        # Try vLLM streaming via VLLMManager (fast → smart fallback)
+        # Try vLLM streaming via the unified VLLMManager
         try:
             from src.api.rag_state import get_app_state
             app_state = get_app_state()
             vllm_mgr = getattr(app_state, "vllm_manager", None) if app_state else None
             if vllm_mgr is not None:
                 try:
-                    yield from vllm_mgr.stream_query_fast(
+                    yield from vllm_mgr.stream_query(
                         prompt, system_prompt=system,
                         max_tokens=max_tokens, temperature=temperature,
                     )
                     return
-                except Exception as fast_exc:
-                    logger.warning("vLLM fast stream failed: %s — trying smart instance", fast_exc)
-                    yield from vllm_mgr.stream_query_smart(
-                        prompt, system_prompt=system,
-                        max_tokens=max_tokens, temperature=temperature,
-                    )
-                    return
+                except Exception as stream_exc:
+                    logger.warning("vLLM stream failed: %s — falling back to Ollama stream", stream_exc)
         except Exception as exc:
             logger.warning("vLLM streaming unavailable: %s — trying Ollama stream", exc)
 
@@ -493,15 +488,14 @@ class LLMGateway:
             from src.api.rag_state import get_app_state
             app_state = get_app_state()
             vllm_mgr = getattr(app_state, "vllm_manager", None) if app_state else None
-            if vllm_mgr is not None and vllm_mgr.health_check("fast"):
-                full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
-                vllm_result = vllm_mgr.query_fast(
+            if vllm_mgr is not None and vllm_mgr.health_check():
+                vllm_result = vllm_mgr.query(
                     prompt, system_prompt=system,
                     max_tokens=max_tokens, temperature=temperature,
                 )
                 if vllm_result:
                     raw = vllm_result
-                    usage_meta = {"model": vllm_mgr._instances["fast"]["model"], "backend": "vllm"}
+                    usage_meta = {"model": vllm_mgr._model, "backend": "vllm"}
                     vllm_used = True
         except Exception as vllm_exc:
             logger.debug("vLLM generate failed: %s — falling back to primary", vllm_exc)

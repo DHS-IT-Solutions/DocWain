@@ -118,19 +118,17 @@ def initialize_app_state(app: FastAPI) -> AppState:
         except Exception as exc2:  # noqa: BLE001
             logger.error("Ollama client init also failed: %s", exc2)
 
-    # vLLM dual-instance client (systemd manages the processes)
+    # Unified DocWain vLLM client (systemd manages the process)
     vllm_manager = None
     if Config.VLLM.ENABLED:
         from src.serving.vllm_manager import VLLMManager
         vllm_manager = VLLMManager(
-            fast_url=Config.VLLM.FAST_URL,
-            smart_url=Config.VLLM.SMART_URL,
-            fast_model=Config.VLLM.FAST_MODEL,
-            smart_model=Config.VLLM.SMART_MODEL,
+            url=Config.VLLM.URL,
+            model=Config.VLLM.MODEL,
             gpu_mode_file=Config.VLLM.GPU_MODE_FILE,
         )
         backends = vllm_manager.get_active_backends()
-        logger.info("vLLM backends: %s", backends)
+        logger.info("vLLM backend: %s", backends)
 
     if qdrant_client and embedding_model and ollama_client:
         try:

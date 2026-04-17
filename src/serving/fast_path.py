@@ -1,4 +1,10 @@
-"""Fast path handler for simple queries routed to the 14B model."""
+"""Handler for simple-intent queries (greetings, lookups, lists, counts).
+
+Historical note: this used to be the "fast path" that routed to a 14B model
+while complex queries went to a 27B "smart" model. DocWain is now a single
+unified model; this handler remains because simple intents still benefit from
+intent-specific retrieval and prompting logic.
+"""
 
 from __future__ import annotations
 
@@ -20,10 +26,10 @@ _IDENTITY_SYSTEM = "You are DocWain."
 
 
 class FastPathHandler:
-    """Handles queries routed to the fast (14B) model path.
+    """Handles simple-intent queries against the unified DocWain model.
 
     For greetings and identity questions, generates a direct response with
-    no retrieval.  For lookups, lists, and counts, performs a single Qdrant
+    no retrieval. For lookups, lists, and counts, performs a single Qdrant
     search then generates a grounded response.
 
     Usage::
@@ -33,7 +39,7 @@ class FastPathHandler:
         handler = FastPathHandler(mgr)
         result = handler.handle(
             query="How many invoices are there?",
-            router_result=RouterResult(intent="count", complexity="simple", route="fast"),
+            router_result=RouterResult(intent="count", complexity="simple"),
             profile_context=None,
             retriever=some_retriever,
         )
@@ -91,7 +97,7 @@ class FastPathHandler:
         system = _GREETING_SYSTEM if intent == "greeting" else _IDENTITY_SYSTEM
 
         try:
-            response = self._mgr.query_fast(
+            response = self._mgr.query(
                 prompt=query,
                 system_prompt=system,
                 max_tokens=512,
@@ -142,7 +148,7 @@ class FastPathHandler:
         user_prompt = self._build_generation_prompt(query, router_result.intent, evidence_text)
 
         try:
-            response = self._mgr.query_fast(
+            response = self._mgr.query(
                 prompt=user_prompt,
                 system_prompt=system,
                 max_tokens=4096,

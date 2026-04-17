@@ -1,15 +1,15 @@
-"""Configuration for dual vLLM instances and Ollama fallback."""
+"""Configuration for the unified DocWain vLLM instance and Ollama fallbacks."""
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
 @dataclass(frozen=True)
 class VLLMInstanceConfig:
-    """Configuration for a single vLLM serving instance."""
+    """Configuration for the unified DocWain vLLM serving instance."""
 
     name: str
     model: str
@@ -47,10 +47,10 @@ class VLLMInstanceConfig:
         return args
 
 
-# -- Pre-built configurations ------------------------------------------------
+# -- Pre-built configuration -------------------------------------------------
 
-FAST_PATH_CONFIG = VLLMInstanceConfig(
-    name="fast",
+DOCWAIN_CONFIG = VLLMInstanceConfig(
+    name="docwain",
     model="Qwen/Qwen3-14B",
     port=8100,
     dtype="fp8",
@@ -60,20 +60,6 @@ FAST_PATH_CONFIG = VLLMInstanceConfig(
     enable_prefix_caching=True,
     enable_chunked_prefill=False,
     speculative_model="yuhuili/EAGLE3-Qwen3-14B",
-    guided_decoding_backend="outlines",
-)
-
-SMART_PATH_CONFIG = VLLMInstanceConfig(
-    name="smart",
-    model="Qwen/Qwen3.5-27B",
-    port=8200,
-    dtype="fp8",
-    kv_cache_dtype="fp8",
-    max_model_len=32768,
-    gpu_memory_utilization=0.50,
-    enable_prefix_caching=True,
-    enable_chunked_prefill=True,
-    speculative_model=None,
     guided_decoding_backend="outlines",
 )
 

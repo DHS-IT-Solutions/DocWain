@@ -107,7 +107,7 @@ def run_query_pipeline(
             return fast_response
 
     # -----------------------------------------------------------------
-    # Step 3: Smart path — Plan -> Execute -> Assemble -> Generate
+    # Step 3: Full-reasoning path — Plan -> Execute -> Assemble -> Generate
     # -----------------------------------------------------------------
     exec_clients = ExecutionClients(
         qdrant_client=qdrant_client,
@@ -167,7 +167,7 @@ def run_query_pipeline(
         grounded=grounded,
         context_found=context_found,
         confidence=verification.confidence,
-        route_taken="fast" if _is_fast_path(route_intent) else "smart",
+        route_taken="simple" if _is_fast_path(route_intent) else "full_reasoning",
         plan=plan,
         metadata={
             "intent": route_intent,
@@ -188,7 +188,7 @@ def run_query_pipeline(
 # ---------------------------------------------------------------------------
 
 def _route_query(query: str, vllm_manager: Any) -> Any:
-    """Route the query via the 14B intent router."""
+    """Classify the query via the unified-model intent router."""
     if IntentRouter is None or vllm_manager is None:
         return None
     try:

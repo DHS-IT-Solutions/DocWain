@@ -350,16 +350,14 @@ class Config:
         DISABLE_EXTERNAL = os.getenv("LLM_DISABLE_EXTERNAL", "true").lower() in {"1", "true", "yes", "on"}
 
     class VLLM:
-        """vLLM serving config — Qwen3-14B-AWQ via OpenAI-compatible API."""
+        """Unified DocWain vLLM serving config — single model, OpenAI-compatible API."""
         ENABLED = os.getenv("VLLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         ENDPOINT = os.getenv("VLLM_ENDPOINT", "http://localhost:8001/v1/chat/completions")
         MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen3-14B-AWQ")
         API_KEY = _secret("VLLM_API_KEY", "")
         TIMEOUT = float(os.getenv("VLLM_TIMEOUT", "30"))
-        FAST_URL = os.getenv("VLLM_FAST_URL", "http://localhost:8100")
-        SMART_URL = os.getenv("VLLM_SMART_URL", "http://localhost:8200")
-        FAST_MODEL = os.getenv("VLLM_FAST_MODEL", "docwain-fast")
-        SMART_MODEL = os.getenv("VLLM_SMART_MODEL", "docwain-smart")
+        URL = os.getenv("VLLM_URL", "http://localhost:8100")
+        MODEL = os.getenv("VLLM_MODEL", "docwain-fast")
         GPU_MODE_FILE = os.getenv("DOCWAIN_GPU_MODE_FILE", "/tmp/docwain-gpu-mode.json")
 
     class DocumentProfiler:

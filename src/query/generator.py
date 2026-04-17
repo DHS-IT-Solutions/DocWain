@@ -160,21 +160,19 @@ class ResponseGenerator:
     # ------------------------------------------------------------------
 
     def _call_llm(self, user_prompt: str) -> tuple[str, Optional[str]]:
-        """Call 27B (preferred) or gateway (fallback). Returns (text, thinking)."""
-        # Try vLLM 27B first
+        """Call unified vLLM (preferred) or gateway (fallback). Returns (text, thinking)."""
         if self._vllm is not None:
             try:
                 raw = self._vllm.generate(
                     prompt=user_prompt,
                     system=_GENERATION_SYSTEM_PROMPT,
-                    model="smart",
                     temperature=0.4,
                     max_tokens=4096,
                 )
                 text, thinking = self._split_thinking(raw)
                 return text, thinking
             except Exception as exc:
-                logger.warning("27B generation failed, trying gateway fallback: %s", exc)
+                logger.warning("vLLM generation failed, trying gateway fallback: %s", exc)
 
         # Fallback to LLMGateway
         if self._gateway is not None:

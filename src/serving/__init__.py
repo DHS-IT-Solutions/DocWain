@@ -1,9 +1,8 @@
-"""DocWain serving layer — vLLM client, intent routing, fast-path handler."""
+"""DocWain serving layer — unified vLLM client, intent routing, simple-intent handler."""
 
 from src.serving.config import (
     VLLMInstanceConfig,
-    FAST_PATH_CONFIG,
-    SMART_PATH_CONFIG,
+    DOCWAIN_CONFIG,
     OLLAMA_FALLBACK_CONFIG,
     OLLAMA_CLOUD_CONFIG,
     GPU_MODE_FILE,
@@ -16,8 +15,7 @@ from src.serving.metrics import record_request, get_metrics, reset_metrics
 
 __all__ = [
     "VLLMInstanceConfig",
-    "FAST_PATH_CONFIG",
-    "SMART_PATH_CONFIG",
+    "DOCWAIN_CONFIG",
     "OLLAMA_FALLBACK_CONFIG",
     "OLLAMA_CLOUD_CONFIG",
     "GPU_MODE_FILE",

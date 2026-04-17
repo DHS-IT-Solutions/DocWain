@@ -1,4 +1,4 @@
-"""Tests for VLLMManager client-only refactor."""
+"""Tests for the unified VLLMManager."""
 
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -57,43 +57,23 @@ def gpu_mode_file(tmp_path):
 class TestHealthCheck:
     def test_healthy_instance(self, fake_vllm_server):
         from src.serving.vllm_manager import VLLMManager
-        mgr = VLLMManager(
-            fast_url=f"http://127.0.0.1:{fake_vllm_server}",
-            smart_url=f"http://127.0.0.1:{fake_vllm_server}",
-        )
-        assert mgr.health_check("fast") is True
-        assert mgr.health_check("smart") is True
+        mgr = VLLMManager(url=f"http://127.0.0.1:{fake_vllm_server}")
+        assert mgr.health_check() is True
 
     def test_unhealthy_instance(self):
         from src.serving.vllm_manager import VLLMManager
-        mgr = VLLMManager(fast_url="http://127.0.0.1:19999", smart_url="http://127.0.0.1:19998")
-        assert mgr.health_check("fast") is False
-
-    def test_unknown_instance(self, fake_vllm_server):
-        from src.serving.vllm_manager import VLLMManager
-        mgr = VLLMManager(fast_url=f"http://127.0.0.1:{fake_vllm_server}")
-        assert mgr.health_check("nonexistent") is False
+        mgr = VLLMManager(url="http://127.0.0.1:19999")
+        assert mgr.health_check() is False
 
 
 class TestQuery:
-    def test_query_fast(self, fake_vllm_server, gpu_mode_file):
+    def test_query(self, fake_vllm_server, gpu_mode_file):
         from src.serving.vllm_manager import VLLMManager
         mgr = VLLMManager(
-            fast_url=f"http://127.0.0.1:{fake_vllm_server}",
-            smart_url=f"http://127.0.0.1:{fake_vllm_server}",
+            url=f"http://127.0.0.1:{fake_vllm_server}",
             gpu_mode_file=gpu_mode_file,
         )
-        result = mgr.query_fast("Hello")
-        assert "Response from" in result
-
-    def test_query_smart(self, fake_vllm_server, gpu_mode_file):
-        from src.serving.vllm_manager import VLLMManager
-        mgr = VLLMManager(
-            fast_url=f"http://127.0.0.1:{fake_vllm_server}",
-            smart_url=f"http://127.0.0.1:{fake_vllm_server}",
-            gpu_mode_file=gpu_mode_file,
-        )
-        result = mgr.query_smart("Hello")
+        result = mgr.query("Hello")
         assert "Response from" in result
 
 
@@ -101,12 +81,11 @@ class TestFallback:
     def test_falls_back_when_vllm_down(self, gpu_mode_file):
         from src.serving.vllm_manager import VLLMManager
         mgr = VLLMManager(
-            fast_url="http://127.0.0.1:19999",
-            smart_url="http://127.0.0.1:19998",
+            url="http://127.0.0.1:19999",
             gpu_mode_file=gpu_mode_file,
         )
         with patch.object(mgr, "_query_ollama_cloud", return_value="cloud response") as mock:
-            result = mgr.query_fast("Hello")
+            result = mgr.query("Hello")
             mock.assert_called_once()
             assert result == "cloud response"
 
@@ -115,12 +94,11 @@ class TestFallback:
         mode_file = tmp_path / "gpu-mode.json"
         mode_file.write_text(json.dumps({"mode": "training"}))
         mgr = VLLMManager(
-            fast_url=f"http://127.0.0.1:{fake_vllm_server}",
-            smart_url=f"http://127.0.0.1:{fake_vllm_server}",
+            url=f"http://127.0.0.1:{fake_vllm_server}",
             gpu_mode_file=str(mode_file),
         )
         with patch.object(mgr, "_query_ollama_cloud", return_value="cloud fallback") as mock:
-            result = mgr.query_fast("Hello")
+            result = mgr.query("Hello")
             mock.assert_called_once()
             assert result == "cloud fallback"
 
@@ -145,10 +123,6 @@ class TestGPUMode:
 
     def test_get_active_backends(self, fake_vllm_server):
         from src.serving.vllm_manager import VLLMManager
-        mgr = VLLMManager(
-            fast_url=f"http://127.0.0.1:{fake_vllm_server}",
-            smart_url=f"http://127.0.0.1:{fake_vllm_server}",
-        )
+        mgr = VLLMManager(url=f"http://127.0.0.1:{fake_vllm_server}")
         backends = mgr.get_active_backends()
-        assert backends["fast"] is True
-        assert backends["smart"] is True
+        assert backends["docwain"] is True

@@ -138,7 +138,7 @@ def build_profile_expertise(
     # Phase 1: Profile Understanding
     phase1_prompt = _PHASE1_PROMPT_TEMPLATE.format(doc_summaries=doc_summaries)
     try:
-        phase1_raw = vllm_manager.query_smart(
+        phase1_raw = vllm_manager.query(
             prompt=phase1_prompt,
             system_prompt=_PHASE1_SYSTEM,
             max_tokens=4096,
@@ -168,7 +168,7 @@ def build_profile_expertise(
                 cluster_docs=cluster["docs_text"],
             )
             phase2_system = _PHASE2_SYSTEM.format(role=identity.get("role", "document analyst"))
-            phase2_raw = vllm_manager.query_smart(
+            phase2_raw = vllm_manager.query(
                 prompt=phase2_prompt,
                 system_prompt=phase2_system,
                 max_tokens=2048,

@@ -60,14 +60,12 @@ class GPUScheduler:
         self,
         gpu_mode_file: str = DEFAULT_GPU_MODE_FILE,
         training_queue_file: str = DEFAULT_TRAINING_QUEUE_FILE,
-        vllm_fast_url: str = "http://127.0.0.1:8001",
-        vllm_smart_url: str = "http://127.0.0.1:8002",
+        vllm_url: str = "http://127.0.0.1:8100",
         idle_threshold_minutes: int = 30,
     ) -> None:
         self.gpu_mode_file = Path(gpu_mode_file)
         self.training_queue_file = Path(training_queue_file)
-        self.vllm_fast_url = vllm_fast_url.rstrip("/")
-        self.vllm_smart_url = vllm_smart_url.rstrip("/")
+        self.vllm_url = vllm_url.rstrip("/")
         self.idle_threshold_s = idle_threshold_minutes * 60
         self._last_request_time: float = time.time()
 
@@ -127,21 +125,20 @@ class GPUScheduler:
         import urllib.request
         import urllib.error
 
-        for url in [self.vllm_fast_url, self.vllm_smart_url]:
-            try:
-                req = urllib.request.Request(f"{url}/metrics", method="GET")
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    body = resp.read().decode()
-                for line in body.splitlines():
-                    if line.startswith("vllm:num_requests_running"):
-                        match = re.search(r"[\d.]+$", line)
-                        if match:
-                            val = float(match.group())
-                            if val > 0:
-                                self._last_request_time = time.time()
-                            return val
-            except (urllib.error.URLError, OSError, ValueError):
-                continue
+        try:
+            req = urllib.request.Request(f"{self.vllm_url}/metrics", method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = resp.read().decode()
+            for line in body.splitlines():
+                if line.startswith("vllm:num_requests_running"):
+                    match = re.search(r"[\d.]+$", line)
+                    if match:
+                        val = float(match.group())
+                        if val > 0:
+                            self._last_request_time = time.time()
+                        return val
+        except (urllib.error.URLError, OSError, ValueError):
+            pass
         return None
 
     def _is_idle(self) -> bool:
@@ -185,15 +182,11 @@ class GPUScheduler:
         logger.info("Draining in-flight requests (10 s) …")
         time.sleep(10)
 
-        # Stop vLLM services (smart first — it is heavier)
-        try:
-            _systemctl("stop", "docwain-vllm-smart")
-        except subprocess.CalledProcessError:
-            logger.warning("Failed to stop vllm-smart (may already be stopped)")
+        # Stop the unified vLLM service
         try:
             _systemctl("stop", "docwain-vllm-fast")
         except subprocess.CalledProcessError:
-            logger.warning("Failed to stop vllm-fast (may already be stopped)")
+            logger.warning("Failed to stop docwain-vllm-fast (may already be stopped)")
 
         # Run training
         self._run_training()
@@ -210,15 +203,11 @@ class GPUScheduler:
         logger.info("=== Resuming serving mode ===")
         self._hot_swap_model()
 
-        # Start vLLM services (fast first)
+        # Start the unified vLLM service
         try:
             _systemctl("start", "docwain-vllm-fast")
         except subprocess.CalledProcessError:
-            logger.error("Failed to start vllm-fast")
-        try:
-            _systemctl("start", "docwain-vllm-smart")
-        except subprocess.CalledProcessError:
-            logger.error("Failed to start vllm-smart")
+            logger.error("Failed to start docwain-vllm-fast")
 
         self.set_gpu_mode("serving")
         self._last_request_time = time.time()

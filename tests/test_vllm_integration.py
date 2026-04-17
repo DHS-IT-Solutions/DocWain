@@ -1,6 +1,6 @@
 """Integration test — verifies the full query pipeline routes through vLLM.
 
-Requires vLLM fast instance running on port 8100.
+Requires the unified DocWain vLLM instance running on port 8100.
 Skip if not available.
 """
 
@@ -21,14 +21,14 @@ def _vllm_available(port: int) -> bool:
 
 @pytest.mark.skipif(
     not _vllm_available(8100),
-    reason="vLLM fast instance not running on port 8100",
+    reason="DocWain vLLM instance not running on port 8100",
 )
 class TestVLLMIntegration:
-    def test_vllm_manager_query_fast(self):
+    def test_vllm_manager_query(self):
         from src.serving.vllm_manager import VLLMManager
 
         mgr = VLLMManager()
-        result = mgr.query_fast("What is DocWain?")
+        result = mgr.query("What is DocWain?")
         assert len(result) > 10
         assert isinstance(result, str)
 
@@ -36,16 +36,16 @@ class TestVLLMIntegration:
         from src.serving.vllm_manager import VLLMManager
 
         mgr = VLLMManager()
-        assert mgr.health_check("fast") is True
+        assert mgr.health_check() is True
         backends = mgr.get_active_backends()
-        assert backends["fast"] is True
+        assert backends["docwain"] is True
 
     def test_vllm_manager_fallback_on_bad_instance(self):
         from src.serving.vllm_manager import VLLMManager
 
-        mgr = VLLMManager(smart_url="http://localhost:19999")
-        # Smart is down, should fall back to Ollama Cloud or local
-        result = mgr.query_smart("Hello")
+        mgr = VLLMManager(url="http://localhost:19999")
+        # vLLM is down, should fall back to Ollama Cloud or local
+        result = mgr.query("Hello")
         assert isinstance(result, str)
 
     def test_gpu_mode_serving(self, tmp_path):
@@ -59,15 +59,15 @@ class TestVLLMIntegration:
 
 @pytest.mark.skipif(
     not _vllm_available(8100),
-    reason="vLLM fast instance not running on port 8100",
+    reason="DocWain vLLM instance not running on port 8100",
 )
 class TestVLLMIntentRouting:
     def test_intent_router_classifies(self):
         from src.serving.vllm_manager import VLLMManager
-        from src.serving.model_router import IntentRouter
+        from src.serving.model_router import IntentRouter, INTENT_TYPES
 
         mgr = VLLMManager()
         router = IntentRouter(mgr)
         result = router.route("What is the total amount on this invoice?")
-        assert result.route in ("fast", "smart")
-        assert result.intent is not None
+        assert result.intent in INTENT_TYPES
+        assert result.complexity in ("simple", "moderate", "complex")

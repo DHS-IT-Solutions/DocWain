@@ -129,8 +129,8 @@ class VLLMClient:
         model_name: Optional[str] = None,
     ):
         Config = _get_config()
-        self.base_url = base_url or getattr(Config.VLLM, "FAST_URL", "http://localhost:8100")
-        self.model_name = model_name or getattr(Config.VLLM, "FAST_MODEL", "docwain-fast")
+        self.base_url = base_url or getattr(Config.VLLM, "URL", "http://localhost:8100")
+        self.model_name = model_name or getattr(Config.VLLM, "MODEL", "docwain-fast")
         self.backend = "vllm"
         self._timeout = float(getattr(Config.VLLM, "TIMEOUT", 300))
 

@@ -167,21 +167,44 @@ def enhance_briefs_with_patterns(
 # ---------------------------------------------------------------------------
 
 
-def promote_model(checkpoint_path: str) -> bool:
-    """Promote the trained model to production.
+def promote_model(checkpoint_path: str, new_score: Optional[float] = None) -> bool:
+    """Promote the trained model to production if it beats the current active.
 
-    Updates the docwain-v2-active symlink and restarts vLLM.
+    Updates the docwain-v2-active symlink and restarts vLLM. Refuses to
+    promote if ``new_score`` is given and does not exceed the currently-active
+    score recorded in ``models/docwain-v2-active.score.json``.
     Does NOT update Ollama (per project convention).
     """
     symlink = Path("models/docwain-v2-active")
+    score_file = Path("models/docwain-v2-active.score.json")
     abs_checkpoint = str(Path(checkpoint_path).resolve())
+
+    # "Always the best" guard: only promote if the new checkpoint strictly beats
+    # whatever is currently active.
+    if new_score is not None and score_file.exists():
+        try:
+            current = float(json.loads(score_file.read_text()).get("score", 0.0))
+        except (json.JSONDecodeError, OSError, ValueError):
+            current = 0.0
+        if new_score <= current:
+            logger.info(
+                "Skipping promotion: new score %.4f does not beat active %.4f",
+                new_score, current,
+            )
+            return False
 
     logger.info("Promoting model: %s -> %s", symlink, abs_checkpoint)
 
-    # Update symlink
     if symlink.is_symlink() or symlink.exists():
         symlink.unlink()
     symlink.symlink_to(abs_checkpoint)
+
+    if new_score is not None:
+        score_file.write_text(json.dumps({
+            "score": new_score,
+            "checkpoint": abs_checkpoint,
+            "promoted_at": datetime.now(timezone.utc).isoformat(),
+        }))
 
     # Restart vLLM if running
     try:

@@ -1,7 +1,7 @@
-"""Client-only vLLM manager — routes queries to vLLM instances managed by systemd.
+"""Client-only vLLM manager — routes queries to the unified vLLM instance.
 
-No subprocess management. Health checks via HTTP. Falls back to Ollama Cloud
-during training, Ollama local as emergency.
+Single DocWain model, no fast/smart split. Health checks via HTTP. Falls back
+to Ollama Cloud during training, Ollama local as emergency.
 """
 
 from __future__ import annotations
@@ -23,12 +23,14 @@ logger = get_logger(__name__)
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
+_DEFAULT_MAX_MODEL_LEN = 4096
+
 
 class VLLMManager:
-    """Client-only manager for dual vLLM instances with tiered fallback.
+    """Client-only manager for the unified DocWain vLLM instance.
 
     Fallback chain (serving mode):
-        vLLM instance -> Ollama Cloud (397b) -> Ollama local (14b)
+        vLLM -> Ollama Cloud (397b) -> Ollama local (14b)
 
     Fallback chain (training mode):
         Ollama Cloud (397b) -> Ollama local (14b)
@@ -36,30 +38,21 @@ class VLLMManager:
 
     def __init__(
         self,
-        fast_url: str = "http://localhost:8100",
-        smart_url: str = "http://localhost:8200",
-        fast_model: str = "docwain-fast",
-        smart_model: str = "docwain-smart",
+        url: str = "http://localhost:8100",
+        model: str = "docwain-fast",
         gpu_mode_file: str = GPU_MODE_FILE,
     ) -> None:
-        self._instances: Dict[str, Dict[str, str]] = {
-            "fast": {"url": fast_url.rstrip("/"), "model": fast_model},
-            "smart": {"url": smart_url.rstrip("/"), "model": smart_model},
-        }
+        self._url = url.rstrip("/")
+        self._model = model
         self._gpu_mode_file = gpu_mode_file
-        # Cache max_model_len per instance (populated lazily)
-        self._max_model_len: Dict[str, int] = {}
+        self._cached_max_model_len: Optional[int] = None
 
     # -- Status ----------------------------------------------------------------
 
-    def health_check(self, name: str) -> bool:
-        """Return True if the named vLLM instance responds on /health."""
-        instance = self._instances.get(name)
-        if instance is None:
-            return False
-        url = f"{instance['url']}/health"
+    def health_check(self) -> bool:
+        """Return True if the vLLM instance responds on /health."""
         try:
-            req = urllib_request.Request(url, method="GET")
+            req = urllib_request.Request(f"{self._url}/health", method="GET")
             with urllib_request.urlopen(req, timeout=5) as resp:
                 return resp.status == 200
         except (HTTPError, URLError, OSError, TimeoutError):
@@ -75,44 +68,38 @@ class VLLMManager:
             return "serving"
 
     def get_active_backends(self) -> Dict[str, Any]:
-        """Return health status of all backends."""
+        """Return health status of the unified backend."""
         return {
-            "fast": self.health_check("fast"),
-            "smart": self.health_check("smart"),
+            "docwain": self.health_check(),
             "gpu_mode": self.get_gpu_mode(),
         }
 
-    def get_max_model_len(self, name: str) -> int:
+    def get_max_model_len(self) -> int:
         """Fetch max_model_len from the vLLM /v1/models endpoint (cached)."""
-        if name in self._max_model_len:
-            return self._max_model_len[name]
-        instance = self._instances.get(name)
-        if not instance:
-            return 4096
-        url = f"{instance['url']}/v1/models"
+        if self._cached_max_model_len is not None:
+            return self._cached_max_model_len
         try:
-            req = urllib_request.Request(url, method="GET")
+            req = urllib_request.Request(f"{self._url}/v1/models", method="GET")
             with urllib_request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode())
             for model_info in result.get("data", []):
                 mml = model_info.get("max_model_len")
                 if mml:
-                    self._max_model_len[name] = int(mml)
+                    self._cached_max_model_len = int(mml)
                     return int(mml)
         except (HTTPError, URLError, OSError, json.JSONDecodeError, ValueError) as exc:
-            logger.debug("Could not fetch max_model_len for %s: %s", name, exc)
-        return 4096  # safe default
+            logger.debug("Could not fetch max_model_len: %s", exc)
+        return _DEFAULT_MAX_MODEL_LEN
 
-    def _clamp_max_tokens(self, instance_name: str, prompt_text: str, max_tokens: int) -> int:
-        """Clamp max_tokens so prompt + generation fits within the model's context window."""
-        model_limit = self.get_max_model_len(instance_name)
-        # Conservative token estimate: ~4 chars per token (Qwen tokenizer typical ratio)
+    def _clamp_max_tokens(self, prompt_text: str, max_tokens: int) -> int:
+        """Clamp max_tokens so prompt + generation fits within the context window."""
+        model_limit = self.get_max_model_len()
         estimated_prompt_tokens = len(prompt_text) // 4
         available = max(model_limit - estimated_prompt_tokens, 256)
         if max_tokens > available:
             logger.info(
-                "Clamping max_tokens %d -> %d for %s (model_limit=%d, est_prompt_tokens=%d)",
-                max_tokens, available, instance_name, model_limit, estimated_prompt_tokens,
+                "Clamping max_tokens %d -> %d (model_limit=%d, est_prompt_tokens=%d)",
+                max_tokens, available, model_limit, estimated_prompt_tokens,
             )
             return available
         return max_tokens
@@ -121,14 +108,13 @@ class VLLMManager:
 
     def query(
         self,
-        instance_name: str,
         prompt: str,
         system_prompt: str = "",
         guided_json: Optional[Dict[str, Any]] = None,
         max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> str:
-        """Query a vLLM instance with tiered fallback.
+        """Query the unified DocWain vLLM instance with tiered fallback.
 
         In training mode, skips vLLM entirely and goes to Ollama Cloud.
         """
@@ -136,15 +122,14 @@ class VLLMManager:
             logger.info("GPU in training mode — routing to Ollama Cloud")
             return self._query_ollama_cloud(prompt, system_prompt, max_tokens, temperature)
 
-        instance = self._instances.get(instance_name)
-        if instance and self.health_check(instance_name):
+        if self.health_check():
             full_text = f"{system_prompt}\n{prompt}" if system_prompt else prompt
-            clamped = self._clamp_max_tokens(instance_name, full_text, max_tokens)
-            result = self._query_vllm(instance, prompt, system_prompt, guided_json, clamped, temperature)
+            clamped = self._clamp_max_tokens(full_text, max_tokens)
+            result = self._query_vllm(prompt, system_prompt, guided_json, clamped, temperature)
             if result is not None:
                 return result
 
-        logger.info("vLLM '%s' unavailable — falling back to Ollama Cloud", instance_name)
+        logger.info("vLLM unavailable — falling back to Ollama Cloud")
         cloud_result = self._query_ollama_cloud(prompt, system_prompt, max_tokens, temperature)
         if cloud_result:
             return cloud_result
@@ -152,74 +137,30 @@ class VLLMManager:
         logger.warning("Ollama Cloud unavailable — emergency fallback to Ollama local")
         return self._query_ollama_local(prompt, system_prompt, max_tokens, temperature)
 
-    def query_fast(
-        self,
-        prompt: str,
-        system_prompt: str = "",
-        guided_json: Optional[Dict[str, Any]] = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.3,
-    ) -> str:
-        """Query the fast (14B) instance."""
-        return self.query("fast", prompt, system_prompt, guided_json, max_tokens, temperature)
-
-    def query_smart(
-        self,
-        prompt: str,
-        system_prompt: str = "",
-        guided_json: Optional[Dict[str, Any]] = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.3,
-    ) -> str:
-        """Query the smart (27B) instance."""
-        return self.query("smart", prompt, system_prompt, guided_json, max_tokens, temperature)
-
     # -- Streaming interface ---------------------------------------------------
 
     def stream_query(
         self,
-        instance_name: str,
         prompt: str,
         system_prompt: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> Generator[str, None, None]:
-        """Stream tokens from a vLLM instance.
+        """Stream tokens from the unified vLLM instance.
 
-        Raises on failure so the caller (gateway) can try another instance.
+        Raises on failure so the caller (gateway) can fall back to Ollama.
         """
         if self.get_gpu_mode() == "training":
-            logger.info("GPU in training mode — streaming unavailable, falling back to non-streaming")
+            logger.info("GPU in training mode — streaming unavailable, degrading to non-streaming")
             yield self._query_ollama_cloud(prompt, system_prompt, max_tokens, temperature)
             return
 
-        instance = self._instances.get(instance_name)
-        if not instance or not self.health_check(instance_name):
-            raise ConnectionError(f"vLLM instance '{instance_name}' is not available")
+        if not self.health_check():
+            raise ConnectionError("DocWain vLLM instance is not available")
 
         full_text = f"{system_prompt}\n{prompt}" if system_prompt else prompt
-        clamped = self._clamp_max_tokens(instance_name, full_text, max_tokens)
-        yield from self._stream_vllm(instance, prompt, system_prompt, clamped, temperature)
-
-    def stream_query_fast(
-        self,
-        prompt: str,
-        system_prompt: str = "",
-        max_tokens: int = 4096,
-        temperature: float = 0.3,
-    ) -> Generator[str, None, None]:
-        """Stream tokens from the fast (14B) instance."""
-        yield from self.stream_query("fast", prompt, system_prompt, max_tokens, temperature)
-
-    def stream_query_smart(
-        self,
-        prompt: str,
-        system_prompt: str = "",
-        max_tokens: int = 4096,
-        temperature: float = 0.3,
-    ) -> Generator[str, None, None]:
-        """Stream tokens from the smart (27B) instance."""
-        yield from self.stream_query("smart", prompt, system_prompt, max_tokens, temperature)
+        clamped = self._clamp_max_tokens(full_text, max_tokens)
+        yield from self._stream_vllm(prompt, system_prompt, clamped, temperature)
 
     # -- Private: vLLM ---------------------------------------------------------
 
@@ -227,7 +168,6 @@ class VLLMManager:
     def _prepare_messages(prompt: str, system_prompt: str) -> list:
         """Build chat messages with /no_think to disable Qwen3 thinking mode."""
         messages = []
-        # Prepend /no_think to suppress <think> blocks — saves tokens and latency
         sys_content = f"/no_think\n{system_prompt}" if system_prompt else "/no_think"
         messages.append({"role": "system", "content": sys_content})
         messages.append({"role": "user", "content": prompt})
@@ -235,7 +175,6 @@ class VLLMManager:
 
     def _query_vllm(
         self,
-        instance: Dict[str, str],
         prompt: str,
         system_prompt: str,
         guided_json: Optional[Dict[str, Any]],
@@ -243,12 +182,11 @@ class VLLMManager:
         temperature: float,
     ) -> Optional[str]:
         """POST to vLLM OpenAI-compatible endpoint. Returns None on failure."""
-        url = f"{instance['url']}/v1/chat/completions"
-
+        url = f"{self._url}/v1/chat/completions"
         messages = self._prepare_messages(prompt, system_prompt)
 
         body: Dict[str, Any] = {
-            "model": instance["model"],
+            "model": self._model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -275,24 +213,22 @@ class VLLMManager:
             text = result["choices"][0]["message"]["content"].strip()
             return _THINK_RE.sub("", text).strip()
         except (HTTPError, URLError, OSError, KeyError, json.JSONDecodeError) as exc:
-            logger.error("vLLM query failed (%s): %s", instance["url"], exc)
+            logger.error("vLLM query failed (%s): %s", self._url, exc)
             return None
 
     def _stream_vllm(
         self,
-        instance: Dict[str, str],
         prompt: str,
         system_prompt: str,
         max_tokens: int,
         temperature: float,
     ) -> Generator[str, None, None]:
         """POST to vLLM with stream=True, yield token deltas from SSE chunks."""
-        url = f"{instance['url']}/v1/chat/completions"
-
+        url = f"{self._url}/v1/chat/completions"
         messages = self._prepare_messages(prompt, system_prompt)
 
         body: Dict[str, Any] = {
-            "model": instance["model"],
+            "model": self._model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -317,12 +253,11 @@ class VLLMManager:
             raise
         with resp:
             sse_buf = ""
-            in_think = False  # stateful: inside <think>...</think>
-            think_buf = ""    # partial tag accumulator
+            in_think = False
+            think_buf = ""
             for raw_line in resp:
                 line = raw_line.decode("utf-8", errors="replace")
                 sse_buf += line
-                # SSE lines are newline-delimited
                 while "\n" in sse_buf:
                     sse_line, sse_buf = sse_buf.split("\n", 1)
                     sse_line = sse_line.strip()
@@ -340,7 +275,6 @@ class VLLMManager:
                     if not token:
                         continue
 
-                    # Stateful <think>...</think> filter
                     for ch in token:
                         if in_think:
                             think_buf += ch
@@ -351,12 +285,9 @@ class VLLMManager:
                             think_buf += ch
                             if think_buf == "<think>":
                                 in_think = True
-                                # don't clear think_buf — keep accumulating until </think>
                             elif "<think>".startswith(think_buf):
-                                # partial match — keep buffering
                                 pass
                             else:
-                                # not a think tag — flush buffer
                                 yield think_buf
                                 think_buf = ""
 

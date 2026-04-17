@@ -1,10 +1,16 @@
-"""LLM-based intent routing for the dual-model serving layer."""
+"""LLM-based intent classification for the unified DocWain serving layer.
+
+Historical context: this module used to route between a 14B "fast" and 27B
+"smart" vLLM instance. DocWain is now a single unified model; the classifier
+survives because intent still drives retrieval strategy, KG expansion, and
+visualization choices — not model selection.
+"""
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from src.utils.logging_utils import get_logger
@@ -31,24 +37,17 @@ INTENT_TYPES: List[str] = [
     "visualize",
 ]
 
-_FAST_INTENTS = frozenset({
+_SIMPLE_INTENTS = frozenset({
     "greeting", "identity", "lookup", "list", "count", "extract",
 })
 
-_SMART_INTENTS = frozenset({
-    "compare", "analyze", "investigate", "generate", "aggregate",
-    "rank", "timeline", "visualize", "summarize",
-})
-
-# -- Data models --------------------------------------------------------------
 
 @dataclass
 class RouterResult:
-    """Result of intent classification and routing."""
+    """Result of intent classification."""
 
     intent: str
     complexity: str  # "simple" | "moderate" | "complex"
-    route: str       # "fast" | "smart"
     requires_kg: bool = False
     requires_visualization: bool = False
 
@@ -125,20 +124,17 @@ def _keyword_classify(query: str) -> RouterResult:
     """Classify a query using simple keyword matching (fallback)."""
     q = query.lower().strip()
 
-    intent = "lookup"  # default
+    intent = "lookup"
     for keywords, label in _KEYWORD_RULES:
         if any(kw in q for kw in keywords):
             intent = label
             break
 
-    if intent in _FAST_INTENTS:
-        route = "fast"
+    if intent in _SIMPLE_INTENTS:
         complexity = "simple"
     elif intent in ("summarize", "extract"):
-        route = "smart"
         complexity = "moderate"
     else:
-        route = "smart"
         complexity = "complex"
 
     requires_viz = intent == "visualize"
@@ -147,20 +143,16 @@ def _keyword_classify(query: str) -> RouterResult:
     return RouterResult(
         intent=intent,
         complexity=complexity,
-        route=route,
         requires_kg=requires_kg,
         requires_visualization=requires_viz,
     )
 
 
-# -- IntentRouter class -------------------------------------------------------
-
 class IntentRouter:
-    """Routes queries to the fast or smart model path based on intent classification.
+    """Classifies queries by intent for downstream retrieval/generation logic.
 
-    Uses the 14B model (via ``VLLMManager.query_fast``) with guided JSON output
-    for reliable classification. Falls back to keyword heuristics if the model
-    is unavailable.
+    Uses the unified DocWain vLLM instance with guided JSON output. Falls back
+    to keyword heuristics if the model is unavailable.
 
     Usage::
 
@@ -168,28 +160,20 @@ class IntentRouter:
         mgr = VLLMManager()
         router = IntentRouter(mgr)
         result = router.route("How many invoices are overdue?")
-        # result.route == "fast", result.intent == "count"
+        # result.intent == "count"
     """
 
     def __init__(self, vllm_manager: Any) -> None:
         self._mgr = vllm_manager
 
     def route(self, query: str, profile_context: Optional[str] = None) -> RouterResult:
-        """Classify a query and decide the serving route.
-
-        Args:
-            query: The user's natural-language question.
-            profile_context: Optional domain context to improve classification.
-
-        Returns:
-            A ``RouterResult`` with intent, complexity, and route.
-        """
+        """Classify a query into an intent and complexity."""
         user_prompt = f"Classify this query:\n\n{query}"
         if profile_context:
             user_prompt += f"\n\nProfile context: {profile_context}"
 
         try:
-            raw = self._mgr.query_fast(
+            raw = self._mgr.query(
                 prompt=user_prompt,
                 system_prompt=_CLASSIFICATION_SYSTEM,
                 guided_json=_ROUTER_JSON_SCHEMA,
@@ -206,11 +190,8 @@ class IntentRouter:
 
         return self._parse_response(raw, query)
 
-    # -- Private helpers ------------------------------------------------------
-
     def _parse_response(self, raw: str, query: str) -> RouterResult:
         """Parse the JSON classification response from the LLM."""
-        # Strip markdown fences if present.
         cleaned = re.sub(r"```json\s*", "", raw)
         cleaned = re.sub(r"```\s*$", "", cleaned).strip()
 
@@ -229,25 +210,18 @@ class IntentRouter:
         if complexity not in ("simple", "moderate", "complex"):
             complexity = "moderate"
 
-        # Determine route from intent, overriding if complexity demands it.
-        if intent in _FAST_INTENTS and complexity != "complex":
-            route = "fast"
-        else:
-            route = "smart"
-
         requires_kg = bool(data.get("requires_kg", False))
         requires_viz = bool(data.get("requires_visualization", False))
 
         result = RouterResult(
             intent=intent,
             complexity=complexity,
-            route=route,
             requires_kg=requires_kg,
             requires_visualization=requires_viz,
         )
         logger.info(
-            "Routed query — intent=%s complexity=%s route=%s kg=%s viz=%s",
-            result.intent, result.complexity, result.route,
+            "Classified query — intent=%s complexity=%s kg=%s viz=%s",
+            result.intent, result.complexity,
             result.requires_kg, result.requires_visualization,
         )
         return result

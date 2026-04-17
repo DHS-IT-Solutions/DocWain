@@ -13,8 +13,7 @@ def _make_scheduler(tmp_path, mode="serving", training_pending=False):
     return GPUScheduler(
         gpu_mode_file=str(mode_file),
         training_queue_file=str(queue_file),
-        vllm_fast_url="http://127.0.0.1:19999",
-        vllm_smart_url="http://127.0.0.1:19998",
+        vllm_url="http://127.0.0.1:19999",
         idle_threshold_minutes=30,
     )
 
