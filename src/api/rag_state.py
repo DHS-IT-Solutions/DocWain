@@ -22,6 +22,7 @@ class AppState:
     multi_agent_gateway: Any = None  # src.llm.multi_agent.MultiAgentGateway — role-specific models
     graph_augmenter: Any = None  # src.kg.retrieval.GraphAugmenter — KG-augmented retrieval
     vllm_manager: Any = None  # src.serving.vllm_manager.VLLMManager — dual vLLM client
+    sparse_encoder: Any = None  # src.embedding.sparse.SparseEncoder — lazy load
     instance_ids: Dict[str, str] = field(default_factory=dict)
     qdrant_index_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     profile_expertise_cache: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -69,6 +70,7 @@ def register_instance_ids(state: AppState) -> None:
     _assign_instance_id("ollama_client", state.ollama_client, state.instance_ids)
     _assign_instance_id("llm_gateway", state.llm_gateway, state.instance_ids)
     _assign_instance_id("rag_system", state.rag_system, state.instance_ids)
+    _assign_instance_id("sparse_encoder", state.sparse_encoder, state.instance_ids)
     logger.info("Singleton instance IDs: %s", state.instance_ids)
 
 __all__ = [
