@@ -44,13 +44,25 @@ def _format_row(name: str, stats: Dict[str, Any]) -> str:
 
 
 def run_benchmark(directory: Path, out_path: Path = None, no_ai: bool = False) -> int:
-    # When --no-ai, point the engine at an invalid Ollama host so V2 etc. fail
-    # fast rather than hanging on timeout. We still see deterministic results.
     kwargs: Dict[str, Any] = {}
     if no_ai:
-        kwargs["ollama_host"] = "http://127.0.0.1:1"  # refused immediately
+        # Point legacy Ollama-backed extractors at an unreachable host so
+        # they fail fast (V2 now uses vLLM but structural/semantic/vision
+        # stubs still import the host); isolates deterministic-only cost.
+        kwargs["ollama_host"] = "http://127.0.0.1:1"
 
     engine = ExtractionEngine(**kwargs)
+
+    # Wire the vLLM manager into V2 for benchmarking outside the API,
+    # using the same config AppState would use. Skip when --no-ai.
+    if not no_ai:
+        try:
+            from src.serving.vllm_manager import VLLMManager
+            from src.serving.config import GPU_MODE_FILE
+            engine.v2_extractor._manager = VLLMManager(gpu_mode_file=GPU_MODE_FILE)
+            print(f"[info] V2 using vLLM at {engine.v2_extractor._manager._url}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] vLLM manager init failed: {exc}")
 
     files = sorted(p for p in directory.iterdir() if p.is_file())
     results: Dict[str, Any] = {}

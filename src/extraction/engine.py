@@ -105,10 +105,11 @@ class ExtractionEngine:
         for advisory in validation["advisories"]:
             logger.info("Deterministic advisory for %s: %s", document_id, advisory)
 
-        # Layer 1 text becomes the authoritative input for Layer 2 engines.
-        # If the caller passed text_content we respect it (e.g. pre-extracted
-        # text from an upstream stage), else we use Layer 1.
-        effective_text = text_content if text_content else raw.text_full
+        # Layer 1 text is the authoritative input for Layer 2 engines.
+        # Deterministic extraction is the source of truth; any pre-extracted
+        # text_content the caller passed is used only as a fallback when
+        # Layer 1 returned nothing (e.g. unsupported extension).
+        effective_text = raw.text_full or text_content or ""
 
         triage_result = self.triager.triage(
             file_type=file_type,
