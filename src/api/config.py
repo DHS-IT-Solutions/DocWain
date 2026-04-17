@@ -364,6 +364,18 @@ class Config:
         """Ingestion-time document profiling via LLM."""
         ENABLED = os.getenv("DOC_PROFILER_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
+    class ContextualRetrieval:
+        """Anthropic-style Contextual Retrieval.
+
+        For every chunk, an LLM generates a retrieval context sentence
+        that names the identifiers (invoice/PO numbers, dates, parties)
+        a query is likely to use, and prepends it to the chunk before
+        embedding. Validated on homogeneous invoice corpora where it
+        lifted R@5 6/9 → 7/9 and moved INV-25-062 / PO508084 from rank
+        14/11 to rank 1.
+        """
+        ENABLED = os.getenv("CONTEXTUAL_RETRIEVAL_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
     class TaskRouting:
         ENABLED = os.getenv("TASK_ROUTING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         QUERY_REWRITE_MODEL = os.getenv("TASK_ROUTE_QUERY_REWRITE", "")

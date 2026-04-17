@@ -254,6 +254,17 @@ def ingest_payloads(
         except Exception as exc:
             logger.warning("Document profiling skipped: %s", exc)
 
+    # Contextual Retrieval: prepend an LLM-generated identifier-bearing
+    # context sentence to each chunk's embedding_text so the vector
+    # carries invoice/PO numbers, dates, parties that may not be
+    # lexically present in the chunk body itself. Gated by
+    # Config.ContextualRetrieval.ENABLED, no-op + graceful if vLLM down.
+    try:
+        from src.embedding.pipeline.contextual_embedding import enrich_payloads_with_context
+        enrich_payloads_with_context(transformed)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("contextual-retrieval: enrichment skipped — %s", exc)
+
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for payload in transformed:
         grouped.setdefault(str(payload["subscription_id"]), []).append(payload)

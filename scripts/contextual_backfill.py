@@ -33,33 +33,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-SYSTEM_PROMPT = (
-    "You produce one short retrieval context sentence per chunk. "
-    "A retrieval context must include every identifier a search query is "
-    "likely to use: document number/code/title, counterparty or vendor names, "
-    "key dates, amounts, reference numbers. Do NOT describe the chunk "
-    "(avoid phrases like 'this chunk contains', 'section with', 'header of'). "
-    "Instead, state the facts directly as if you were indexing them. "
-    "One sentence, 20-60 words. No preamble, no quotes, no bullets."
+# Prompt + generation logic live in the shared module so ingest and
+# backfill use one definition.
+from src.embedding.pipeline.contextual_embedding import (  # noqa: E402
+    generate_context_for_chunk,
 )
-
-PROMPT_TEMPLATE = """<document name="{doc_name}" type="{doc_type}">
-{doc_text}
-</document>
-
-<chunk index="{chunk_index}">
-{chunk_text}
-</chunk>
-
-Using the document name and any identifiers visible in either the document \
-or the chunk (invoice/PO/quote numbers, dates, parties, amounts), write the \
-retrieval context. Include the document's identifier from its filename \
-(e.g. INV-25-054, PO508084, QUT-25-032) so this chunk is findable by that \
-code. Do not start with 'This chunk' or similar."""
-
-
-_DOC_TEXT_CAP = 12000   # chars; vLLM ctx is 32k tokens but this keeps the call cheap
-_CHUNK_CAP = 2000       # chars; pass enough to the LLM without blowing max_tokens
 
 
 def _load_profile_chunks(qdrant, collection_name: str, subscription_id: str,
@@ -130,46 +108,6 @@ def _doc_name_and_type(chunks: List[Any]) -> Tuple[str, str]:
     return "document", "document"
 
 
-def _truncate(text: str, cap: int) -> str:
-    if not text or len(text) <= cap:
-        return text or ""
-    # Prefer a clean cut at a sentence boundary near the cap
-    head = text[:cap]
-    for sep in ("\n\n", ". ", "\n", " "):
-        idx = head.rfind(sep)
-        if idx > cap // 2:
-            return head[:idx] + "…"
-    return head + "…"
-
-
-def _generate_context(vllm, doc_name: str, doc_type: str, doc_text: str,
-                      chunk_text: str, chunk_index: int = 0) -> str:
-    prompt = PROMPT_TEMPLATE.format(
-        doc_name=doc_name,
-        doc_type=doc_type,
-        chunk_index=chunk_index,
-        doc_text=_truncate(doc_text, _DOC_TEXT_CAP),
-        chunk_text=_truncate(chunk_text, _CHUNK_CAP),
-    )
-    try:
-        out = vllm.query(
-            prompt=prompt,
-            system_prompt=SYSTEM_PROMPT,
-            max_tokens=160,
-            temperature=0.2,
-        )
-    except Exception as exc:
-        print(f"   [warn] context generation failed: {exc}")
-        return ""
-    # Single line, no surrounding quotes, trim whitespace
-    ctx = (out or "").strip().replace("\n", " ")
-    if len(ctx) >= 2 and ctx[0] in "\"'" and ctx[-1] == ctx[0]:
-        ctx = ctx[1:-1].strip()
-    # Safety: collapse whitespace, cap length
-    ctx = " ".join(ctx.split())
-    return ctx[:600]
-
-
 def _embed(embedder, texts: List[str]) -> List[List[float]]:
     vectors = embedder.encode(texts, normalize_embeddings=True, convert_to_numpy=True)
     return [v.tolist() for v in vectors]
@@ -238,7 +176,14 @@ def run(subscription_id: str, profile_id: str, *,
             chunk_text = p.get("canonical_text") or p.get("content") or ""
             chunk_idx = int(p.get("chunk_index") or 0)
             tg = time.monotonic()
-            ctx = _generate_context(vllm, doc_name, doc_type, doc_text, chunk_text, chunk_idx)
+            ctx = generate_context_for_chunk(
+                vllm,
+                doc_name=doc_name,
+                doc_type=doc_type,
+                doc_text=doc_text,
+                chunk_text=chunk_text,
+                chunk_index=chunk_idx,
+            )
             gen_total += time.monotonic() - tg
             ctx_list.append(ctx)
             chunk_texts.append(chunk_text)
