@@ -53,11 +53,28 @@ class UnifiedRetriever:
     # without requiring a server restart.
     _NEGATIVE_CACHE_TTL = 30
 
-    def __init__(self, qdrant_client, embedder):
+    # RRF constant for reciprocal-rank fusion across retrievers (dense + PPR).
+    # Standard value from the original RRF paper.
+    _RRF_K = 60
+    # How many chunks to pull from PPR per profile before fusion.
+    _PPR_TOP_K = 30
+
+    def __init__(self, qdrant_client, embedder, *, enable_ppr: Optional[bool] = None):
         self.qdrant_client = qdrant_client
         self.embedder = embedder
         # Maps collection_name → (exists: bool, checked_at: float)
         self._collection_exists_cache: dict[str, tuple[bool, float]] = {}
+        # PPR is opt-in: explicit flag overrides, otherwise falls back to
+        # Config.Retrieval.ENABLE_PPR (default False) so existing deployments
+        # aren't affected until the operator flips it on.
+        if enable_ppr is None:
+            try:
+                from src.api.config import Config
+                enable_ppr = bool(getattr(Config.Retrieval, "ENABLE_PPR", False))
+            except Exception:
+                enable_ppr = False
+        self.enable_ppr = enable_ppr
+        self._ppr_retriever = None  # lazy
 
     # ------------------------------------------------------------------
     # Public API
@@ -116,13 +133,22 @@ class UnifiedRetriever:
         per_profile = max(1, top_k // max(len(profile_ids), 1))
 
         for pid in profile_ids:
-            chunks = self._search_profile(
+            dense_chunks = self._search_profile(
                 collection_name, query, query_vector, subscription_id, pid,
                 document_ids=document_ids,
                 top_k=per_profile,
                 correlation_id=correlation_id,
             )
-            all_chunks.extend(chunks)
+            if self.enable_ppr:
+                ppr_chunks = self._ppr_search_profile(
+                    collection_name, query, subscription_id, pid,
+                    document_ids=document_ids,
+                    top_k=self._PPR_TOP_K,
+                )
+                fused = self._rrf_fuse(dense_chunks, ppr_chunks, top_k=per_profile)
+                all_chunks.extend(fused)
+            else:
+                all_chunks.extend(dense_chunks)
 
         # Fill missing documents: fetch one chunk from each doc not yet in results
         all_chunks = self._fill_missing_documents(
@@ -354,6 +380,134 @@ class UnifiedRetriever:
         fallback_chunks.sort(key=lambda c: c.score, reverse=True)
         return fallback_chunks[:top_k]
 
+    def _ppr_search_profile(
+        self,
+        collection_name: str,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        *,
+        document_ids: Optional[List[str]] = None,
+        top_k: int = 30,
+    ) -> List[EvidenceChunk]:
+        """Run PPR over the KG and hydrate the chunk IDs into EvidenceChunks.
+
+        PPR returns ``[{chunk_id, document_id, score}]`` keyed against the
+        Neo4j ``Chunk`` nodes written by the section-intelligence pipeline.
+        We fetch the matching Qdrant points in one scroll-with-filter to get
+        the text and provenance needed for downstream reasoning, preserving
+        the PPR score as the EvidenceChunk score.
+        """
+        if self._ppr_retriever is None:
+            try:
+                from src.retrieval.ppr_retriever import PPRRetriever
+                self._ppr_retriever = PPRRetriever()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("PPR init failed, skipping: %s", exc)
+                return []
+
+        try:
+            ppr_hits = self._ppr_retriever.retrieve(
+                query, subscription_id, profile_id, top_k=top_k,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PPR retrieve failed: %s", exc)
+            return []
+
+        if not ppr_hits:
+            return []
+
+        # Optional document_ids filter — PPR doesn't know to scope itself
+        if document_ids:
+            allowed = set(document_ids)
+            ppr_hits = [h for h in ppr_hits if h.get("document_id") in allowed]
+            if not ppr_hits:
+                return []
+
+        # Hydrate via Qdrant scroll filtered on chunk_id ∈ [...]
+        chunk_ids = [str(h["chunk_id"]) for h in ppr_hits if h.get("chunk_id")]
+        if not chunk_ids:
+            return []
+
+        score_by_id = {str(h["chunk_id"]): float(h.get("score") or 0.0) for h in ppr_hits}
+
+        qfilter = Filter(must=[
+            FieldCondition(key="subscription_id", match=MatchValue(value=str(subscription_id))),
+            FieldCondition(key="profile_id", match=MatchValue(value=str(profile_id))),
+            FieldCondition(key="chunk_id", match=MatchAny(any=chunk_ids)),
+        ])
+        try:
+            records = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=qfilter,
+                limit=max(len(chunk_ids), top_k) or 1,
+                with_payload=True,
+            )
+            records = records[0] if isinstance(records, tuple) else records
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PPR hydration scroll failed: %s", exc)
+            return []
+
+        chunks: List[EvidenceChunk] = []
+        for rec in records or []:
+            chunk = self._point_to_chunk(rec, profile_id)
+            if chunk.chunk_id:
+                # Carry the PPR score instead of the (zero) scroll score so
+                # downstream rank-based fusion sees the intended ordering.
+                chunk.score = score_by_id.get(chunk.chunk_id, chunk.score or 0.0)
+                chunks.append(chunk)
+
+        chunks.sort(key=lambda c: c.score, reverse=True)
+        return chunks[:top_k]
+
+    @classmethod
+    def _rrf_fuse(
+        cls,
+        dense: List[EvidenceChunk],
+        ppr: List[EvidenceChunk],
+        *,
+        top_k: int,
+    ) -> List[EvidenceChunk]:
+        """Reciprocal-rank fusion of dense and PPR chunk lists.
+
+        A chunk appearing in both lists accumulates 1/(k+rank) from each
+        source. The fused score replaces the raw score so downstream rankers
+        see a unified magnitude. Retains the richer-populated EvidenceChunk
+        (dense usually has the score from Qdrant; PPR hydration fills text
+        from the same Qdrant points so either works — dense wins the tiebreak
+        to preserve the original vector score on the object).
+        """
+        if not ppr:
+            return dense[:top_k]
+        if not dense:
+            return ppr[:top_k]
+
+        k = cls._RRF_K
+        rrf_scores: dict[str, float] = {}
+        chunk_by_id: dict[str, EvidenceChunk] = {}
+
+        for rank, c in enumerate(dense, start=1):
+            if not c.chunk_id:
+                continue
+            rrf_scores[c.chunk_id] = rrf_scores.get(c.chunk_id, 0.0) + 1.0 / (k + rank)
+            chunk_by_id.setdefault(c.chunk_id, c)
+
+        for rank, c in enumerate(ppr, start=1):
+            if not c.chunk_id:
+                continue
+            rrf_scores[c.chunk_id] = rrf_scores.get(c.chunk_id, 0.0) + 1.0 / (k + rank)
+            chunk_by_id.setdefault(c.chunk_id, c)
+
+        ordered = sorted(rrf_scores.items(), key=lambda kv: kv[1], reverse=True)
+        fused: List[EvidenceChunk] = []
+        for cid, score in ordered[:top_k]:
+            ch = chunk_by_id.get(cid)
+            if ch is None:
+                continue
+            ch.score = float(score)
+            fused.append(ch)
+        return fused
+
     @staticmethod
     def _point_to_chunk(point, profile_id: str) -> EvidenceChunk:
         """Convert a Qdrant point/record to an EvidenceChunk."""
@@ -370,15 +524,27 @@ class UnifiedRetriever:
             or ""
         )
 
+        # The ingest pipeline writes chunk_id as a flat payload field;
+        # older payloads used a nested {"chunk": {"id": ...}} block. Check
+        # both so fusion keys line up with whatever the live writer emitted.
+        chunk_id = (
+            payload.get("chunk_id")
+            or chunk_meta.get("id")
+            or ""
+        )
+        chunk_type = chunk_meta.get("type") or payload.get("chunk_kind") or "text"
+        section_title = section_meta.get("title") or payload.get("section_title") or ""
+        page_start = provenance.get("page_start") or payload.get("page") or 0
+
         return EvidenceChunk(
             text=text,
             source_name=source_name,
             document_id=payload.get("document_id", ""),
             profile_id=payload.get("profile_id", profile_id),
-            section=section_meta.get("title", ""),
-            page_start=provenance.get("page_start", 0),
-            page_end=provenance.get("page_end", 0),
+            section=section_title,
+            page_start=page_start,
+            page_end=provenance.get("page_end", page_start),
             score=getattr(point, "score", 0.0) or 0.0,
-            chunk_id=chunk_meta.get("id", ""),
-            chunk_type=chunk_meta.get("type", "text"),
+            chunk_id=chunk_id,
+            chunk_type=chunk_type,
         )
