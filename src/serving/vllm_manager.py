@@ -113,11 +113,47 @@ class VLLMManager:
         guided_json: Optional[Dict[str, Any]] = None,
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        *,
+        require_vllm: bool = False,
     ) -> str:
-        """Query the unified DocWain vLLM instance with tiered fallback.
+        """Query the unified DocWain vLLM instance.
 
-        In training mode, skips vLLM entirely and goes to Ollama Cloud.
+        By default, uses the tiered fallback chain
+        (vLLM → Ollama Cloud → Ollama local) so training / background
+        inference can degrade gracefully. Extraction and embedding
+        callers should pass ``require_vllm=True`` — those paths must
+        stay on the in-house model for accuracy consistency, and a
+        silent fallback to a 3rd-party cloud produces results we can't
+        reproduce or audit (impact #7).
+
+        When ``require_vllm=True``:
+            * training-mode GPU → ``ConnectionError`` (no Ollama)
+            * vLLM down or returns None → ``ConnectionError``
+            * no Ollama fallback is ever attempted
         """
+        if require_vllm:
+            if self.get_gpu_mode() == "training":
+                raise ConnectionError(
+                    "vLLM is in training mode; require_vllm=True caller cannot "
+                    "fall back to Ollama — wait for serving mode."
+                )
+            if not self.health_check():
+                raise ConnectionError(
+                    "vLLM instance is unreachable; require_vllm=True caller "
+                    "refuses to fall back to a 3rd-party backend."
+                )
+            full_text = f"{system_prompt}\n{prompt}" if system_prompt else prompt
+            clamped = self._clamp_max_tokens(full_text, max_tokens)
+            result = self._query_vllm(
+                prompt, system_prompt, guided_json, clamped, temperature,
+            )
+            if result is None:
+                raise ConnectionError(
+                    "vLLM returned no result; require_vllm=True caller "
+                    "refuses to fall back."
+                )
+            return result
+
         if self.get_gpu_mode() == "training":
             logger.info("GPU in training mode — routing to Ollama Cloud")
             return self._query_ollama_cloud(prompt, system_prompt, max_tokens, temperature)

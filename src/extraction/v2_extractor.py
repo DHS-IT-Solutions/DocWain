@@ -413,6 +413,7 @@ class V2Extractor:
                     guided_json=_V2_RESPONSE_SCHEMA,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    require_vllm=True,  # impact #7 — no Ollama fallback on extraction
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error("V2: vLLM query failed: %s", exc)

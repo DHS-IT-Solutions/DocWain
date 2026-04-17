@@ -99,6 +99,7 @@ def generate_context_for_chunk(
             system_prompt=SYSTEM_PROMPT,
             max_tokens=_MAX_TOKENS,
             temperature=_TEMPERATURE,
+            require_vllm=True,  # impact #7 — no Ollama fallback on embed path
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("contextual-retrieval: context generation failed — %s", exc)
