@@ -3,6 +3,7 @@
 import hashlib
 import json
 import time
+from typing import List
 
 from celery.exceptions import SoftTimeLimitExceeded
 from src.celery_app import app
@@ -199,10 +200,57 @@ def embed_document(self, document_id: str, subscription_id: str,
         if not chunk_dicts:
             raise ValueError(f"No chunks remaining after dedup for {document_id}")
 
-        # ── 7. Generate dense vectors ───────────────────────────────────
+        # ── 6b. Contextual Retrieval (optional) ─────────────────────────
+        # Generate a per-chunk retrieval context so the embedding vector
+        # carries identifiers (invoice/PO numbers, dates, parties) that
+        # may not be lexically present in the chunk body itself. This is
+        # the same helper that runs on the non-Celery ingest path; it's
+        # a no-op when Config.ContextualRetrieval.ENABLED is off or vLLM
+        # is unreachable. Context text is also persisted on the payload
+        # for traceability.
+        contexts: List[str] = ["" for _ in chunk_dicts]
+        try:
+            from src.api.config import Config as _Config
+            cr_enabled = bool(getattr(getattr(_Config, "ContextualRetrieval", None), "ENABLED", False))
+        except Exception:
+            cr_enabled = False
+        if cr_enabled and chunk_dicts:
+            try:
+                from src.serving.vllm_manager import VLLMManager
+                from src.embedding.pipeline.contextual_embedding import generate_context_for_chunk
+                vllm = VLLMManager()
+                if vllm.health_check():
+                    doc_text = "\n\n".join(c.get("text", "") for c in chunk_dicts if c.get("text"))
+                    doc_name = source_filename or document_id
+                    doc_type = record.get("doc_domain") or record.get("doc_type") or "document"
+                    t0_ctx = time.monotonic()
+                    for idx, c in enumerate(chunk_dicts):
+                        ctx = generate_context_for_chunk(
+                            vllm,
+                            doc_name=doc_name,
+                            doc_type=doc_type,
+                            doc_text=doc_text,
+                            chunk_text=c.get("text", ""),
+                            chunk_index=idx,
+                        )
+                        contexts[idx] = ctx
+                    logger.info(
+                        "Contextual Retrieval: enriched %d chunk(s) for %s in %.1fs",
+                        sum(1 for c in contexts if c), document_id,
+                        time.monotonic() - t0_ctx,
+                    )
+                else:
+                    logger.info("Contextual Retrieval: vLLM unreachable, skipping for %s", document_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Contextual Retrieval skipped for %s: %s", document_id, exc)
+
+        # ── 7. Generate dense vectors (context-prepended when available) ──
         from src.embedding.model_loader import encode_with_fallback
 
-        texts = [c["text"] for c in chunk_dicts]
+        texts = [
+            (f"{ctx}\n\n{c['text']}" if ctx else c["text"])
+            for c, ctx in zip(chunk_dicts, contexts)
+        ]
         vectors = encode_with_fallback(
             texts,
             convert_to_numpy=True,
@@ -236,6 +284,10 @@ def embed_document(self, document_id: str, subscription_id: str,
                 kg_node_ids=kg_node_ids if kg_ready else [],
                 quality_grade=grade,
             )
+            if contexts[idx]:
+                payload["chunk_context"] = contexts[idx]
+                payload["embedding_text"] = texts[idx]
+                payload["contextualized"] = True
             payloads.append(payload)
 
         avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0.0
