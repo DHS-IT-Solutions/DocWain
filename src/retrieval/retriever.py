@@ -282,25 +282,28 @@ class UnifiedRetriever:
         dense_weight: float = 0.6,
         sparse_weight: float = 0.4,
     ) -> List[EvidenceChunk]:
-        """Reciprocal Rank Fusion of dense + sparse chunk lists by chunk_id."""
+        """Reciprocal Rank Fusion of dense + sparse chunk lists by chunk_id.
+
+        Important: does NOT mutate chunk.score. Downstream code
+        (`_HIGH_QUALITY_THRESHOLD` gate, `_keyword_fallback` score scale,
+        `_ensure_document_diversity` sort) reads `score` expecting raw
+        dense-cosine-range values, not RRF sub-unit scores. The RRF score is
+        only used here to order the returned list. Each chunk keeps whichever
+        score (dense cosine or sparse) it arrived with.
+        """
         scores: dict[str, float] = {}
         chunks_by_id: dict[str, EvidenceChunk] = {}
 
         for rank, c in enumerate(dense):
             scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + dense_weight / (k + rank + 1)
-            chunks_by_id[c.chunk_id] = c
+            chunks_by_id[c.chunk_id] = c  # prefer dense chunk when both present
 
         for rank, c in enumerate(sparse):
             scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + sparse_weight / (k + rank + 1)
             chunks_by_id.setdefault(c.chunk_id, c)
 
         fused_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)
-        merged: List[EvidenceChunk] = []
-        for cid in fused_ids[:top_k]:
-            c = chunks_by_id[cid]
-            c.score = scores[cid]
-            merged.append(c)
-        return merged
+        return [chunks_by_id[cid] for cid in fused_ids[:top_k]]
 
     def _fill_missing_documents(
         self,
