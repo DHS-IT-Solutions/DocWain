@@ -1,0 +1,32 @@
+# Golden query set for subscription 67fde0754e36c00b14cea7f5,
+# profile 69e260f3e41cbd913401e420 (Aquarius invoice profile).
+# Each entry names a query and the document_id the retriever must
+# surface in its top-K for that query to count as "correct".
+#
+# Regenerate / extend this file when the corpus changes. The RAG
+# regression harness compares every embed batch's results to the
+# thresholds here AND to the previously-stored baseline, and flags
+# any regression >= 0.02 absolute drop on either metric.
+version: 1
+top_k: 10
+min_recall_at_5: 0.60
+min_mrr: 0.50
+queries:
+  - query: "Aquarius invoice INV-25-050"
+    expected_document_id: "69e26127e41cbd913401e45a"
+  - query: "Aquarius invoice INV-25-051"
+    expected_document_id: "69e26127e41cbd913401e457"
+  - query: "Aquarius invoice INV-25-054"
+    expected_document_id: "69e26127e41cbd913401e45e"
+  - query: "Aquarius invoice INV-25-055"
+    expected_document_id: "69e26127e41cbd913401e463"
+  - query: "Aquarius invoice INV-25-062"
+    expected_document_id: "69e26127e41cbd913401e48b"
+  - query: "Aquarius purchase order PO508084"
+    expected_document_id: "69e26127e41cbd913401e4a2"
+  - query: "QUT-25-032 quote"
+    expected_document_id: "69e26127e41cbd913401e4df"
+  - query: "Marketing Assurity Agreement"
+    expected_document_id: "69e26127e41cbd913401e4cd"
+  - query: "legal agreement between parties"
+    expected_document_id: "69e26127e41cbd913401e4cd"
