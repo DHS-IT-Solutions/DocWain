@@ -126,6 +126,15 @@ class UnifiedRetriever:
             )
             all_chunks.extend(chunks)
 
+        # KG entity expansion: pull 1-hop chunks for entities matched in the
+        # query via the knowledge graph. Dedup against dense/sparse results.
+        kg_chunks = self._kg_expand(query, subscription_id, profile_ids)
+        existing_ids = {c.chunk_id for c in all_chunks}
+        for kc in kg_chunks:
+            if kc.chunk_id and kc.chunk_id not in existing_ids:
+                all_chunks.append(kc)
+                existing_ids.add(kc.chunk_id)
+
         # Fill missing documents: fetch one chunk from each doc not yet in results
         all_chunks = self._fill_missing_documents(
             collection_name, all_chunks, subscription_id, profile_ids,
@@ -304,6 +313,50 @@ class UnifiedRetriever:
 
         fused_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)
         return [chunks_by_id[cid] for cid in fused_ids[:top_k]]
+
+    def _kg_expand(
+        self,
+        query: str,
+        subscription_id: str,
+        profile_ids: List[str],
+    ) -> List[EvidenceChunk]:
+        """Pull 1-hop KG chunks for entities in the query via GraphAugmenter.
+
+        Graceful degradation: returns [] when graph_augmenter is None, when
+        augment() raises, or when no entities matched in the KG.
+        """
+        if self.graph_augmenter is None:
+            return []
+
+        all_chunks: List[EvidenceChunk] = []
+        for pid in profile_ids:
+            try:
+                hints = self.graph_augmenter.augment(query, subscription_id, pid)
+            except Exception as exc:
+                logger.warning("KG augment failed for profile=%s: %s", pid, exc)
+                continue
+
+            # Materialise graph_snippets as EvidenceChunks. Score 0.4 places KG
+            # chunks below the _HIGH_QUALITY_THRESHOLD (0.5) but above the
+            # keyword fallback floor — they won't dominate dense results but
+            # will appear in the candidate pool for rerank.
+            for snip in getattr(hints, "graph_snippets", []) or []:
+                if not snip.chunk_id:
+                    continue
+                all_chunks.append(EvidenceChunk(
+                    text=snip.text or "",
+                    source_name=snip.doc_name or snip.doc_id or "",
+                    document_id=snip.doc_id or "",
+                    profile_id=pid,
+                    section=snip.relation or "",
+                    page_start=0,
+                    page_end=0,
+                    score=0.4,
+                    chunk_id=snip.chunk_id,
+                    chunk_type="kg",
+                ))
+
+        return all_chunks
 
     def _fill_missing_documents(
         self,
