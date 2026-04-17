@@ -1,7 +1,9 @@
 """Extraction pipeline Celery task."""
 
 import json
+import threading
 import time
+from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from src.celery_app import app
@@ -16,6 +18,99 @@ from src.api.statuses import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _enqueue_kg_update_async(
+    *,
+    extraction_result: Any,
+    source_file: str,
+) -> None:
+    """Spawn a daemon thread to enqueue KG ingest from the unified extraction result.
+
+    The extraction task must complete regardless of KG state, per the
+    canonical pipeline: extraction finishes once accurate information is
+    extracted, and KG updates in the background. Any failure here is
+    logged; the extraction task never retries or fails because of KG.
+    """
+
+    def _worker():
+        try:
+            from src.kg.ingest import build_graph_payload, get_graph_ingest_queue
+
+            text = (extraction_result.clean_text or "").strip()
+            if not text:
+                logger.info(
+                    "[KG-BG] skipped for %s: extraction produced no text",
+                    extraction_result.document_id,
+                )
+                return
+
+            # Single-document payload — the whole document's deterministic text
+            # becomes one "chunk" for KG ingest purposes. KG's own extractor
+            # walks this text for entities/relationships; we also pass the
+            # V2-derived semantic entities as deep_entities so the graph
+            # benefits from the model's understanding.
+            chunk_metadata = [{
+                "chunk_id": f"{extraction_result.document_id}::extraction",
+                "source_name": source_file,
+            }]
+
+            deep_entities = []
+            for e in (extraction_result.entities or []):
+                text_val = getattr(e, "text", None) or (e.get("text") if isinstance(e, dict) else None) or ""
+                type_val = getattr(e, "type", None) or (e.get("type") if isinstance(e, dict) else None) or "UNKNOWN"
+                conf_val = getattr(e, "confidence", None) or (e.get("confidence") if isinstance(e, dict) else None) or 0.0
+                if not text_val:
+                    continue
+                deep_entities.append({
+                    "text": str(text_val),
+                    "type": str(type_val),
+                    "confidence": float(conf_val),
+                    "source": getattr(e, "source", "v2") if not isinstance(e, dict) else e.get("source", "v2"),
+                    "normalized_name": str(text_val).lower().strip(),
+                })
+
+            doc_metadata = {
+                "document_type": extraction_result.metadata.get("doc_type_detected", "generic"),
+                "doc_type": extraction_result.metadata.get("doc_type_detected", "generic"),
+            }
+
+            graph_payload = build_graph_payload(
+                embeddings_payload={
+                    "texts": [text],
+                    "chunk_metadata": chunk_metadata,
+                    "doc_metadata": doc_metadata,
+                },
+                subscription_id=str(extraction_result.subscription_id),
+                profile_id=str(extraction_result.profile_id),
+                document_id=str(extraction_result.document_id),
+                doc_name=source_file,
+                deep_entities=deep_entities,
+                typed_relationships=None,  # v2 schema emits simple rels; typed inference is a follow-up
+            )
+            if graph_payload is None:
+                logger.info(
+                    "[KG-BG] build_graph_payload returned None for %s (KG disabled or no texts)",
+                    extraction_result.document_id,
+                )
+                return
+
+            queue = get_graph_ingest_queue()
+            queue.enqueue(graph_payload)
+            logger.info(
+                "[KG-BG] enqueued for %s (entities=%d, text_chars=%d)",
+                extraction_result.document_id,
+                len(deep_entities),
+                len(text),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[KG-BG] failed for %s — extraction not affected",
+                getattr(extraction_result, "document_id", "?"),
+            )
+
+    t = threading.Thread(target=_worker, daemon=True, name="kg-bg-ingest")
+    t.start()
 
 
 def _download_document_bytes(document_id: str, source_file: str) -> bytes:
@@ -182,6 +277,10 @@ def extract_document(self, document_id: str, subscription_id: str,
             summary.get("table_count", 0),
             summary.get("extraction_confidence", 0.0),
         )
+
+        # 8. Kick off KG update in the background. Non-blocking: the extraction
+        #    task is now complete and will return regardless of KG status.
+        _enqueue_kg_update_async(extraction_result=result, source_file=source_file)
 
     except SoftTimeLimitExceeded:
         duration_seconds = round(time.time() - start_time, 2)
