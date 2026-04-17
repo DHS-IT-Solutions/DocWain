@@ -202,88 +202,25 @@ def _ingest_to_knowledge_graph(
     redis_client: Any = None,
     deep_result: Any = None,
 ) -> None:
-    """Non-blocking KG ingestion from extraction results.
+    """Thin wrapper kept for existing callers — delegates to the shared trigger.
 
-    Builds a graph payload from the extraction output and enqueues it
-    for async processing.  KG failure must never block extraction.
-
-    Parameters
-    ----------
-    deep_result:
-        Optional :class:`~src.doc_understanding.deep_analyzer.DeepAnalysisResult`
-        produced during extraction.  When provided, ``entities``,
-        ``typed_relationships``, and ``temporal_spans`` from the deep analysis
-        are forwarded to the KG ingest layer to activate the previously-dead
-        ``create_entity_relationship()`` and ``create_timeline_node()`` store
-        methods.  If *None*, the existing behaviour is preserved.
+    All KG-enqueue logic now lives in ``src.kg.trigger`` so every
+    extraction path uses one implementation. This wrapper preserves the
+    legacy signature used by call sites in this module.
     """
-    try:
-        from src.kg.ingest import build_graph_payload, get_graph_ingest_queue
-
-        # Build an embeddings_payload-shaped dict from the extraction pickle
-        texts: List[str] = []
-        chunk_metadata: List[Dict[str, Any]] = []
-        structured = payload_to_save.get("structured") or {}
-        for fname, content in structured.items():
-            if isinstance(content, dict):
-                full_text = str(content.get("full_text") or content.get("text") or "")
-                if full_text:
-                    texts.append(full_text)
-                    chunk_metadata.append({
-                        "chunk_id": f"{document_id}::extraction::{fname}",
-                        "source_name": fname,
-                    })
-
-        if not texts:
-            return
-
-        # Extract deep analysis artifacts when available
-        deep_entities: Optional[List[Dict[str, Any]]] = None
-        typed_relationships: Optional[List[Dict[str, Any]]] = None
-        temporal_spans: Optional[List[Dict[str, Any]]] = None
-        if deep_result is not None:
-            try:
-                deep_entities = [e.to_dict() for e in (deep_result.entities or [])]
-            except Exception as exc:
-                logger.debug("Failed to extract deep entities from analysis result", exc_info=True)
-                deep_entities = None
-            try:
-                typed_relationships = list(deep_result.typed_relationships or [])
-            except Exception as exc:
-                logger.debug("Failed to extract typed relationships from analysis result", exc_info=True)
-                typed_relationships = None
-            try:
-                temporal_spans = list(deep_result.temporal_spans or [])
-            except Exception as exc:
-                logger.debug("Failed to extract temporal spans from analysis result", exc_info=True)
-                temporal_spans = None
-
-        doc_classification = payload_to_save.get("document_classification") or {}
-        graph_payload = build_graph_payload(
-            embeddings_payload={
-                "texts": texts,
-                "chunk_metadata": chunk_metadata,
-                "doc_metadata": {
-                    "document_type": doc_classification.get("document_type", "generic"),
-                    "doc_type": doc_classification.get("domain", "generic"),
-                },
-            },
-            subscription_id=str(subscription_id),
-            profile_id=str(profile_id),
-            document_id=str(document_id),
-            doc_name=source_name,
-            deep_entities=deep_entities,
-            typed_relationships=typed_relationships,
-        )
-        if graph_payload:
-            # Attach temporal spans so ingest_graph_payload can create timeline nodes
-            if temporal_spans:
-                graph_payload.temporal_spans = temporal_spans
-            queue = get_graph_ingest_queue(redis_client)
-            queue.enqueue(graph_payload)
-            logger.info("KG ingestion enqueued for document %s", document_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("KG ingestion skipped for %s: %s", document_id, exc)
+    from src.kg.trigger import enqueue_from_legacy_payload
+    # The callers in this file already wrap this in a daemon thread, so
+    # we enqueue synchronously here to avoid double-threading.
+    enqueue_from_legacy_payload(
+        document_id=document_id,
+        subscription_id=subscription_id,
+        profile_id=profile_id,
+        source_name=source_name,
+        payload_to_save=payload_to_save,
+        deep_result=deep_result,
+        async_=False,
+        redis_client=redis_client,
+    )
 
 def _persist_layout_graph(
     *,
