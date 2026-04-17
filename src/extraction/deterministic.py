@@ -705,6 +705,96 @@ def _extract_text(content: bytes, filename: str) -> RawExtraction:
     return raw
 
 
+# ---------------------------------------------------------------------------
+# Validation — quality gates over a RawExtraction
+# ---------------------------------------------------------------------------
+
+
+def validate(raw: RawExtraction) -> Dict[str, Any]:
+    """Run quality gates over a ``RawExtraction``.
+
+    Returns a dict compatible with the existing ``ValidationResult``
+    dataclass fields so callers that want a typed object can adapt easily.
+
+    Gates:
+        G1  text_full is non-empty
+        G2  no fatal warnings in raw.warnings
+        G3  format-specific structural checks
+
+    Pass = no gate failed. Failure is non-blocking — the dict is returned,
+    the caller decides whether to raise, retry, or just log.
+    """
+    failed: List[str] = []
+    advisories: List[str] = []
+
+    # G1
+    if not (raw.text_full or "").strip():
+        failed.append("G1: text_full is empty")
+
+    # G2
+    _fatal_hints = ("failed", "Error", "corrupt", "encrypted")
+    for w in raw.warnings:
+        if any(h in w for h in _fatal_hints) and "skipped" not in w.lower():
+            advisories.append(f"warning: {w}")
+
+    # G3 — per format
+    fmt = raw.file_format.lower()
+    if fmt == "pdf":
+        pages = raw.metadata.get("page_count", 0)
+        if pages <= 0:
+            failed.append("G3: PDF page_count must be > 0")
+        if not any(b.type == BlockType.PARAGRAPH for b in raw.blocks):
+            failed.append("G3: PDF must have at least one paragraph block")
+        stitched = sum(1 for t in raw.tables if t.cross_page)
+        if stitched:
+            advisories.append(f"stitched {stitched} cross-page table(s)")
+
+    elif fmt == "docx":
+        has_paragraphs = raw.metadata.get("paragraph_count", 0) > 0
+        has_tables = len(raw.tables) > 0
+        if not (has_paragraphs or has_tables):
+            failed.append("G3: DOCX has neither paragraphs nor tables")
+        watermarks = raw.metadata.get("watermarks") or []
+        if watermarks:
+            advisories.append(f"watermarks detected: {watermarks}")
+
+    elif fmt in ("xlsx", "xls"):
+        if raw.metadata.get("sheet_count", 0) <= 0:
+            failed.append("G3: XLSX has no sheets")
+        for t in raw.tables:
+            if t.metadata.get("non_empty_cells", 0) == 0:
+                failed.append(
+                    f"G3: XLSX sheet {t.metadata.get('sheet')!r} has no non-empty cells"
+                )
+
+    elif fmt in ("png", "jpg", "jpeg", "tiff", "bmp"):
+        words = raw.metadata.get("ocr_word_count", 0)
+        if words < 10:
+            failed.append(f"G3: IMAGE OCR found only {words} words (<10 sanity bar)")
+        conf_mean = raw.metadata.get("ocr_confidence_mean")
+        if conf_mean is not None:
+            if conf_mean < 30:
+                advisories.append(f"LOW OCR confidence mean={conf_mean} (<30)")
+            else:
+                advisories.append(f"OCR confidence mean={conf_mean}")
+
+    elif fmt in ("csv", "tsv"):
+        if raw.metadata.get("row_count", 0) <= 0:
+            failed.append("G3: CSV has zero rows")
+
+    elif fmt in ("txt", "md"):
+        if len(raw.text_full) == 0:
+            failed.append("G3: TXT is empty")
+
+    passed = not failed
+    return {
+        "passed": passed,
+        "failed_checks": failed,
+        "advisories": advisories,
+        "retry_recommended": not passed and "empty" in " ".join(failed).lower(),
+    }
+
+
 __all__ = [
     "Block",
     "BlockType",
@@ -712,4 +802,5 @@ __all__ = [
     "RawExtraction",
     "SUPPORTED_EXTENSIONS",
     "extract",
+    "validate",
 ]

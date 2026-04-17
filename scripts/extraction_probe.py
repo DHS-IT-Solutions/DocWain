@@ -44,73 +44,13 @@ from src.extraction import deterministic  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Per-file validation
+# Per-file validation — delegated to src.extraction.deterministic.validate
 # ---------------------------------------------------------------------------
 
 
 def _validate(raw: deterministic.RawExtraction) -> Tuple[bool, List[str], List[str]]:
-    """Return (passed, failed_gates, advisories)."""
-    failed: List[str] = []
-    advisories: List[str] = []
-
-    # G1: some content captured
-    if not raw.text_full.strip():
-        failed.append("G1: text_full is empty")
-
-    # G2: no fatal warnings (we keep warnings list but count them)
-    fatal_hints = ("failed", "Error", "corrupt", "encrypted")
-    for w in raw.warnings:
-        if any(h in w for h in fatal_hints) and "skipped" not in w.lower():
-            # Warnings that look structural
-            advisories.append(f"warning: {w}")
-
-    # G3: format-specific
-    fmt = raw.file_format.lower()
-    if fmt == "pdf":
-        pages = raw.metadata.get("page_count", 0)
-        if pages <= 0:
-            failed.append("G3: PDF page_count must be > 0")
-        if not any(b.type == deterministic.BlockType.PARAGRAPH for b in raw.blocks):
-            failed.append("G3: PDF must have at least one paragraph block")
-        if any(t.cross_page for t in raw.tables):
-            n = sum(1 for t in raw.tables if t.cross_page)
-            advisories.append(f"stitched {n} cross-page table(s)")
-
-    elif fmt == "docx":
-        has_paragraphs = raw.metadata.get("paragraph_count", 0) > 0
-        has_tables = len(raw.tables) > 0
-        if not (has_paragraphs or has_tables):
-            failed.append("G3: DOCX has neither paragraphs nor tables")
-        watermarks = raw.metadata.get("watermarks") or []
-        if watermarks:
-            advisories.append(f"watermarks detected: {watermarks}")
-
-    elif fmt in ("xlsx", "xls"):
-        if raw.metadata.get("sheet_count", 0) <= 0:
-            failed.append("G3: XLSX has no sheets")
-        for t in raw.tables:
-            if t.metadata.get("non_empty_cells", 0) == 0:
-                failed.append(f"G3: XLSX sheet {t.metadata.get('sheet')!r} has no non-empty cells")
-
-    elif fmt in ("png", "jpg", "jpeg", "tiff", "bmp", "image"):
-        words = raw.metadata.get("ocr_word_count", 0)
-        if words < 10:
-            failed.append(f"G3: IMAGE OCR found only {words} words (<10 sanity bar)")
-        conf_mean = raw.metadata.get("ocr_confidence_mean")
-        if conf_mean is not None and conf_mean < 30:
-            advisories.append(f"LOW OCR confidence mean={conf_mean} (<30)")
-        elif conf_mean is not None:
-            advisories.append(f"OCR confidence mean={conf_mean}")
-
-    elif fmt in ("csv", "tsv"):
-        if raw.metadata.get("row_count", 0) <= 0:
-            failed.append("G3: CSV has zero rows")
-
-    elif fmt in ("txt", "md"):
-        if len(raw.text_full) == 0:
-            failed.append("G3: TXT is empty")
-
-    return (not failed, failed, advisories)
+    result = deterministic.validate(raw)
+    return result["passed"], result["failed_checks"], result["advisories"]
 
 
 # ---------------------------------------------------------------------------
