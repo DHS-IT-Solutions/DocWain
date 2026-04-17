@@ -414,6 +414,23 @@ def embed_document(self, document_id: str, subscription_id: str,
             # by the async build_knowledge_graph Celery task.
             logger.warning("Section-level KG update skipped for %s: %s", document_id, exc)
 
+        # ── 9c. Consistency check (impact #5) ───────────────────────────
+        # Verify chunk_id parity across the three stores. Writes a
+        # consistency_check report to the Mongo document; never raises
+        # so a flaky external store can't fail the whole embed.
+        try:
+            from src.tasks.consistency_check import verify as _verify_consistency
+            _consistency = _verify_consistency(
+                document_id=document_id,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                expected_chunk_ids=[r.chunk_id for r in records if r.chunk_id],
+            )
+            _consistency_severity = _consistency.get("severity", "ok")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("consistency-check skipped for %s: %s", document_id, exc)
+            _consistency_severity = "skipped"
+
         # ── 10. Update MongoDB: COMPLETED ────────────────────────────────
         embedding_summary = {
             "chunk_count": len(chunk_dicts),
@@ -422,6 +439,7 @@ def embed_document(self, document_id: str, subscription_id: str,
             "avg_quality_score": round(avg_quality, 3),
             "vector_dim": vector_dim,
             "collection": collection_name,
+            "consistency": _consistency_severity,
         }
         update_stage(document_id, "embedding", status=STAGE_COMPLETED,
                      summary=embedding_summary, error=None)
