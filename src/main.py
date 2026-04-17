@@ -1089,18 +1089,42 @@ def ask_question_api(
 
 @api_router.post("/extract/{doc_id}", tags=["Default"])
 def trigger_single_extraction(doc_id: str, subscription_id: str = "default"):
-    """API endpoint to extract a single document by its document ID."""
+    """Dispatch the modern Celery extraction task for a single document.
+
+    The legacy sync path (``trainData`` / ``extract_single_document``) is
+    gone — this endpoint is now a thin dispatcher onto
+    ``src.tasks.extraction.extract_document``, so every extraction goes
+    through the deterministic Layer-1 + vLLM V2 engine with full stage
+    tracking, audit logging, and unified KG trigger.
+    """
+    from src.tasks.extraction import extract_document
+    from src.api.document_status import get_document_record
+
+    record = get_document_record(doc_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+
+    sub = str(record.get("subscription_id") or subscription_id or "")
+    prof = str(record.get("profile_id") or "")
+    if not sub or not prof:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Document {doc_id} is missing subscription_id or profile_id",
+        )
     try:
-        logging.info(f"Received single document extraction request for: {doc_id} (subscription: {subscription_id})")
-        result = train_single_document(doc_id)
-        if isinstance(result, dict) and result.get("status") == "CONFLICT":
-            raise HTTPException(status_code=409, detail=result.get("reason", "duplicate_extraction"))
-        return {"status": "success", "message": result}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Single extraction API error: {e}")
-        raise HTTPException(status_code=500, detail="Single document extraction failed")
+        task = extract_document.delay(doc_id, sub, prof)
+    except Exception as exc:
+        logging.error("Celery dispatch failed for extract %s: %s", doc_id, exc, exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Extraction dispatch failed: {exc}")
+
+    logging.info("Dispatched extraction task %s for doc %s", task.id, doc_id)
+    return {
+        "status": "queued",
+        "document_id": doc_id,
+        "task_id": task.id,
+        "subscription_id": sub,
+        "profile_id": prof,
+    }
 
 @api_router.get("/profile/{profile_id}/insights", tags=["Profile"])
 def get_profile_insights(profile_id: str):
@@ -1140,41 +1164,119 @@ def get_profile_insights(profile_id: str):
 
 @api_router.post("/train/{doc_id}", tags=["Default"])
 def trigger_single_training(doc_id: str, subscription_id: str = "default"):
-    """Train (embed) a single document by ID.
+    """Dispatch the modern Celery embedding task for a single document.
 
-    Called by the UI to trigger embedding for one document.
+    Bypasses the legacy ``embedding_service.embed_documents`` path so the
+    ingestion goes through Contextual Retrieval, the unified chunker,
+    stage tracking, and the KG trigger.
     """
-    from src.api.embedding_service import embed_documents
-    from src.security.response_sanitizer import sanitize_user_payload
+    from src.tasks.embedding import embed_document
+    from src.api.document_status import get_document_record
 
-    try:
-        logging.info("Train (embed) single document: doc=%s subscription=%s", doc_id, subscription_id)
-        result = embed_documents(
-            document_id=doc_id,
-            subscription_id=subscription_id if subscription_id != "default" else None,
+    record = get_document_record(doc_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+
+    sub = str(record.get("subscription_id") or subscription_id or "")
+    prof = str(record.get("profile_id") or "")
+    if not sub or not prof:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Document {doc_id} is missing subscription_id or profile_id",
         )
-        return sanitize_user_payload(result)
+    try:
+        task = embed_document.delay(doc_id, sub, prof)
     except Exception as exc:
-        logging.error("Single train (embed) API error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Training failed: {exc}")
+        logging.error("Celery dispatch failed for embed %s: %s", doc_id, exc, exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Embedding dispatch failed: {exc}")
+
+    logging.info("Dispatched embedding task %s for doc %s", task.id, doc_id)
+    return {
+        "status": "queued",
+        "document_id": doc_id,
+        "task_id": task.id,
+        "subscription_id": sub,
+        "profile_id": prof,
+    }
 
 @api_router.get("/extract", tags=["Default"])
 def trigger_extraction(subscription_id: str = "default"):
-    """API endpoint to trigger document extraction.
+    """Dispatch Celery extraction tasks for all eligible documents.
 
-    This endpoint processes all eligible documents synchronously.
-    Extraction can take several minutes per document depending on
-    document size and complexity. The response includes per-document
-    timing so the caller knows exactly what happened.
+    Replaces the legacy ``trainData`` → ``extract_documents`` sync batch
+    (which ran sequentially for minutes per doc). Each eligible document
+    gets one Celery task dispatched to the extraction queue; Celery
+    handles concurrency, retry, and progress reporting. The UI polls
+    per-document status via ``/extract/progress`` or
+    ``/pipeline/{document_id}/extraction``.
+
+    Eligibility: status is UNDER_REVIEW or EXTRACTION_FAILED. When
+    ``subscription_id`` is provided (and not the sentinel "default"), the
+    search is scoped to that subscription.
     """
+    from src.tasks.extraction import extract_document
+    from src.api.document_status import get_documents_collection
+    from src.api.statuses import STATUS_UNDER_REVIEW, STATUS_EXTRACTION_FAILED
+
+    logging.info("Dispatching extraction tasks (subscription=%s)", subscription_id)
+    query: Dict[str, Any] = {"status": {"$in": [STATUS_UNDER_REVIEW, STATUS_EXTRACTION_FAILED]}}
+    if subscription_id and subscription_id != "default":
+        query["subscription_id"] = str(subscription_id)
+
     try:
-        logging.info(f"Received extraction request (subscription: {subscription_id})")
-        result = trainData(subscription_id=subscription_id)
-        logging.info("Extraction result: status=%s", result.get("status"))
-        return result
-    except Exception as e:
-        logging.error(f"Extraction API error: {e}")
-        raise HTTPException(status_code=500, detail=f"Extraction process failed: {e}")
+        col = get_documents_collection()
+        docs = list(col.find(
+            query,
+            {"_id": 1, "subscription_id": 1, "profile_id": 1, "name": 1, "status": 1},
+        ))
+    except Exception as exc:
+        logging.error("Failed to list eligible documents: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Could not list eligible documents: {exc}")
+
+    if not docs:
+        return {
+            "status": "no_documents",
+            "message": "No UNDER_REVIEW or EXTRACTION_FAILED documents found",
+            "count": 0,
+            "documents": [],
+        }
+
+    dispatched: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for d in docs:
+        doc_id = str(d["_id"])
+        sub = str(d.get("subscription_id") or "")
+        prof = str(d.get("profile_id") or "")
+        if not sub or not prof:
+            failed.append({
+                "document_id": doc_id,
+                "name": d.get("name", ""),
+                "reason": "missing_subscription_or_profile",
+            })
+            continue
+        try:
+            task = extract_document.delay(doc_id, sub, prof)
+            dispatched.append({
+                "document_id": doc_id,
+                "task_id": task.id,
+                "name": d.get("name", ""),
+                "status": "QUEUED",
+            })
+        except Exception as exc:  # noqa: BLE001
+            logging.error("Dispatch failed for doc %s: %s", doc_id, exc, exc_info=True)
+            failed.append({
+                "document_id": doc_id,
+                "name": d.get("name", ""),
+                "reason": str(exc),
+            })
+
+    return {
+        "status": "queued" if dispatched and not failed else ("partial" if dispatched else "failed"),
+        "count": len(dispatched),
+        "documents": dispatched,
+        "failed": failed,
+        "message": f"Dispatched {len(dispatched)} extraction task(s), {len(failed)} failed to dispatch",
+    }
 
 @api_router.get("/extract/progress", tags=["Default"])
 def get_extraction_progress(profile_id: str = Query(..., description="Profile ID")):
@@ -1205,32 +1307,50 @@ class TrainDocumentsRequest(BaseModel):
 
 @api_router.post("/train", tags=["Default"])
 def train_documents_batch(request: TrainDocumentsRequest = Body(...)):
-    """Train (embed) documents by IDs.
+    """Dispatch Celery embedding tasks for a batch of document IDs.
 
-    Called by the UI Tag-and-Train tab after screening completes.
-    This triggers the embedding pipeline which stores document content
-    into the vector database.
+    Replaces the legacy ``embedding_service.embed_documents`` sync batch.
+    Each doc_id gets one Celery task on the embedding queue; that task
+    runs the contextualised-retrieval-aware embed pipeline, writes to
+    Qdrant + Neo4j, and updates MongoDB stage state.
     """
-    from src.api.embedding_service import embed_documents
-    from src.security.response_sanitizer import sanitize_user_payload
-
     if not request.doc_ids:
         raise HTTPException(status_code=400, detail="doc_ids is required and must not be empty")
 
-    try:
-        logging.info(
-            "Train (embed) request: %d documents, subscription=%s, profile=%s",
-            len(request.doc_ids), request.subscription_id, request.profile_id,
-        )
-        result = embed_documents(
-            document_ids=request.doc_ids,
-            subscription_id=request.subscription_id,
-            profile_id=request.profile_id,
-        )
-        return sanitize_user_payload(result)
-    except Exception as exc:
-        logging.error("Train (embed) API error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Training failed: {exc}")
+    from src.tasks.embedding import embed_document
+    from src.api.document_status import get_document_record
+
+    logging.info(
+        "Dispatching embedding tasks: %d docs subscription=%s profile=%s",
+        len(request.doc_ids), request.subscription_id, request.profile_id,
+    )
+
+    dispatched: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for doc_id in request.doc_ids:
+        record = get_document_record(doc_id) or {}
+        sub = str(record.get("subscription_id") or request.subscription_id or "")
+        prof = str(record.get("profile_id") or request.profile_id or "")
+        if not sub or not prof:
+            failed.append({"document_id": doc_id, "reason": "missing_subscription_or_profile"})
+            continue
+        try:
+            task = embed_document.delay(doc_id, sub, prof)
+            dispatched.append({
+                "document_id": doc_id,
+                "task_id": task.id,
+                "status": "QUEUED",
+            })
+        except Exception as exc:  # noqa: BLE001
+            logging.error("Embed dispatch failed for %s: %s", doc_id, exc, exc_info=True)
+            failed.append({"document_id": doc_id, "reason": str(exc)})
+
+    return {
+        "status": "queued" if dispatched and not failed else ("partial" if dispatched else "failed"),
+        "count": len(dispatched),
+        "documents": dispatched,
+        "failed": failed,
+    }
 
 
 @api_router.get("/train/progress", tags=["Default"])

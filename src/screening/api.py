@@ -130,6 +130,10 @@ class ScreeningDocumentResult(BaseModel):
     doc_id: str
     results: Optional[Dict[str, Any]] = None
     errors: List[str] = Field(default_factory=list)
+    # Celery dispatch metadata — populated when /screening/run queues a
+    # screen_document task instead of running screening inline.
+    status: Optional[str] = None
+    task_id: Optional[str] = None
 
 class ScreeningProfileSummary(BaseModel):
     processed: int = 0
@@ -634,7 +638,23 @@ def run_screening(
     request: ScreeningRunRequest,
     engine: ScreeningEngine = Depends(get_screening_engine),
 ):
-    categories = _normalize_categories(request.categories)
+    """Dispatch Celery screening tasks for every eligible document in each profile.
+
+    Replaces the legacy sync ``_run_parallel_screening`` / engine-inline
+    execution. Each EXTRACTION_COMPLETED document gets one
+    ``src.tasks.screening.screen_document`` task on the screening queue;
+    the task runs the profile-configured plugin set, persists the full
+    report to Azure Blob, writes stage state + audit log + pipeline
+    status, and auto-dispatches the KG build task downstream.
+
+    The ``categories`` / ``fail_fast`` / ``internet_enabled`` knobs from
+    the request no longer override behaviour here — they were a legacy
+    facet of the sync engine. Plugin selection comes from each profile's
+    ``screening_config`` stored in MongoDB, which is the single source of
+    truth the Celery task consumes.
+    """
+    from src.tasks.screening import screen_document as celery_screen_document
+
     collection = _get_documents_collection()
     if collection is None:
         raise HTTPException(
@@ -652,10 +672,12 @@ def run_screening(
                 {"status": STATUS_EXTRACTION_COMPLETED},
             ]
         }
-        cursor = collection.find(query, projection={"_id": 1, "doc_type": 1, "document_type": 1, "type": 1})
+        cursor = collection.find(
+            query,
+            projection={"_id": 1, "subscription_id": 1, "profile_id": 1, "name": 1},
+        )
         if request.max_docs_per_profile:
             cursor = cursor.limit(int(request.max_docs_per_profile))
-
         docs = list(cursor)
         if not docs:
             profiles.append(
@@ -664,60 +686,42 @@ def run_screening(
                     status="not_found",
                     summary=ScreeningProfileSummary(processed=0, succeeded=0, failed=0),
                     documents=[],
-                    message="No documents found for profile",
+                    message="No EXTRACTION_COMPLETED documents found for profile",
                 )
             )
             overall_status = "partial" if overall_status == "success" else overall_status
             continue
 
-        tasks: List[Dict[str, Any]] = []
+        dispatched: List[ScreeningDocumentResult] = []
+        dispatch_failed = 0
         for doc in docs:
             doc_id = _extract_doc_id(doc)
             if not doc_id:
                 continue
-            doc_type = (
-                request.doc_type
-                or doc.get("doc_type")
-                or doc.get("document_type")
-                or doc.get("type")
-            )
-            tasks.append(
-                {
-                    "doc_id": doc_id,
-                    "categories": categories,
-                    "doc_type": doc_type,
-                    "internet_enabled": request.internet_enabled,
-                }
-            )
+            sub = str(doc.get("subscription_id") or "")
+            prof = str(doc.get("profile_id") or profile_id)
+            if not sub:
+                dispatch_failed += 1
+                continue
+            try:
+                task = celery_screen_document.delay(doc_id, sub, prof)
+                dispatched.append(ScreeningDocumentResult(
+                    doc_id=doc_id,
+                    status="QUEUED",
+                    task_id=task.id,
+                    errors=[],
+                ))
+            except Exception as exc:  # noqa: BLE001
+                dispatch_failed += 1
+                dispatched.append(ScreeningDocumentResult(
+                    doc_id=doc_id,
+                    status="DISPATCH_FAILED",
+                    errors=[str(exc)],
+                ))
 
-        doc_results: List[Dict[str, Any]] = []
-        if request.fail_fast:
-            for task in tasks:
-                result = _screen_document_task(task)
-                doc_results.append(result)
-                if result.get("errors"):
-                    break
-        else:
-            doc_results = _run_parallel_screening(tasks)
-
-        documents = [ScreeningDocumentResult(**res) for res in doc_results]
-        if "security" in categories:
-            apply_security_results_for_run(doc_results)
-        # Promote successfully-screened docs to SCREENING_COMPLETED
-        # so embedding can proceed regardless of which categories were run
-        for task_item in tasks:
-            _doc_id = task_item.get("doc_id")
-            if _doc_id:
-                matching = [r for r in doc_results if r.get("doc_id") == _doc_id and not r.get("errors")]
-                if matching:
-                    promote_to_screening_completed(_doc_id)
-        summary = _summary_from_results(documents)
-        status_text = "success"
-        if summary.failed and summary.succeeded == 0:
-            status_text = "failed"
-        elif summary.failed:
-            status_text = "partial"
-
+        status_text = "success" if dispatch_failed == 0 and dispatched else (
+            "failed" if not any(d.status == "QUEUED" for d in dispatched) else "partial"
+        )
         if status_text == "failed":
             overall_status = "failed"
         elif status_text == "partial" and overall_status == "success":
@@ -727,14 +731,14 @@ def run_screening(
             ScreeningProfileResult(
                 profile_id=profile_id,
                 status=status_text,
-                summary=summary,
-                documents=documents,
-                message=None,
+                summary=ScreeningProfileSummary(
+                    processed=len(dispatched),
+                    succeeded=sum(1 for d in dispatched if d.status == "QUEUED"),
+                    failed=dispatch_failed,
+                ),
+                documents=dispatched,
+                message=f"Dispatched {len(dispatched) - dispatch_failed}/{len(dispatched)} screening task(s)",
             )
         )
-
-        if request.fail_fast and any(doc.errors for doc in documents):
-            overall_status = "failed"
-            break
 
     return ScreeningRunResponse(status=overall_status, profiles=profiles)
