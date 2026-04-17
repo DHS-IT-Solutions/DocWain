@@ -246,7 +246,6 @@ class Reasoner:
         if not evidence:
             return False
 
-        # Extract text from evidence — handle multiple field names
         evidence_parts = []
         for item in evidence:
             text = (
@@ -258,8 +257,6 @@ class Reasoner:
             )
             evidence_parts.append(text)
 
-        # Include Document Intelligence content (summaries, key_facts,
-        # key_values, entities) — the model reasons over this data too.
         if doc_context:
             for s in doc_context.get("summaries") or []:
                 if s:
@@ -280,17 +277,18 @@ class Reasoner:
 
         evidence_text = " ".join(evidence_parts)
 
-        # If we have evidence items but no extractable text, mark as ungrounded
-        # — the model cannot be grounded without actual text to reference
         if not evidence_text.strip():
             logger.warning("[Reasoner] Grounding: evidence items exist but contain no text — UNGROUNDED")
             return False
 
-        # Short or empty answer — consider grounded if we have evidence
-        if len(answer.strip()) < 20:
+        # Short answers bypass the gates (< 40 chars — was 20). Catches concise
+        # factual answers like "**philip.simon.derock@company.com**" that are
+        # correctly grounded but too short to trigger meaningful word-overlap.
+        if len(answer.strip()) < 40:
             return True
 
-        # Check that numeric claims in the answer are traceable to evidence
+        # Number gate (unchanged — Task 1 confirmed it does not misfire).
+        # Checks that numeric claims in the answer are traceable to evidence.
         answer_numbers = set(_NUMBER_RE.findall(answer))
         if answer_numbers:
             evidence_numbers = set(_NUMBER_RE.findall(evidence_text))
@@ -301,8 +299,7 @@ class Reasoner:
                     len(ungrounded_nums), len(answer_numbers),
                     list(ungrounded_nums)[:10],
                 )
-            # Allow up to 20% ungrounded numbers (expert may compute ratios
-            # or reformat values, but most numbers must trace to evidence)
+            # Allow up to 20% ungrounded numbers.
             if len(ungrounded_nums) / len(answer_numbers) > 0.20:
                 logger.debug(
                     "[Reasoner] Grounding: %d/%d numbers ungrounded",
@@ -310,19 +307,18 @@ class Reasoner:
                 )
                 return False
 
-        # Grounding strategy: if the retrieval pipeline found evidence and the
-        # model produced a substantive response, the response is grounded.
-        #
-        # The RAG pipeline already ensures evidence relevance via:
-        # 1. Dense + sparse hybrid retrieval with score thresholds
-        # 2. Cross-encoder reranking
-        # 3. System prompt instructing grounded-only answers
-        #
-        # Post-hoc word overlap checks are unreliable for a synthesizing model
-        # that paraphrases, summarizes, and uses professional vocabulary.
-        # Instead, we only flag as ungrounded when the answer clearly has NO
-        # connection to the evidence (zero word overlap = likely hallucination).
-
+        # Word gate (relaxed per Task 1 diagnostic):
+        #   - Short answers (<10 meaningful words) trivially pass when evidence exists.
+        #   - Concise "not-found" style answers (<20 meaningful words, containing
+        #     explicit negation language like "not found / not specified / not
+        #     present / not provided") also pass — these legitimately share zero
+        #     words with on-topic evidence while being correct.
+        #   - Ratio threshold lowered from 15% to 5% — paraphrased professional
+        #     answers (abbreviation expansion, domain synonyms) routinely fall
+        #     in the 10–15% band while being correctly grounded.
+        #   - Absolute `overlap < 5` floor REMOVED. It was firing on legitimate
+        #     short answers ("Not found in the documents" = 4 meaningful words
+        #     = 100% ratio but tripped the floor).
         answer_words = set(
             w.lower() for w in re.findall(r'\b[a-zA-Z]{3,}\b', answer)
         )
@@ -330,22 +326,25 @@ class Reasoner:
             w.lower() for w in re.findall(r'\b[a-zA-Z]{3,}\b', evidence_text)
         )
 
+        if len(answer_words) < 10:
+            return True  # concise answer + evidence present → trust retrieval
+
+        # Concise "not-found" answers: legitimate negation responses whose
+        # vocabulary does not overlap with on-topic evidence chunks.
+        if len(answer_words) < 20 and re.search(
+            r'\bnot\s+(?:found|specified|present|provided|available|mentioned|listed|stated|given|included)\b',
+            answer,
+            re.IGNORECASE,
+        ):
+            return True
+
         if answer_words and evidence_words:
             overlap = len(answer_words & evidence_words)
-            overlap_ratio = overlap / len(answer_words) if answer_words else 0
-            # At least 15% of answer words must appear in evidence to be grounded.
-            # This catches responses that share a few generic words but fabricate
-            # most of the content.
-            if overlap_ratio < 0.15:
+            overlap_ratio = overlap / len(answer_words)
+            if overlap_ratio < 0.05:
                 logger.warning(
                     "[Reasoner] Grounding: only %d/%d words (%.0f%%) overlap with evidence — UNGROUNDED",
                     overlap, len(answer_words), overlap_ratio * 100,
-                )
-                return False
-            if overlap < 5:
-                logger.warning(
-                    "[Reasoner] Grounding: only %d shared words — UNGROUNDED",
-                    overlap,
                 )
                 return False
 
