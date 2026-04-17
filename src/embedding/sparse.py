@@ -17,7 +17,7 @@ from src.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-_DEFAULT_MODEL = "naver/splade-v3"
+_DEFAULT_MODEL = "naver/splade-cocondenser-ensembledistil"
 _MAX_LENGTH = 512
 
 
