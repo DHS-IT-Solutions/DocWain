@@ -19,38 +19,101 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-# Canonical entity type vocabulary. Enforced on both sides:
-#   - JSON schema ``enum`` constrains guided_json output at generation time
-#   - system prompt lists the vocabulary so the model reasons about mapping
-# Pin to a stable set so KG doesn't accumulate duplicate Entity type variants
-# like ``ORG`` vs ``ORGANISATION`` vs ``ORGANIZATION``.
-_CANONICAL_ENTITY_TYPES = [
-    "PERSON",
-    "ORGANIZATION",
-    "LOCATION",
-    "ADDRESS",
-    "CITY",
-    "COUNTRY",
-    "POSTAL_CODE",
-    "PHONE",
-    "EMAIL",
-    "URL",
-    "DATE",
-    "DURATION",
-    "MONEY",
-    "QUANTITY",
-    "CURRENCY",
-    "IDENTIFIER",
-    "PRODUCT",
-    "SERVICE",
-    "DOCUMENT_TYPE",
-    "OTHER",
+# ---------------------------------------------------------------------------
+# Entity type handling — open vocabulary with light-touch normalisation.
+#
+# DocWain must support documents from any domain: invoices, resumes, medical
+# reports, legal contracts, technical specs, academic papers, emails, and
+# whatever comes next. Hardcoding a closed entity-type enum would force every
+# domain-specific concept (MEDICATION, DIAGNOSIS, CLAUSE, CITATION,
+# PROTOCOL_NAME, GENE, ...) to collapse into OTHER, throwing away useful
+# structure.
+#
+# Design:
+#   - Schema's ``type`` is a plain string — any label is allowed.
+#   - Prompt lists common canonical labels as examples + tells the model to
+#     invent domain-specific types when they fit the content better.
+#   - A small alias table normalises well-known drift (ORG vs ORGANISATION;
+#     POSTCODE vs POSTAL_CODE; AMOUNT vs MONEY; etc.) so KG doesn't
+#     accumulate duplicate type nodes for the same concept.
+# ---------------------------------------------------------------------------
+
+
+# Common canonical types — listed for prompt guidance and alias normalisation.
+# Domain-specific types (not in this list) flow through untouched.
+_COMMON_CANONICAL_TYPES = [
+    "PERSON", "ORGANIZATION", "LOCATION", "ADDRESS", "CITY", "COUNTRY",
+    "POSTAL_CODE", "PHONE", "EMAIL", "URL",
+    "DATE", "DURATION", "MONEY", "QUANTITY", "CURRENCY", "IDENTIFIER",
+    "PRODUCT", "SERVICE", "DOCUMENT_TYPE", "EVENT", "OTHER",
 ]
 
 
-# JSON schema constraining the model's output. vLLM enforces this with
-# guided_json so the response is valid JSON with the expected keys every
-# time — no regex-from-text parsing needed.
+# Alias map: map observed drift variants to the canonical form. Any type
+# NOT in this map is preserved as-is (uppercased, whitespace-stripped),
+# so domain-specific types like MEDICATION / CLAUSE / GENE flow through.
+_TYPE_ALIASES: Dict[str, str] = {
+    # ORGANIZATION variants
+    "ORG": "ORGANIZATION",
+    "ORGANISATION": "ORGANIZATION",
+    "COMPANY": "ORGANIZATION",
+    "VENDOR": "ORGANIZATION",
+    "CUSTOMER": "ORGANIZATION",
+    "INSTITUTION": "ORGANIZATION",
+    # POSTAL_CODE variants
+    "POSTCODE": "POSTAL_CODE",
+    "POST_CODE": "POSTAL_CODE",
+    "ZIP": "POSTAL_CODE",
+    "ZIPCODE": "POSTAL_CODE",
+    "ZIP_CODE": "POSTAL_CODE",
+    # PHONE variants
+    "PHONE_NUMBER": "PHONE",
+    "TELEPHONE": "PHONE",
+    "TEL": "PHONE",
+    "MOBILE": "PHONE",
+    # EMAIL variants
+    "EMAIL_ADDRESS": "EMAIL",
+    "E_MAIL": "EMAIL",
+    # MONEY variants
+    "AMOUNT": "MONEY",
+    "PRICE": "MONEY",
+    "CURRENCY_AMOUNT": "MONEY",
+    "MONETARY_AMOUNT": "MONEY",
+    # DATE variants
+    "DATE_TIME": "DATE",
+    "DATETIME": "DATE",
+    "TIMESTAMP": "DATE",
+    "CALENDAR_DATE": "DATE",
+    # IDENTIFIER variants
+    "ID": "IDENTIFIER",
+    "REFERENCE": "IDENTIFIER",
+    "REF": "IDENTIFIER",
+    "CODE": "IDENTIFIER",
+    "SKU": "IDENTIFIER",
+    # ADDRESS variants
+    "STREET_ADDRESS": "ADDRESS",
+    "POSTAL_ADDRESS": "ADDRESS",
+    "MAILING_ADDRESS": "ADDRESS",
+    # PRODUCT / SERVICE kept commerce-specific but canonical
+    "ITEM": "PRODUCT",
+    "GOOD": "PRODUCT",
+}
+
+
+def _normalize_type(raw: Any) -> str:
+    """Normalise a raw type label: uppercase, strip spaces, map known aliases.
+
+    Unknown types (domain-specific or newly-coined) are returned in their
+    canonical uppercase form but otherwise untouched — so a medical doc's
+    ``MEDICATION`` or a legal doc's ``CLAUSE`` survive and flow to KG.
+    """
+    if not raw:
+        return "OTHER"
+    s = str(raw).strip().upper().replace(" ", "_").replace("-", "_")
+    return _TYPE_ALIASES.get(s, s)
+
+
+# JSON schema for vLLM guided_json. ``type`` is an open string — no enum.
 _V2_RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -61,7 +124,7 @@ _V2_RESPONSE_SCHEMA: Dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "text": {"type": "string"},
-                    "type": {"type": "string", "enum": _CANONICAL_ENTITY_TYPES},
+                    "type": {"type": "string"},
                     "confidence": {"type": "number"},
                 },
                 "required": ["text", "type"],
@@ -99,37 +162,31 @@ _V2_RESPONSE_SCHEMA: Dict[str, Any] = {
 
 
 _SYSTEM_PROMPT = (
-    "You are DocWain, an enterprise document intelligence model. Given the "
-    "deterministically-extracted content of a document, produce structured "
-    "semantic understanding: entities, key fields as a flat dictionary "
-    "(vendor, total, invoice_number, date, etc.), relationships between "
-    "entities, and an overall confidence score in [0, 1]. Do not invent "
-    "content not present in the provided text. Return a JSON object "
-    "matching the required schema.\n\n"
-    "For every entity, set ``type`` to one of EXACTLY these canonical "
-    "values:\n"
-    "  PERSON        people\n"
-    "  ORGANIZATION  companies, vendors, customers, institutions\n"
-    "  LOCATION      cities, regions, countries, general places\n"
-    "  ADDRESS       street addresses and postal addresses\n"
-    "  CITY          city-only\n"
-    "  COUNTRY       country-only\n"
-    "  POSTAL_CODE   postal / zip codes\n"
-    "  PHONE         phone numbers\n"
-    "  EMAIL         email addresses\n"
-    "  URL           web addresses\n"
-    "  DATE          dates (any format)\n"
-    "  DURATION      time periods, payment terms (e.g. '30 days', 'net 60')\n"
-    "  MONEY         monetary amounts with currency\n"
-    "  QUANTITY      numeric quantities without currency\n"
-    "  CURRENCY      currency names/codes alone (e.g. 'GBP', 'USD')\n"
-    "  IDENTIFIER    invoice numbers, PO numbers, ref codes, SKUs\n"
-    "  PRODUCT       goods being bought/sold (items, SKUs with descriptions)\n"
-    "  SERVICE       services being provided/billed\n"
-    "  DOCUMENT_TYPE labels like 'Invoice', 'Purchase Order', 'Quotation'\n"
-    "  OTHER         use sparingly when nothing else fits\n\n"
-    "Do not invent new type labels. Do not use synonyms like ORG or "
-    "ORGANISATION — use ORGANIZATION."
+    "You are DocWain, a domain-agnostic document intelligence model. "
+    "Given the deterministically-extracted content of a document of any "
+    "kind (business, medical, legal, technical, academic, scientific, "
+    "or otherwise), produce structured semantic understanding:\n"
+    "  - entities: things worth naming, with a ``type`` label\n"
+    "  - fields: a flat key-value dictionary of the document's key facts "
+    "(keys should be descriptive snake_case labels drawn from the content — "
+    "vendor, total, patient_name, diagnosis, party_a, effective_date, "
+    "protocol_version, etc., whatever fits the document)\n"
+    "  - relationships: factual relations between entities\n"
+    "  - confidence: overall score in [0, 1]\n\n"
+    "Do not invent content not present in the provided text. Use exact "
+    "values from the text. Return a JSON object matching the schema.\n\n"
+    "Entity type naming — use SCREAMING_SNAKE_CASE. These are common "
+    "canonical types; use them when they fit:\n"
+    "  PERSON ORGANIZATION LOCATION ADDRESS CITY COUNTRY POSTAL_CODE\n"
+    "  PHONE EMAIL URL DATE DURATION MONEY QUANTITY CURRENCY\n"
+    "  IDENTIFIER PRODUCT SERVICE DOCUMENT_TYPE EVENT OTHER\n\n"
+    "If the document is from a specialised domain and none of the above "
+    "fit, introduce an appropriate domain-specific type in the same style "
+    "— MEDICATION, DIAGNOSIS, PROCEDURE, LAW_REFERENCE, CLAUSE, STATUTE, "
+    "CITATION, GENE, PROTEIN, PROTOCOL, VERSION, COMPONENT, THEOREM, "
+    "CONCEPT, etc. Prefer existing canonical types over inventing "
+    "synonyms (use ORGANIZATION, not ORG or ORGANISATION; use "
+    "POSTAL_CODE, not POSTCODE or ZIP)."
 )
 
 
@@ -197,8 +254,9 @@ def _parse_response(raw_text: str) -> Dict[str, Any]:
         return _default_empty_result(confidence=0.3)
 
     # Normalise entities to the shape the merger's Entity dataclass expects
-    # (text / type / confidence). The prompt schema uses ``name`` for readability
-    # but the downstream dataclass field is ``text``.
+    # (text / type / confidence). Entity ``type`` is also normalised via the
+    # alias table so common drift variants (ORG/ORGANISATION, POSTCODE, etc.)
+    # collapse to canonical labels, while domain-specific types pass through.
     entities = []
     for e in (parsed.get("entities") or []):
         if not isinstance(e, dict):
@@ -208,7 +266,7 @@ def _parse_response(raw_text: str) -> Dict[str, Any]:
             continue
         entities.append({
             "text": text,
-            "type": str(e.get("type") or "UNKNOWN").upper(),
+            "type": _normalize_type(e.get("type")),
             "confidence": float(e.get("confidence", 0.8) or 0.0),
         })
 
