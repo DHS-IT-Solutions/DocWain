@@ -9,6 +9,7 @@ from src.api.config import Config
 from src.api.pipeline_models import ChunkRecord
 from src.api.vector_store import QdrantVectorStore, build_collection_name, compute_chunk_id
 from src.embedding.pipeline.embedding_text_normalizer import ensure_embedding_text
+from src.embedding.sparse import sparse_to_qdrant
 from src.utils.payload_utils import get_canonical_text, token_count
 
 logger = get_logger(__name__)
@@ -268,6 +269,14 @@ def ingest_payloads(
             raise ValueError("Failed to compute embedding dimension from Ollama response")
         vector_store.ensure_collection(collection_name, vector_size)
 
+        # Fetch sparse encoder from AppState (None in test / CLI contexts)
+        try:
+            from src.api.rag_state import get_app_state
+            _app_state = get_app_state()
+            _sparse_encoder = _app_state.sparse_encoder if _app_state else None
+        except Exception:
+            _sparse_encoder = None
+
         records: List[ChunkRecord] = []
         for payload, vector in zip(payloads, vectors):
             if not vector:
@@ -288,11 +297,21 @@ def ingest_payloads(
                 payload.get("canonical_text") or payload.get("content") or "",
             )
             payload["chunk_id"] = payload.get("chunk_id") or chunk_id
+            sparse_vector_obj = None
+            if _sparse_encoder is not None:
+                try:
+                    _sparse_text = payload.get("canonical_text") or payload.get("content") or ""
+                    if _sparse_text:
+                        sparse_dict = _sparse_encoder.encode(_sparse_text)
+                        sparse_vector_obj = sparse_to_qdrant(sparse_dict)
+                except Exception as exc:
+                    logger.warning("Sparse encode failed for chunk_id=%s: %s", chunk_id, exc)
+
             records.append(
                 ChunkRecord(
                     chunk_id=str(chunk_id),
                     dense_vector=vector,
-                    sparse_vector=None,
+                    sparse_vector=sparse_vector_obj,
                     payload=payload,
                 )
             )
