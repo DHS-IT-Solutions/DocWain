@@ -107,6 +107,73 @@ def _get_kg_node_ids(document_id: str) -> list:
         return []
 
 
+def _update_section_kg(
+    *,
+    document_id: str,
+    subscription_id: str,
+    profile_id: str,
+    source_filename: str,
+    doc_domain: str,
+    chunk_dicts: list,
+    screening_summary: dict,
+) -> None:
+    """Write Sections / Chunks / ABOUT edges from chunker output.
+
+    Single entry point — both the legacy ``dataHandler.py`` section
+    writer and the Celery embed path now converge here. Derives the
+    section list from the SectionChunker chunk metadata (one Section
+    node per distinct ``section.id``) and forwards entity facts from
+    the screening summary when available.
+    """
+    from src.intelligence.kg_updater import KGUpdater
+
+    # Deduplicate sections by section_id preserving first-seen order
+    seen_section_ids: set = set()
+    sections_payload: list = []
+    chunk_metadata_payload: list = []
+    for idx, c in enumerate(chunk_dicts):
+        section_meta = c.get("section") or {}
+        section_id = section_meta.get("id") or f"section_{idx}"
+        section_title = section_meta.get("title") or ""
+        if section_id not in seen_section_ids:
+            sections_payload.append({
+                "section_id": section_id,
+                "section_title": section_title,
+                "section_kind": "text",
+            })
+            seen_section_ids.add(section_id)
+        chunk_id = f"{document_id}_chunk_{idx}"
+        chunk_metadata_payload.append({
+            "chunk_id": chunk_id,
+            "section_id": section_id,
+            "chunk_kind": c.get("type") or "text",
+        })
+
+    # Section facts: prefer the section-intelligence output from the
+    # screening summary when it's available. When absent (most common
+    # today), we pass an empty list — sections/chunks still get nodes
+    # and HAS_CHUNK edges; ABOUT edges come later from the
+    # build_knowledge_graph task using extraction entities.
+    section_facts = (screening_summary or {}).get("section_facts") or []
+
+    updater = KGUpdater()
+    counts = updater.update(
+        subscription_id=str(subscription_id),
+        profile_id=str(profile_id),
+        document_id=str(document_id),
+        source_name=str(source_filename),
+        doc_domain=str(doc_domain or "generic"),
+        sections=sections_payload,
+        chunk_metadata=chunk_metadata_payload,
+        section_facts=section_facts,
+    )
+    logger.info(
+        "Section KG write for %s: sections=%d chunks=%d entities=%d mentions=%d",
+        document_id, counts.get("sections", 0), counts.get("chunks", 0),
+        counts.get("entities", 0), counts.get("mentions", 0),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main task
 # ---------------------------------------------------------------------------
@@ -323,6 +390,29 @@ def embed_document(self, document_id: str, subscription_id: str,
         upserted = store.upsert_records(collection_name, records)
         logger.info("Upserted %d records to Qdrant collection %s for %s",
                      upserted, collection_name, document_id)
+
+        # ── 9b. Section-level KG write (impact #3) ──────────────────────
+        # Populate Sections + HAS_CHUNK + ABOUT edges in Neo4j so the
+        # intelligence / retrieval layers see a consistent graph. Before
+        # this, the only section-level writer was dataHandler.py's sync
+        # path — now retired by the UI-to-Celery routing — so section
+        # structure went missing on every new upload. Runs after the
+        # Qdrant upsert so chunk_ids match between both stores.
+        try:
+            _update_section_kg(
+                document_id=document_id,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                source_filename=source_filename,
+                doc_domain=record.get("doc_domain") or "generic",
+                chunk_dicts=chunk_dicts,
+                screening_summary=screening_summary,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Never block the embed flow on KG write errors — the
+            # document-level KG (Entities, MENTIONS) is still written
+            # by the async build_knowledge_graph Celery task.
+            logger.warning("Section-level KG update skipped for %s: %s", document_id, exc)
 
         # ── 10. Update MongoDB: COMPLETED ────────────────────────────────
         embedding_summary = {
