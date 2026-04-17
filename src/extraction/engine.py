@@ -177,6 +177,13 @@ class ExtractionEngine:
         if det_tables:
             merged.tables = det_tables
 
+        # Layer 2 semantic fields from V2 (flat key-value: vendor, total, etc.)
+        # are captured separately so KG ingest can attach them to the Document
+        # node instead of turning them into free-text entity mentions.
+        v2_fields = v2_result.get("fields") if isinstance(v2_result, dict) else None
+        if v2_fields:
+            merged.fields = dict(v2_fields)
+
         # Attach Layer 1 output + validation result so downstream consumers
         # can see exactly what came from deterministic vs AI.
         merged.raw_extraction = raw.to_dict()

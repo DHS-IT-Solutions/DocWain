@@ -47,6 +47,7 @@ def _run_kg_ingest(
     deep_entities: Optional[List[Dict[str, Any]]] = None,
     typed_relationships: Optional[List[Dict[str, Any]]] = None,
     temporal_spans: Optional[List[Dict[str, Any]]] = None,
+    v2_fields: Optional[Dict[str, Any]] = None,
     redis_client: Any = None,
 ) -> None:
     """Build a graph payload from the inputs and enqueue it. Never raises."""
@@ -85,12 +86,23 @@ def _run_kg_ingest(
             # downstream ingest layer reads them from the payload object.
             graph_payload.temporal_spans = temporal_spans
 
+        # V2 semantic fields (invoice_number, total, vendor, etc.) are
+        # attached to the Document node via the document dict. We carry
+        # them as ``v2_fields`` so downstream workers can persist them as
+        # labeled properties on the Document node without creating free-text
+        # entity mentions per field value.
+        if v2_fields:
+            graph_payload.document["v2_fields"] = {
+                str(k): str(v) for k, v in v2_fields.items() if v is not None
+            }
+
         queue = get_graph_ingest_queue(redis_client)
         queue.enqueue(graph_payload)
         logger.info(
-            "[KG-TRIGGER] enqueued doc=%s entities=%d text_chars=%d",
+            "[KG-TRIGGER] enqueued doc=%s entities=%d fields=%d text_chars=%d",
             document_id,
             len(deep_entities or []),
+            len(v2_fields or {}),
             sum(len(t) for t in texts),
         )
     except Exception:  # noqa: BLE001
@@ -155,6 +167,8 @@ def enqueue_from_extraction_result(
         ),
     }
 
+    v2_fields = getattr(extraction_result, "fields", None) or None
+
     kwargs = dict(
         document_id=str(extraction_result.document_id),
         subscription_id=str(extraction_result.subscription_id),
@@ -166,6 +180,7 @@ def enqueue_from_extraction_result(
         deep_entities=deep_entities,
         typed_relationships=None,
         temporal_spans=None,
+        v2_fields=v2_fields,
         redis_client=redis_client,
     )
 

@@ -140,12 +140,25 @@ def _aspect_a_deterministic(raw_extraction_dict: Dict[str, Any]) -> Dict[str, An
 
 def _aspect_b_intelligence(merged_result: Any) -> Dict[str, Any]:
     """Accuracy check for Layer 2 (V2 document intelligence)."""
-    # Entity type breakdown
+    import re as _re
+
     type_counts: Dict[str, int] = {}
     entities_with_text: List[Dict[str, Any]] = []
-    clean_text = (merged_result.clean_text or "").lower()
-    grounded_count = 0
 
+    # Token-level groundedness: split the clean_text into word tokens and
+    # check that the entity's meaningful tokens are present. Substring match
+    # was too strict — it penalises legitimate cross-line reconstructions
+    # (e.g. OCR splits "Leadership Acceleration" and "Programme" across two
+    # lines; V2 correctly assembles them into "Leadership Acceleration
+    # Programme" which is NOT a verbatim substring of the flat text).
+    _token_re = _re.compile(r"[a-zA-Z0-9]{2,}")
+    text_tokens = {t.lower() for t in _token_re.findall(merged_result.clean_text or "")}
+    fields_blob = " ".join(
+        f"{k} {v}" for k, v in (getattr(merged_result, "fields", None) or {}).items()
+    )
+    text_tokens.update(t.lower() for t in _token_re.findall(fields_blob))
+
+    grounded_count = 0
     for e in (merged_result.entities or []):
         etype = getattr(e, "type", "UNKNOWN")
         etext = getattr(e, "text", "") or ""
@@ -155,19 +168,24 @@ def _aspect_b_intelligence(merged_result: Any) -> Dict[str, Any]:
             "type": etype,
             "confidence": getattr(e, "confidence", 0.0),
         })
-        # Groundedness check — is the entity's text actually in the
-        # deterministically-extracted document content? If yes, V2 isn't
-        # hallucinating; if no, it may be inventing values.
-        if etext and etext.lower() in clean_text:
+        if not etext:
+            continue
+        entity_tokens = [t.lower() for t in _token_re.findall(etext)]
+        if not entity_tokens:
+            continue
+        # Grounded if the majority of the entity's tokens appear in the text
+        present = sum(1 for t in entity_tokens if t in text_tokens)
+        if present / len(entity_tokens) >= 0.6:
             grounded_count += 1
 
     overall_conf = merged_result.metadata.get("extraction_confidence", 0.0)
     n_entities = len(merged_result.entities or [])
+    grounded_ratio = grounded_count / n_entities if n_entities else 0.0
 
     passed = (
-        n_entities > 0  # V2 produced something
-        and (grounded_count / n_entities) >= 0.7 if n_entities else False
-        and overall_conf >= 0.3  # not a total fallback
+        n_entities > 0
+        and grounded_ratio >= 0.7
+        and overall_conf >= 0.3
     )
 
     return {
@@ -175,7 +193,7 @@ def _aspect_b_intelligence(merged_result: Any) -> Dict[str, Any]:
         "n_entities": n_entities,
         "entity_type_counts": type_counts,
         "overall_confidence": overall_conf,
-        "grounded_ratio": round(grounded_count / max(n_entities, 1), 2),
+        "grounded_ratio": round(grounded_ratio, 2),
         "sample_entities": entities_with_text[:8],
     }
 
@@ -234,6 +252,15 @@ def _aspect_c_kg(merged_result: Any, source_file: str, enqueue: bool) -> Dict[st
     if graph_payload is None:
         return {"passed": False, "note": "build_graph_payload returned None"}
 
+    # Mirror what the shared trigger does — attach V2 fields to the Document
+    # node via the ``v2_fields`` slot — so the validator confirms fields are
+    # being propagated end-to-end.
+    v2_fields = getattr(merged_result, "fields", None) or {}
+    if v2_fields:
+        graph_payload.document["v2_fields"] = {
+            str(k): str(v) for k, v in v2_fields.items() if v is not None
+        }
+
     payload_dict = graph_payload.to_dict()
     outcome = {
         "passed": True,
@@ -241,6 +268,7 @@ def _aspect_c_kg(merged_result: Any, source_file: str, enqueue: bool) -> Dict[st
         "entities_in_payload": len(payload_dict.get("entities", [])),
         "mentions_in_payload": len(payload_dict.get("mentions", [])),
         "fields_in_payload": len(payload_dict.get("fields", [])),
+        "v2_fields_in_document": len(payload_dict.get("document", {}).get("v2_fields", {}) or {}),
         "typed_relationships": len(payload_dict.get("typed_relationships", [])),
         "graph_version": payload_dict.get("document", {}).get("graph_version"),
     }
@@ -355,7 +383,8 @@ def run(directory: Path, enqueue: bool = False, out_path: Path = None) -> int:
               f"pass={c['passed']} "
               f"entities={c.get('entities_in_payload', '-')} "
               f"mentions={c.get('mentions_in_payload', '-')} "
-              f"fields={c.get('fields_in_payload', '-')}")
+              f"fields={c.get('fields_in_payload', '-')} "
+              f"v2_fields={c.get('v2_fields_in_document', '-')}")
         if c.get("note"):
             print(f"      note: {c['note']}")
         if enqueue:

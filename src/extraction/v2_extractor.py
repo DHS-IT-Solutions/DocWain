@@ -19,6 +19,35 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+# Canonical entity type vocabulary. Enforced on both sides:
+#   - JSON schema ``enum`` constrains guided_json output at generation time
+#   - system prompt lists the vocabulary so the model reasons about mapping
+# Pin to a stable set so KG doesn't accumulate duplicate Entity type variants
+# like ``ORG`` vs ``ORGANISATION`` vs ``ORGANIZATION``.
+_CANONICAL_ENTITY_TYPES = [
+    "PERSON",
+    "ORGANIZATION",
+    "LOCATION",
+    "ADDRESS",
+    "CITY",
+    "COUNTRY",
+    "POSTAL_CODE",
+    "PHONE",
+    "EMAIL",
+    "URL",
+    "DATE",
+    "DURATION",
+    "MONEY",
+    "QUANTITY",
+    "CURRENCY",
+    "IDENTIFIER",
+    "PRODUCT",
+    "SERVICE",
+    "DOCUMENT_TYPE",
+    "OTHER",
+]
+
+
 # JSON schema constraining the model's output. vLLM enforces this with
 # guided_json so the response is valid JSON with the expected keys every
 # time — no regex-from-text parsing needed.
@@ -32,7 +61,7 @@ _V2_RESPONSE_SCHEMA: Dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "text": {"type": "string"},
-                    "type": {"type": "string"},
+                    "type": {"type": "string", "enum": _CANONICAL_ENTITY_TYPES},
                     "confidence": {"type": "number"},
                 },
                 "required": ["text", "type"],
@@ -72,12 +101,35 @@ _V2_RESPONSE_SCHEMA: Dict[str, Any] = {
 _SYSTEM_PROMPT = (
     "You are DocWain, an enterprise document intelligence model. Given the "
     "deterministically-extracted content of a document, produce structured "
-    "semantic understanding: entities (people, organisations, amounts, "
-    "dates, identifiers), key fields as a flat dictionary "
+    "semantic understanding: entities, key fields as a flat dictionary "
     "(vendor, total, invoice_number, date, etc.), relationships between "
     "entities, and an overall confidence score in [0, 1]. Do not invent "
     "content not present in the provided text. Return a JSON object "
-    "matching the required schema."
+    "matching the required schema.\n\n"
+    "For every entity, set ``type`` to one of EXACTLY these canonical "
+    "values:\n"
+    "  PERSON        people\n"
+    "  ORGANIZATION  companies, vendors, customers, institutions\n"
+    "  LOCATION      cities, regions, countries, general places\n"
+    "  ADDRESS       street addresses and postal addresses\n"
+    "  CITY          city-only\n"
+    "  COUNTRY       country-only\n"
+    "  POSTAL_CODE   postal / zip codes\n"
+    "  PHONE         phone numbers\n"
+    "  EMAIL         email addresses\n"
+    "  URL           web addresses\n"
+    "  DATE          dates (any format)\n"
+    "  DURATION      time periods, payment terms (e.g. '30 days', 'net 60')\n"
+    "  MONEY         monetary amounts with currency\n"
+    "  QUANTITY      numeric quantities without currency\n"
+    "  CURRENCY      currency names/codes alone (e.g. 'GBP', 'USD')\n"
+    "  IDENTIFIER    invoice numbers, PO numbers, ref codes, SKUs\n"
+    "  PRODUCT       goods being bought/sold (items, SKUs with descriptions)\n"
+    "  SERVICE       services being provided/billed\n"
+    "  DOCUMENT_TYPE labels like 'Invoice', 'Purchase Order', 'Quotation'\n"
+    "  OTHER         use sparingly when nothing else fits\n\n"
+    "Do not invent new type labels. Do not use synonyms like ORG or "
+    "ORGANISATION — use ORGANIZATION."
 )
 
 
@@ -276,20 +328,60 @@ class V2Extractor:
             file_type=file_type,
         )
 
-        manager = self._get_manager()
-        try:
-            raw_text = manager.query(
-                prompt=user_prompt,
-                system_prompt=_SYSTEM_PROMPT,
-                guided_json=_V2_RESPONSE_SCHEMA,
-                max_tokens=4096,
-                temperature=0.05,  # near-deterministic for extraction
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error("V2: vLLM query failed: %s", exc)
-            return _default_empty_result(confidence=0.0)
+        # Dynamically size max_tokens so dense documents don't get truncated
+        # mid-JSON. JSON output on structured docs (invoices, quotes, POs)
+        # can easily be 2-4x the input character size once every line item
+        # becomes a typed entity with confidence, every key becomes a field
+        # entry, and relationships are enumerated. Observed worst case to
+        # date: 1212ch input -> 11397ch JSON (~3800 output tokens at ~3
+        # chars/token for JSON). We give generous headroom with a floor
+        # that covers the worst observed case for short table-heavy docs,
+        # and scale up for longer inputs.
+        estimated_output_tokens = int(len(text) * 0.8)  # chars_out / chars_per_token
+        max_tokens = max(8192, min(16384, estimated_output_tokens + 2048))
 
-        result = _parse_response(raw_text)
+        manager = self._get_manager()
+
+        # Generate, then — if the response has 0 entities but the input is
+        # non-trivial — retry once with slightly higher temperature. vLLM
+        # under guided_json occasionally emits minimal-valid JSON (empty
+        # arrays) for reasons that aren't parse failures. The retry catches
+        # that class of variance before it reaches downstream KG ingest.
+        def _generate(temperature: float) -> Dict[str, Any]:
+            try:
+                raw_text = manager.query(
+                    prompt=user_prompt,
+                    system_prompt=_SYSTEM_PROMPT,
+                    guided_json=_V2_RESPONSE_SCHEMA,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("V2: vLLM query failed: %s", exc)
+                return _default_empty_result(confidence=0.0)
+            return _parse_response(raw_text)
+
+        result = _generate(temperature=0.05)
+
+        should_retry = (
+            len(result["entities"]) == 0
+            and len(result["fields"]) == 0
+            and len(text) > 500  # non-trivial input that should yield something
+        )
+        if should_retry:
+            logger.warning(
+                "V2: empty result on non-trivial text (%dch); retrying once with T=0.15",
+                len(text),
+            )
+            retry_result = _generate(temperature=0.15)
+            # Accept the retry only if it's better than the original
+            if len(retry_result["entities"]) + len(retry_result["fields"]) > 0:
+                result = retry_result
+                logger.info(
+                    "V2: retry produced entities=%d fields=%d",
+                    len(result["entities"]), len(result["fields"]),
+                )
+
         logger.info(
             "V2 extraction complete — fmt=%s doc_type=%s entities=%d tables=%d confidence=%.2f",
             file_type, doc_type,
