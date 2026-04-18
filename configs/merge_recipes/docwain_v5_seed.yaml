@@ -1,11 +1,11 @@
-# DocWain V5 Seed — TIES merge of V3 weights + Qwen3-14B-Instruct
+# DocWain V5 Seed — TIES merge of V3 weights + Qwen3-14B
 # =================================================================
 #
 # Why TIES-Merging?
 #   TIES (Yadav et al., 2023) sparsifies task vectors per-model (density),
 #   resolves sign conflicts across models (sign consensus), then sums the
 #   cleaned vectors back onto the base. For our pair — V3 (domain-tuned on
-#   document intelligence) and Qwen3-14B-Instruct (general instruction /
+#   document intelligence) and Qwen3-14B (general instruction /
 #   tool-calling behaviour) — TIES keeps the dominant V3 task vector intact
 #   while grafting only the instruct directions that don't fight V3's
 #   domain adjustments. Linear / SLERP would blur V3's fine-grained
@@ -21,7 +21,7 @@
 #   task vector — standard for TIES when one model is clearly primary.
 #
 # Why bf16?
-#   V3 was trained in bf16; Qwen3-14B-Instruct is distributed in bf16.
+#   V3 was trained in bf16; Qwen3-14B is distributed in bf16.
 #   Merging in bf16 preserves the numeric range of task vectors without
 #   the fp16 overflow risk around RMSNorm scales and the attention
 #   softmax cap. Downstream vLLM/transformers paths all accept bf16
@@ -69,8 +69,8 @@ models:
       weight: 0.75
       density: 0.7
 
-  # Qwen3-14B-Instruct — general instruction / tool-calling task vector
-  - model: Qwen/Qwen3-14B-Instruct
+  # Qwen3-14B — general instruction / tool-calling task vector
+  - model: Qwen/Qwen3-14B
     parameters:
       weight: 0.25
       density: 0.7
@@ -88,7 +88,7 @@ parameters:
 dtype: bfloat16
 
 # tokenizer_source: base — V3's tokenizer already contains our custom
-# DocWain chat template and special tokens; Qwen3-14B-Instruct's tokenizer
+# DocWain chat template and special tokens; Qwen3-14B's tokenizer
 # would drop them. Combined with --copy-tokenizer on the CLI, the output
 # directory gets V3's tokenizer.json / tokenizer_config.json verbatim.
 tokenizer_source: base
