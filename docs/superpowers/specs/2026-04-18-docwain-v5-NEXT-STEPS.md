@@ -1,6 +1,20 @@
 # DocWain V5 — Next Steps Handoff
 
-**Status as of 2026-04-18 05:10 UTC**
+**Status as of 2026-04-18 06:30 UTC**
+
+## Decision log — merge seed FAILED, fallback active
+
+MergeKit completed the TIES merge (V3 ⊕ Qwen3-14B at 0.75/0.25) in 14 min.
+Seed eval scored **2.81** vs the V3 baseline of **4.71** — a 41% drop.
+Root cause is almost certainly the vision graft in V3: TIES resolves
+sign conflicts at the tensor level and vanilla Qwen3-14B has no analog
+for V3's projection MLP or the graft-modified attention heads, so the
+"task vector" of V3 was partially cancelled by unrelated Qwen3 weights.
+
+**Action executed**: seed archived as `models/DocWain-14B-v5-seed.FAILED_2_81`.
+SFT trains directly from `models/DocWain-14B-v2/` per the documented
+fallback in `2026-04-18-docwain-v5-design.md` §"Training recipe — Layer 1".
+Merge experiment is over.
 
 ## What's landed (committed)
 
