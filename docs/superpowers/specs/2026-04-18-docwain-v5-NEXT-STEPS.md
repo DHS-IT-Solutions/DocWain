@@ -81,9 +81,9 @@ python -m src.finetune.v5.dpo_trainer \
 ```bash
 python -m src.finetune.v5.distillation \
     --teacher models/DocWain-14B-v5 \
-    --student Qwen/Qwen3-7B-Instruct \
+    --student Qwen/Qwen3-8B \
     --corpus finetune_artifacts/v5/sft_reused.jsonl,finetune_artifacts/v5/sft_generated.jsonl \
-    --output models/DocWain-7B-v5 \
+    --output models/DocWain-8B-v5 \
     --alpha 0.5
 ```
 
@@ -102,7 +102,7 @@ python -m llama_cpp.convert --outtype q5_k_m \
 
 # 7B → GGUF Q5_K_M for sub-10GB deployments
 python -m llama_cpp.convert --outtype q5_k_m \
-    models/DocWain-7B-v5 models/DocWain-7B-v5-q5km.gguf
+    models/DocWain-8B-v5 models/DocWain-8B-v5-q5km.gguf
 ```
 
 Each variant validated vs its fp16 parent on the golden-query harness — drop > 1% = drop that variant.

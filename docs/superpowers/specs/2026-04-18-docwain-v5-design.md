@@ -79,7 +79,7 @@ All rows have an **empty system field**. Identity is learned from example distri
 ### Layer 1 — Foundation
 
 - **14B**: V3 merged 0.75 with Qwen3-14B-Instruct 0.25 via TIES (density 0.7). Merge artifact: `models/DocWain-14B-v5-seed/`. Seed eval gate: LLM-judge ≥ V3's 4.71. Failure → train from V3 directly.
-- **7B**: `Qwen3-7B-Instruct` base, no merge.
+- **7B**: `Qwen3-8B` base, no merge.
 
 ### Layer 2 — SFT
 
@@ -96,7 +96,7 @@ All rows have an **empty system field**. Identity is learned from example distri
 
 ### Layer 4 — 7B Distillation
 
-- Student: Qwen3-7B-Instruct
+- Student: Qwen3-8B
 - Teacher: V5-14B (post-DPO)
 - Loss: 0.5 · SFT + 0.5 · KL(student_logits, teacher_logits)
 - 100 K × 1 epoch, ~18 h
@@ -145,8 +145,8 @@ All rows have an **empty system field**. Identity is learned from example distri
 | `models/DocWain-14B-v5/` | Final 14B |
 | `models/DocWain-14B-v5-int8/` | Quantized for vLLM |
 | `models/DocWain-14B-v5-q5km.gguf` | GGUF for Ollama |
-| `models/DocWain-7B-v5/` | Final 7B |
-| `models/DocWain-7B-v5-q5km.gguf` | GGUF for sub-10GB deploy |
+| `models/DocWain-8B-v5/` | Final 7B |
+| `models/DocWain-8B-v5-q5km.gguf` | GGUF for sub-10GB deploy |
 
 ## Open risks (monitored during execution)
 
