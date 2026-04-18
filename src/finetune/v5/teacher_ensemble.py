@@ -199,7 +199,10 @@ def _call_ollama(prompt: str, system_prompt: str, max_tokens: int, temperature: 
     try:
         from urllib import request as urllib_request
         from urllib.error import HTTPError, URLError
-        model_name = os.getenv("DOCWAIN_OLLAMA_MODEL", "docwain")
+        # DHS/DocWain-v2:latest is the latest weekend-trained checkpoint.
+        # DHS/DocWain:latest is the prior production tag. Pilot uses the v2
+        # tag so Ollama votes alongside V3-vLLM on the same weight lineage.
+        model_name = os.getenv("DOCWAIN_OLLAMA_MODEL", "DHS/DocWain-v2:latest")
         body = json.dumps({
             "model": model_name,
             "prompt": prompt,
@@ -277,13 +280,17 @@ def vote(
 ) -> EnsembleVote:
     """Run the ensemble on a single prompt and return the voting outcome.
 
-    ``expect_json`` drives canonicalisation — when True, responses must
-    parse to the same JSON object to count as agreeing; when False, a
-    whitespace-collapsed lower-cased string match is used.
+    Voting is threshold-scaled to the number of primary teachers actually
+    configured at call-time. This is what the pilot caught — the previous
+    hard-coded ``>=3`` rule made acceptance impossible when the pilot used
+    only 2 callers. The rule now reads:
 
-    ``call_nemotron_on_tie`` keeps the Nemotron API call off the hot path
-    for rows where the primary voices already agree. The pilot run uses
-    True unconditionally to exercise the tiebreak branch.
+        * ``high`` confidence: **majority** of primary callers that
+          RESPONDED agree on the canonical output, AND at least 2 voices
+          responded (singletons never auto-accept)
+        * ``medium`` confidence: 2+ voices respond, there's a majority
+          winning bucket, and Nemotron's tiebreak vote matches the winner
+        * ``quarantine``: everything else
     """
     primary = teacher_callers or [_call_vllm, _call_hf, _call_ollama]
     responses: List[TeacherResponse] = []
@@ -301,12 +308,15 @@ def vote(
 
     ordered = sorted(buckets.items(), key=lambda kv: len(kv[1]), reverse=True)
     primary_voice_count = sum(len(v) for v in buckets.values())
+    configured_primary = len(primary)
+    # Strict majority: more than half of configured primaries agree.
+    # With 3 callers, that's ≥2. With 4, ≥3. With 2, we fall through to
+    # tiebreak unless both agreed AND the bucket size == 2 (which equals
+    # both primaries so we count that as majority of configured primaries).
+    majority_threshold = (configured_primary // 2) + 1
 
-    # High-confidence path: ≥3 primary voices agree (of 3 primaries → all 3,
-    # since the caller list defaults to 3 entries). We still keep the rule
-    # expressed as ≥3 so the ensemble can grow with an extra primary in
-    # the future without changing voting semantics.
-    if ordered and len(ordered[0][1]) >= 3:
+    # High-confidence path
+    if ordered and len(ordered[0][1]) >= majority_threshold and primary_voice_count >= 2:
         winning = ordered[0][1]
         return EnsembleVote(
             accepted=True,
@@ -315,11 +325,18 @@ def vote(
             teacher_responses=responses,
             agreement_count=len(winning),
             primary_voice_count=primary_voice_count,
-            reason="≥3 primary voices agree",
+            reason=(
+                f"{len(winning)}/{configured_primary} primary voices agree "
+                f"(>= majority {majority_threshold})"
+            ),
         )
 
-    # 2 agree — Nemotron tiebreak if enabled
-    if ordered and len(ordered[0][1]) == 2 and call_nemotron_on_tie:
+    # Exactly 2 agreeing voices — even if they don't form a majority of
+    # configured primaries, they form a credible signal that Nemotron can
+    # confirm. Covers the 3-caller case where 2/3 agree but 3rd disagrees,
+    # and the 4-caller case where 2/4 agree.
+    top_count = len(ordered[0][1]) if ordered else 0
+    if call_nemotron_on_tie and top_count >= 2 and primary_voice_count >= 2:
         nemotron_r = _call_nemotron(prompt, system_prompt, max_tokens, temperature)
         nemotron_r.parsed = _canonicalise(nemotron_r.raw_text, expect_json)
         responses.append(nemotron_r)
@@ -336,27 +353,50 @@ def vote(
                 agreement_count=len(winning) + 1,
                 primary_voice_count=primary_voice_count,
                 nemotron_tiebreak=True,
-                reason="2 primary voices + Nemotron agree",
+                reason=f"{top_count} primary voices + Nemotron agree",
             )
         return EnsembleVote(
             accepted=False,
             confidence="quarantine",
             consensus=None,
             teacher_responses=responses,
-            agreement_count=len(ordered[0][1]),
+            agreement_count=top_count,
             primary_voice_count=primary_voice_count,
             nemotron_tiebreak=True,
-            reason="2 primary agree but Nemotron disagrees — quarantine",
+            reason="primary voices agreed but Nemotron disagreed — quarantine",
         )
+
+    # Single voice only (others failed) — try Nemotron as a second opinion.
+    # Only accept with medium confidence if Nemotron backs the single voice;
+    # this prevents a quiet V3-only pipeline from rubber-stamping itself.
+    if call_nemotron_on_tie and top_count == 1 and primary_voice_count == 1:
+        nemotron_r = _call_nemotron(prompt, system_prompt, max_tokens, temperature)
+        nemotron_r.parsed = _canonicalise(nemotron_r.raw_text, expect_json)
+        responses.append(nemotron_r)
+
+        winning_fingerprint = ordered[0][0]
+        if nemotron_r.ok and nemotron_r.parsed is not None \
+                and _fingerprint(nemotron_r.parsed) == winning_fingerprint:
+            winning = ordered[0][1]
+            return EnsembleVote(
+                accepted=True,
+                confidence="medium",
+                consensus=winning[0].parsed,
+                teacher_responses=responses,
+                agreement_count=2,
+                primary_voice_count=primary_voice_count,
+                nemotron_tiebreak=True,
+                reason="1 primary voice + Nemotron agree (others failed to respond)",
+            )
 
     return EnsembleVote(
         accepted=False,
         confidence="quarantine",
         consensus=None,
         teacher_responses=responses,
-        agreement_count=(len(ordered[0][1]) if ordered else 0),
+        agreement_count=top_count,
         primary_voice_count=primary_voice_count,
-        reason="no primary majority and nemotron skipped",
+        reason="insufficient agreement",
     )
 
 
