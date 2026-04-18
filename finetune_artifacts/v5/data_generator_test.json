@@ -1,0 +1,920 @@
+{
+  "summary": {
+    "mode": "test_batch",
+    "test_batch_size": 16,
+    "capabilities": [
+      "identity_in_weights",
+      "domain_recognition",
+      "citation_discipline",
+      "schema_adherence"
+    ],
+    "budgets": {
+      "identity_in_weights": 4,
+      "domain_recognition": 4,
+      "citation_discipline": 4,
+      "schema_adherence": 4
+    },
+    "per_capability": {
+      "identity_in_weights": {
+        "attempted": 4,
+        "sft_accepted": 4,
+        "dpo_written": 4,
+        "quarantine": 0,
+        "seed": 4,
+        "judge_accepted": 0,
+        "ensemble_accepted": 0
+      },
+      "domain_recognition": {
+        "attempted": 16,
+        "sft_accepted": 0,
+        "dpo_written": 0,
+        "quarantine": 16,
+        "seed": 0,
+        "judge_accepted": 0,
+        "ensemble_accepted": 0
+      },
+      "citation_discipline": {
+        "attempted": 16,
+        "sft_accepted": 0,
+        "dpo_written": 0,
+        "quarantine": 16,
+        "seed": 0,
+        "judge_accepted": 0,
+        "ensemble_accepted": 0
+      },
+      "schema_adherence": {
+        "attempted": 16,
+        "sft_accepted": 0,
+        "dpo_written": 0,
+        "quarantine": 16,
+        "seed": 0,
+        "judge_accepted": 0,
+        "ensemble_accepted": 0
+      }
+    },
+    "totals": {
+      "sft_accepted": 4,
+      "dpo_written": 4,
+      "quarantine": 48,
+      "attempted": 52
+    },
+    "acceptance_rate": 0.077,
+    "elapsed_s": 373.7,
+    "sft_output": "finetune_artifacts/v5/sft_generated.jsonl",
+    "dpo_output": "finetune_artifacts/v5/dpo_generated.jsonl",
+    "teacher_health": {
+      "v3_vllm_up": false,
+      "ollama_up": true
+    }
+  },
+  "sample": [
+    {
+      "capability": "identity_in_weights",
+      "attempt": 1,
+      "accepted": true,
+      "source": "v5_seed",
+      "prompt_preview": "Who are you?",
+      "assistant_preview": "I am DocWain, a document-intelligence assistant. I extract, classify, and reason over business documents (invoices, POs, contracts, statements, and more) with f",
+      "diag": {
+        "path": "seed",
+        "judge_score": null
+      }
+    },
+    {
+      "capability": "identity_in_weights",
+      "attempt": 2,
+      "accepted": true,
+      "source": "v5_seed",
+      "prompt_preview": "What is your name?",
+      "assistant_preview": "My name is DocWain.",
+      "diag": {
+        "path": "seed",
+        "judge_score": null
+      }
+    },
+    {
+      "capability": "identity_in_weights",
+      "attempt": 3,
+      "accepted": true,
+      "source": "v5_seed",
+      "prompt_preview": "Introduce yourself.",
+      "assistant_preview": "I am DocWain \u2014 a document-intelligence system built to read, extract, classify, and cross-reference enterprise documents. Every fact I return is grounded in the",
+      "diag": {
+        "path": "seed",
+        "judge_score": null
+      }
+    },
+    {
+      "capability": "identity_in_weights",
+      "attempt": 4,
+      "accepted": true,
+      "source": "v5_seed",
+      "prompt_preview": "Tell me about DocWain.",
+      "assistant_preview": "DocWain is a document-intelligence model. I ingest documents, identify their domain and type, extract structured fields to a V2 schema, answer questions with ci",
+      "diag": {
+        "path": "seed",
+        "judge_score": null
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 1,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "MASTER SERVICES AGREEMENT between Redwood Enterprises and Aquarius Marketing, effective October 24 2024, term 12 months.",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 2,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "CLINICAL REPORT \u2014 Patient ID PT1520.\nDiagnosis: hypertension. Medications prescribed: ramipril 5mg once daily.\nFollow-up",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 3,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2024-527\nDate: 18 March 2026\nVendor: Pinnacle Dynamics\nBilled to: Redwood Enterprises, Berlin\nSubtotal \u20ac",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 4,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "CLINICAL REPORT \u2014 Patient ID PT4611.\nDiagnosis: hypertension. Medications prescribed: ramipril 5mg once daily.\nFollow-up",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 5,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "IN THE HIGH COURT OF JUSTICE \u2014 Case No. 2024/5557. Between Assurity Ltd (Claimant) and Apex Consulting Group (Defendant)",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 6,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "CLINICAL REPORT \u2014 Patient ID PT6574.\nDiagnosis: hypertension. Medications prescribed: ramipril 5mg once daily.\nFollow-up",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 7,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "STATEMENT of ACCOUNT \u2014 as of 5 Mar 2025. Opening balance \u00a37,698. Closing balance \u00a37,078.",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 8,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "CLINICAL REPORT \u2014 Patient ID PT2584.\nDiagnosis: hypertension. Medications prescribed: ramipril 5mg once daily.\nFollow-up",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 9,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Robert Callahan\nToronto | Senior Engineer\nEXPERIENCE: 13 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 10,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2024-954\nDate: 18 July 2026\nVendor: Blueprint Architects\nBilled to: Briard Bank, Toronto\nSubtotal $21,15",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 11,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Mia Torres\nSingapore | Senior Engineer\nEXPERIENCE: 7 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 12,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2025-091\nDate: 4 October 2025\nVendor: Cascade Digital Solutions\nBilled to: Acme Trading Co, Zurich\nSubto",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 13,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Aisha Patel\nHorsham, UK | Senior Engineer\nEXPERIENCE: 16 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 14,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "MASTER SERVICES AGREEMENT between Briard Bank and Pinnacle Dynamics, effective October 21 2021, term 36 months.",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 15,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "MASTER SERVICES AGREEMENT between Apex Consulting Group and Blueprint Architects, effective July 9 2025, term 36 months.",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "domain_recognition",
+      "attempt": 16,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Installation Manual \u2014 Model FL560.\nSection 3.2: Connect the power cable to the AC inlet. Ensure ground is secure.\nTorque",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 1,
+        "primary_voice_count": 1,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 1,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the billed party?\n\ndoc_id=DOC924: INVOICE No. INV-2025-077\nDate: 19 July 2024\nVendor: Praxis Engineering\nBilled t",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 2,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the billed party?\n\ndoc_id=DOC758: INVOICE No. INV-2025-152\nDate: 18 December 2025\nVendor: Blueprint Architects\nBi",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 3,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the vendor?\n\ndoc_id=DOC697: INVOICE No. INV-2024-151\nDate: 3 January 2024\nVendor: Summit Medical\nBilled to: Apex ",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 4,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "What is the total on this invoice?\n\ndoc_id=DOC911: INVOICE No. INV-2024-404\nDate: 15 December 2025\nVendor: Acme Trading ",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 5,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the billed party?\n\ndoc_id=DOC796: INVOICE No. INV-2026-778\nDate: 21 July 2024\nVendor: Aquarius Marketing\nBilled t",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 6,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "What is the invoice number?\n\ndoc_id=DOC261: INVOICE No. INV-2026-906\nDate: 17 March 2026\nVendor: Blueprint Architects\nBi",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 7,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "What is the invoice number?\n\ndoc_id=DOC961: INVOICE No. INV-2025-790\nDate: 25 December 2024\nVendor: Glacier Insurance\nBi",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 8,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "What is the total on this invoice?\n\ndoc_id=DOC600: INVOICE No. INV-2025-909\nDate: 2 March 2026\nVendor: Assurity Ltd\nBill",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 9,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the vendor?\n\ndoc_id=DOC849: INVOICE No. INV-2024-788\nDate: 5 March 2026\nVendor: Delta Freight Services\nBilled to:",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 10,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the billed party?\n\ndoc_id=DOC371: INVOICE No. INV-2026-783\nDate: 7 July 2025\nVendor: Acme Trading Co\nBilled to: A",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 11,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the vendor?\n\ndoc_id=DOC629: INVOICE No. INV-2024-240\nDate: 1 December 2026\nVendor: Blueprint Architects\nBilled to",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 12,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the vendor?\n\ndoc_id=DOC107: INVOICE No. INV-2026-070\nDate: 2 July 2024\nVendor: Pinnacle Dynamics\nBilled to: Summi",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 13,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the billed party?\n\ndoc_id=DOC385: INVOICE No. INV-2026-145\nDate: 19 December 2025\nVendor: Delta Freight Services\n",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 14,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "What is the total on this invoice?\n\ndoc_id=DOC926: INVOICE No. INV-2024-109\nDate: 12 October 2025\nVendor: Acme Trading C",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 15,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Who is the vendor?\n\ndoc_id=DOC789: INVOICE No. INV-2025-755\nDate: 28 January 2024\nVendor: Aquarius Marketing\nBilled to: ",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "citation_discipline",
+      "attempt": 16,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "What is the total on this invoice?\n\ndoc_id=DOC649: INVOICE No. INV-2025-197\nDate: 8 January 2025\nVendor: Blueprint Archi",
+      "assistant_preview": "",
+      "diag": {
+        "path": "judge",
+        "v3_ok": false,
+        "v3_err": "vllm_down",
+        "nemotron_ok": true,
+        "nemotron_err": null,
+        "reason": "primary_call_failed"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 1,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "This MASTER SERVICES AGREEMENT is entered into as of January 13, 2022 by Blueprint Architects (Service Provider) and Red",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 2,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Mia Torres\nExperience: 7 years\nSkills: React, SQL, Python",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 3,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Aisha Patel\nExperience: 13 years\nSkills: Python, AWS, React",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 4,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Robert Callahan\nExperience: 4 years\nSkills: Kafka, Kubernetes, Python, React, ML",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 5,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2026-262\nDate: 2 December 2024\nVendor: Summit Medical\nBilled to: Horizon Biotech, Dublin\nSubtotal \u20ac156,3",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 6,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Eric Lindqvist\nExperience: 11 years\nSkills: Spark, SQL, Kubernetes",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 7,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "This MASTER SERVICES AGREEMENT is entered into as of March 22, 2025 by Leica Microsystems (Service Provider) and Cascade",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 8,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2026-586\nDate: 18 March 2026\nVendor: Assurity Ltd\nBilled to: Briard Bank, New York\nSubtotal \u00a319,704\nTax ",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 9,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2024-910\nDate: 10 March 2025\nVendor: Zenith Logistics\nBilled to: Delta Freight Services, Berlin\nSubtotal",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 10,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "PURCHASE ORDER No. PO9404682\nBuyer: Zenith Logistics\nVendor: Assurity Ltd\nTotal: $244,754\nShipping: FedEx Ground\nPayment",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 11,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2024-921\nDate: 18 March 2025\nVendor: Redwood Enterprises\nBilled to: Apex Consulting Group, New York\nSubt",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 12,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Robert Callahan\nExperience: 13 years\nSkills: React, AWS, Kubernetes",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 13,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2025-859\nDate: 1 July 2024\nVendor: Pinnacle Dynamics\nBilled to: Zenith Logistics, New York\nSubtotal $12,",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 14,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "INVOICE No. INV-2026-447\nDate: 4 January 2026\nVendor: Blueprint Architects\nBilled to: Briard Bank, Amsterdam\nSubtotal \u20ac3",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 15,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "Aisha Patel\nExperience: 14 years\nSkills: Docker, Kubernetes, SQL, Kafka, Python",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    },
+    {
+      "capability": "schema_adherence",
+      "attempt": 16,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "PURCHASE ORDER No. PO769324\nBuyer: Delta Freight Services\nVendor: Zenith Logistics\nTotal: $55,570\nShipping: FedEx Ground",
+      "assistant_preview": "",
+      "diag": {
+        "type": "ensemble",
+        "accepted": false,
+        "confidence": "quarantine",
+        "agreement_count": 0,
+        "primary_voice_count": 0,
+        "nemotron_tiebreak": false,
+        "reason": "insufficient agreement"
+      }
+    }
+  ]
+}
