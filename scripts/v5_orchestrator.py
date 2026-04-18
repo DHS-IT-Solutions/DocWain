@@ -55,9 +55,11 @@ STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
 SFT_REUSED = ROOT / "finetune_artifacts/v5/sft_reused.jsonl"
 SFT_GENERATED = ROOT / "finetune_artifacts/v5/sft_generated.jsonl"
 SFT_GENERATED_B = ROOT / "finetune_artifacts/v5/sft_generated_partB.jsonl"
+SFT_GENERATED_C = ROOT / "finetune_artifacts/v5/sft_generated_partC.jsonl"
 DPO_REUSED = ROOT / "finetune_artifacts/v5/dpo_reused.jsonl"
 DPO_GENERATED = ROOT / "finetune_artifacts/v5/dpo_generated.jsonl"
 DPO_GENERATED_B = ROOT / "finetune_artifacts/v5/dpo_generated_partB.jsonl"
+DPO_GENERATED_C = ROOT / "finetune_artifacts/v5/dpo_generated_partC.jsonl"
 SFT_COMBINED = ROOT / "finetune_artifacts/v5/sft_combined.jsonl"
 DPO_COMBINED = ROOT / "finetune_artifacts/v5/dpo_combined.jsonl"
 
@@ -179,24 +181,27 @@ def wait_pid(pid: int, poll_s: int = 60, max_hours: int = 48) -> int:
 # ---------------------------------------------------------------------------
 
 
-def wait_datagen(state: Dict[str, Any], pid_a: int, pid_b: int) -> bool:
-    """Phase 1. Block until both data_gen processes exit."""
-    set_phase(state, "WAIT_DATAGEN", pid_a=pid_a, pid_b=pid_b)
-    log(f"waiting on datagen A={pid_a} B={pid_b}")
-    while pid_alive(pid_a) or pid_alive(pid_b):
-        a_rows = count_lines(SFT_GENERATED)
-        b_rows = count_lines(SFT_GENERATED_B)
-        log(
-            f"datagen heartbeat: A_alive={pid_alive(pid_a)} B_alive={pid_alive(pid_b)} "
-            f"A_rows={a_rows} B_rows={b_rows}"
-        )
-        state["datagen_heartbeat"] = {
-            "a_alive": pid_alive(pid_a), "b_alive": pid_alive(pid_b),
-            "a_rows": a_rows, "b_rows": b_rows,
+def wait_datagen(state: Dict[str, Any], pids: List[int]) -> bool:
+    """Phase 1. Block until all data_gen processes exit.
+
+    Accepts any number of pids so the orchestrator can be (re)started
+    over additional parallel generators (e.g. Process C after a mid-run
+    template fix). Waits on union — doesn't advance until everyone exits.
+    """
+    set_phase(state, "WAIT_DATAGEN", pids=pids)
+    log(f"waiting on datagen pids={pids}")
+    while any(pid_alive(p) for p in pids):
+        hb = {
+            f"pid_{p}_alive": pid_alive(p) for p in pids
         }
+        hb["a_rows"] = count_lines(SFT_GENERATED)
+        hb["b_rows"] = count_lines(SFT_GENERATED_B)
+        hb["c_rows"] = count_lines(SFT_GENERATED_C)
+        log(f"datagen heartbeat: {hb}")
+        state["datagen_heartbeat"] = hb
         save_state(state)
-        time.sleep(300)  # 5 min cadence
-    log("both datagen processes exited")
+        time.sleep(300)
+    log(f"all {len(pids)} datagen processes exited")
     return True
 
 
@@ -211,8 +216,8 @@ def count_lines(path: Path) -> int:
 def merge_corpus(state: Dict[str, Any]) -> bool:
     """Phase 2. Concatenate into combined files."""
     set_phase(state, "MERGE_CORPUS")
-    sources_sft = [p for p in (SFT_REUSED, SFT_GENERATED, SFT_GENERATED_B) if p.exists()]
-    sources_dpo = [p for p in (DPO_REUSED, DPO_GENERATED, DPO_GENERATED_B) if p.exists()]
+    sources_sft = [p for p in (SFT_REUSED, SFT_GENERATED, SFT_GENERATED_B, SFT_GENERATED_C) if p.exists()]
+    sources_dpo = [p for p in (DPO_REUSED, DPO_GENERATED, DPO_GENERATED_B, DPO_GENERATED_C) if p.exists()]
 
     with SFT_COMBINED.open("w") as out:
         for p in sources_sft:
@@ -474,13 +479,15 @@ def deploy(state: Dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def orchestrate(pid_a: int, pid_b: int) -> int:
+def orchestrate(pids: List[int]) -> int:
     state = load_state()
-    state.setdefault("datagen", {"pid_a": pid_a, "pid_b": pid_b})
+    state.setdefault("datagen", {"pids": pids})
+    # Allow restart to update the pid list (e.g. Process C joined after a fix)
+    state["datagen"]["pids"] = pids
     save_state(state)
 
-    # Phase 1 — wait for both data gen processes
-    wait_datagen(state, pid_a, pid_b)
+    # Phase 1 — wait for all data gen processes
+    wait_datagen(state, pids)
 
     # Phase 2 — merge
     merge_corpus(state)
@@ -542,10 +549,11 @@ def orchestrate(pid_a: int, pid_b: int) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--pid-a", type=int, required=True)
-    ap.add_argument("--pid-b", type=int, required=True)
+    ap.add_argument("--pids", type=str, required=True,
+                    help="comma-separated list of data_gen process IDs to wait on")
     args = ap.parse_args()
-    return orchestrate(args.pid_a, args.pid_b)
+    pids = [int(p) for p in args.pids.split(",") if p.strip()]
+    return orchestrate(pids)
 
 
 if __name__ == "__main__":

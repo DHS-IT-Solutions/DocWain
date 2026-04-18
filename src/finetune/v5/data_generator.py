@@ -103,7 +103,6 @@ logger = logging.getLogger(__name__)
 
 STRUCTURED_CAPABILITIES = {
     "schema_adherence",
-    "tool_calling",
     "domain_recognition",
     "doctype_classification",
     "context_dependence",
@@ -126,6 +125,12 @@ NARRATIVE_CAPABILITIES = {
 # because V3's weakness IS the behaviour V5 must unlearn.
 NEMOTRON_AUTHORITATIVE_CAPABILITIES = {
     "grounded_refusal",
+    # Tool-calling routing via ensemble quarantined 3200/3200 attempts on the
+    # first parallel run: V3 and Nemotron each emit a valid <tool_call>...</
+    # tool_call> block but with stylistic divergence (whitespace, key order,
+    # optional surrounding prose) that fingerprint-comparison rejects. Same
+    # pattern as grounded_refusal — single-teacher path fixes it cleanly.
+    "tool_calling",
 }
 
 # Which structured capabilities should vote with expect_json=True
@@ -820,6 +825,49 @@ def _nemotron_authoritative_row(
             diag["reason"] = "nemotron_did_not_refuse"
             diag["sample"] = text_n[:120]
             return None, diag
+
+    # Tool-calling: require a name+arguments JSON object extractable from
+    # Nemotron's response. We accept three formats Nemotron uses naturally:
+    #   1. Canonical <tool_call>{...}</tool_call>
+    #   2. Markdown ```json ... ``` fence (Nemotron's default style)
+    #   3. Plain JSON object with 'name' + 'arguments' keys
+    # After extraction we re-wrap the gold in canonical <tool_call> tags so
+    # the training target matches exactly what evaluate.py's scorer expects.
+    # The model learns the canonical format regardless of teacher variance.
+    if capability == "tool_calling":
+        import re as _re
+        body: Optional[str] = None
+        # 1. XML-style tags
+        m = _re.search(r"<tool_call>\s*(.*?)\s*</tool_call>", text_n, _re.DOTALL)
+        if m:
+            body = m.group(1)
+        # 2. Markdown ```json ... ``` or ``` ... ```
+        if body is None:
+            m = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_n, _re.DOTALL)
+            if m:
+                body = m.group(1)
+        # 3. First balanced JSON object in the text
+        if body is None and "{" in text_n and "}" in text_n:
+            start = text_n.find("{")
+            end = text_n.rfind("}")
+            if start < end:
+                body = text_n[start : end + 1]
+        if body is None:
+            diag["reason"] = "nemotron_no_tool_call_body_found"
+            diag["sample"] = text_n[:160]
+            return None, diag
+        try:
+            tc = json.loads(body)
+        except json.JSONDecodeError as exc:
+            diag["reason"] = f"nemotron_tool_call_invalid_json:{exc}"
+            diag["sample"] = body[:160]
+            return None, diag
+        if not (isinstance(tc, dict) and "name" in tc and "arguments" in tc):
+            diag["reason"] = "nemotron_tool_call_missing_name_or_arguments"
+            diag["sample"] = str(tc)[:160]
+            return None, diag
+        # Re-wrap in canonical form so training gold matches evaluator contract
+        text_n = f"<tool_call>\n{json.dumps(tc, ensure_ascii=False)}\n</tool_call>"
 
     row = {
         "capability": capability,
