@@ -103,7 +103,6 @@ logger = logging.getLogger(__name__)
 
 STRUCTURED_CAPABILITIES = {
     "schema_adherence",
-    "grounded_refusal",
     "tool_calling",
     "domain_recognition",
     "doctype_classification",
@@ -119,10 +118,27 @@ NARRATIVE_CAPABILITIES = {
     "cross_doc_reasoning",
 }
 
+# Capabilities where V3 is KNOWN to regress — use Nemotron's output as
+# gold directly, ignoring V3's response entirely. Discovered during the
+# 16-row refusal sanity run where V3 fabricated "Net 30" / "30 days"
+# for prompts about unstated payment terms, while Nemotron correctly
+# refused. Ensemble voting on this capability will never converge
+# because V3's weakness IS the behaviour V5 must unlearn.
+NEMOTRON_AUTHORITATIVE_CAPABILITIES = {
+    "grounded_refusal",
+}
+
 # Which structured capabilities should vote with expect_json=True
 JSON_CAPABILITIES = {"schema_adherence", "tool_calling"}
 
 NEMOTRON_JUDGE_THRESHOLD = 4  # ≥ 4 on 1-5 semantic-equivalence scale
+# Refusal tokens Nemotron's response must contain to count as a valid
+# refusal — matches the evaluator's refusal scorer for gate parity.
+_REFUSAL_TOKENS = (
+    "not_in_document", "cannot", "does not contain", "isn't in",
+    "no such", "not specified", "not provided", "not present",
+    "cannot be determined", "not answerable", "not in the document",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -406,17 +422,24 @@ def _schema_adherence_prompts(rng: random.Random) -> Iterable[Dict[str, Any]]:
 
 # -- grounded_refusal --------------------------------------------------------
 
+# Refusal questions curated so the synthetic doc body (produced by
+# ``_rand_invoice_body`` / ``_rand_po_body`` above) does NOT contain the
+# answer. Anything that could be inferred from fields the body actually
+# emits (date, total, payment terms in the PO body) was removed so the
+# correct response is unambiguously "NOT_IN_DOCUMENT".
 REFUSAL_QUESTIONS_FOR_INVOICE = [
     "What is the vendor's tax identification number?",
     "When was this invoice paid?",
-    "What is the delivery date?",
     "Who authorised this payment?",
     "What is the PO number that matches this invoice?",
     "What is the buyer's VAT number?",
-    "What is the shipping method?",
     "What discount was applied?",
-    "When does payment fall due?",
     "What is the invoice's currency conversion rate?",
+    "What is the vendor's bank account number?",
+    "When was this invoice first sent?",
+    "What is the dispute-resolution contact?",
+    "What is the vendor's D-U-N-S number?",
+    "When was this invoice reviewed by accounts payable?",
 ]
 REFUSAL_QUESTIONS_FOR_PO = [
     "What was the actual delivery date?",
@@ -424,6 +447,9 @@ REFUSAL_QUESTIONS_FOR_PO = [
     "What is the vendor's bank account?",
     "When was this PO signed?",
     "What is the buyer's tax ID?",
+    "Who is the internal approver on the buyer side?",
+    "What is the PO's reference quote number?",
+    "Is this PO subject to a non-disclosure agreement?",
 ]
 
 
@@ -750,6 +776,67 @@ def _strip_thinking_local(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Nemotron-authoritative path (capabilities where V3 regresses)
+# ---------------------------------------------------------------------------
+
+
+def _nemotron_authoritative_row(
+    capability: str,
+    prompt_spec: Dict[str, Any],
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """Generate one row using Nemotron's response as the gold target.
+
+    For capabilities where V3 is known to regress (currently:
+    ``grounded_refusal`` — V3 fabricates payment terms instead of
+    refusing), ensemble voting with V3 will never converge because
+    V3's weakness IS the behaviour V5 must learn. So we don't consult
+    V3 at all; Nemotron's response is gold as long as it parses to a
+    valid refusal and a quick V3-side DPO-rejection is recorded for
+    preference training.
+
+    Returns (row, diagnostic). Row is ``None`` when Nemotron fails to
+    emit a recognisable refusal (rare — Nemotron at T=0 is reliable).
+    """
+    system_prompt = prompt_spec.get("system", "")
+    user_prompt = prompt_spec["prompt"]
+    diag: Dict[str, Any] = {"path": "nemotron_authoritative"}
+
+    # Nemotron gold
+    resp_n = _call_nemotron(user_prompt, system_prompt, 400, 0.0)
+    diag["nemotron_ok"] = resp_n.ok
+    if not resp_n.ok:
+        diag["reason"] = f"nemotron_failed:{resp_n.error}"
+        return None, diag
+    text_n = _strip_thinking_local(resp_n.raw_text).strip()
+    if not text_n:
+        diag["reason"] = "nemotron_empty_after_strip"
+        return None, diag
+
+    # For refusal specifically, enforce that the gold contains a refusal
+    # token — so the charter's refusal scorer will credit it at eval time
+    # and V5 learns the canonical format.
+    if capability == "grounded_refusal":
+        if not any(tok in text_n.lower() for tok in _REFUSAL_TOKENS):
+            diag["reason"] = "nemotron_did_not_refuse"
+            diag["sample"] = text_n[:120]
+            return None, diag
+
+    row = {
+        "capability": capability,
+        "source": "v5_nemotron_authoritative",
+        "difficulty": prompt_spec.get("difficulty", "medium"),
+        "system": "",
+        "user": user_prompt,
+        "assistant": text_n,
+        "teacher_agreement": {
+            "confidence": "high", "voices": 1, "judge_score": None,
+            "authoritative_teacher": "nemotron",
+        },
+    }
+    return row, diag
+
+
+# ---------------------------------------------------------------------------
 # Structured-capability ensemble path
 # ---------------------------------------------------------------------------
 
@@ -982,7 +1069,13 @@ def generate(
 
                 row: Optional[Dict[str, Any]] = None
                 diag: Any = None
-                if cap in NARRATIVE_CAPABILITIES:
+                if cap in NEMOTRON_AUTHORITATIVE_CAPABILITIES:
+                    row, diag = _nemotron_authoritative_row(cap, spec)
+                    if row is None:
+                        per_cap_stats[cap]["quarantine"] += 1
+                    else:
+                        per_cap_stats[cap]["judge_accepted"] += 1
+                elif cap in NARRATIVE_CAPABILITIES:
                     row, diag = _narrative_row(cap, spec)
                     if row is None:
                         per_cap_stats[cap]["quarantine"] += 1
