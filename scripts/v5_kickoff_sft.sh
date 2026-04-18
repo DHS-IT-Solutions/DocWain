@@ -17,7 +17,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-SFT_CORPUS="finetune_artifacts/v5/sft_reused.jsonl,finetune_artifacts/v5/sft_generated.jsonl"
+SFT_CORPUS="finetune_artifacts/v5/sft_combined.jsonl"
 BASE="models/DocWain-14B-v2"  # V3 weights — seed merge failed, fallback active
 OUTPUT="models/DocWain-14B-v5-sft"
 LOG="finetune_artifacts/v5/sft_training.log"
