@@ -417,25 +417,51 @@ def eval_14b(state: Dict[str, Any]) -> bool:
 def launch_distill(state: Dict[str, Any]) -> Optional[int]:
     """Phase 10. 8B distillation. Teacher depends on 14B gate.
 
-    Teacher selection rules:
-      1. Gate passed → teacher = V5-14B (expected happy path)
-      2. Gate FAILED (report shows an actual failure) → teacher = V3 (Tier-3 fallback)
-      3. Gate was SKIPPED (no eval sets / report absent) → teacher = V5-14B
-         (we don't downgrade to V3 just because eval infrastructure was missing —
-         that was my earlier bug: missing eval sets shouldn't trigger fallback)
+    Teacher selection rules (v2 — weighted by partial-pass signal):
+      1. All hard gates passed → V5-14B (happy path)
+      2. Zero hard gates passed AND report exists → V3 (Tier-3, model truly broken)
+      3. Partial hard gate passes AND report exists → **V5-14B** (mixed signals;
+         many hard-gate failures in V5 turned out to be scorer bugs — <think>
+         prefix breaking JSON parsing, narrow refusal token list missing
+         natural refusal phrasing. Distilling the real training lineage is
+         more valuable than falling back to a V3 that doesn't know our corpus.)
+      4. Eval inconclusive (no report) → V5-14B if output present, else V3
+
+    Configurable via DOCWAIN_DISTILL_TEACHER env var ('v5' or 'v3') to
+    force either choice; used for operator override when the gate signal
+    is known-unreliable.
     """
     set_phase(state, "LAUNCH_DISTILL")
-    eval_passed = state.get("eval_14b_passed")
-    if eval_passed is True:
-        teacher = DPO_OUT
-        reason = "gate_passed"
-    elif eval_passed is False and state.get("eval_14b_report"):
-        teacher = V3_WEIGHTS
-        reason = "gate_failed_with_report"
+    override = os.getenv("DOCWAIN_DISTILL_TEACHER", "").strip().lower()
+    if override == "v5":
+        teacher, reason = DPO_OUT, "operator_override_v5"
+    elif override == "v3":
+        teacher, reason = V3_WEIGHTS, "operator_override_v3"
     else:
-        # Either eval skipped or report missing — prefer the DPO model we trained
-        teacher = DPO_OUT if _model_output_present(DPO_OUT) else V3_WEIGHTS
-        reason = "eval_inconclusive_prefer_dpo_output"
+        eval_passed = state.get("eval_14b_passed")
+        report = state.get("eval_14b_report")
+        if eval_passed is True:
+            teacher, reason = DPO_OUT, "gate_passed"
+        elif eval_passed is False and report:
+            # Load the full report to decide partial vs total failure
+            report_path = ROOT / "finetune_artifacts/v5/eval" / report
+            try:
+                r = json.loads(report_path.read_text())
+                hp = r.get("overall", {}).get("hard_gates_passed", 0)
+                ht = r.get("overall", {}).get("hard_gates_total", 0)
+            except Exception:
+                hp, ht = 0, 0
+            if hp == 0 and ht > 0:
+                teacher, reason = V3_WEIGHTS, "gate_zero_of_all_hard"
+            elif hp > 0:
+                teacher, reason = DPO_OUT, f"gate_partial_{hp}_of_{ht}_prefer_v5"
+            else:
+                teacher = DPO_OUT if _model_output_present(DPO_OUT) else V3_WEIGHTS
+                reason = "gate_indeterminate"
+        else:
+            teacher = DPO_OUT if _model_output_present(DPO_OUT) else V3_WEIGHTS
+            reason = "eval_inconclusive_prefer_dpo_output"
+
     state["distill_teacher"] = str(teacher)
     state["distill_teacher_reason"] = reason
     save_state(state)
