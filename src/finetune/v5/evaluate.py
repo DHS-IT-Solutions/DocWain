@@ -39,8 +39,18 @@ from src.finetune.v5.capability_charter import CHARTER, Capability  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
+_THINK_RE = __import__("re").compile(r"<think>.*?</think>", __import__("re").DOTALL | __import__("re").IGNORECASE)
+
+
 def _generate(model, tokenizer, user: str, max_new_tokens: int, temperature: float) -> str:
-    """Single generation with an empty-system chat template (V5 identity in weights)."""
+    """Single generation with an empty-system chat template (V5 identity in weights).
+
+    Qwen3-family models emit a ``<think>...</think>`` reasoning block before
+    every answer (even when empty). We strip it before returning so every
+    capability scorer sees the model's actual response — not the thinking
+    tag. Without this, JSON/tool/classification scorers fail on valid
+    outputs because the thinking prefix breaks parse assumptions.
+    """
     import torch
     messages = [{"role": "user", "content": user}]
     prompt = tokenizer.apply_chat_template(
@@ -56,7 +66,8 @@ def _generate(model, tokenizer, user: str, max_new_tokens: int, temperature: flo
             pad_token_id=tokenizer.eos_token_id,
         )
     text = tokenizer.decode(out[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
-    return text.strip()
+    text = _THINK_RE.sub("", text).strip()
+    return text
 
 
 # Capability-specific scorers. Each returns (value, passed) given a list of
@@ -114,9 +125,26 @@ def _score_schema(samples: List[Dict[str, str]]) -> Tuple[float, bool]:
 
 
 def _score_refusal(samples: List[Dict[str, str]]) -> Tuple[float, bool]:
-    """Refusal: actual must contain refusal token (NOT_IN_DOCUMENT or similar)."""
+    """Refusal: actual must contain a refusal token.
+
+    Expanded token list to match what the model actually emits in practice —
+    ``does not provide`` / ``not specified`` / ``not mentioned`` are all
+    semantically correct refusals but don't use the original NOT_IN_DOCUMENT
+    phrasing. Training used Nemotron-authoritative refusals which favour
+    natural-language phrasing over a strict token.
+    """
     hits = 0
-    refusal_tokens = ("not_in_document", "cannot", "does not contain", "isn't in", "no such")
+    refusal_tokens = (
+        "not_in_document", "not in the document", "not in document",
+        "cannot", "can not",
+        "does not contain", "does not provide", "does not include",
+        "isn't in", "is not in",
+        "no such", "not specified", "not provided", "not present",
+        "not mentioned", "not stated", "not indicated",
+        "cannot be determined", "cannot be found", "cannot be answered",
+        "not answerable", "unable to answer", "insufficient information",
+        "no information", "unable to determine",
+    )
     for s in samples:
         a = (s.get("actual") or "").lower()
         if any(tok in a for tok in refusal_tokens):
