@@ -132,11 +132,27 @@ def set_phase(state: Dict[str, Any], phase: str, **extra: Any) -> None:
 
 
 def pid_alive(pid: int) -> bool:
+    """True only if pid is running. Zombies count as exited.
+
+    ``os.kill(pid, 0)`` succeeds on zombie processes because the pid is
+    still in the process table, which would keep the orchestrator
+    blocked on ``wait_pid`` forever when a child exits normally but
+    hasn't been reaped. We explicitly read /proc/<pid>/status and
+    return False on the zombie state letter Z so exit is detected.
+    """
     try:
         os.kill(pid, 0)
-    except (ProcessLookupError, PermissionError):
+    except (ProcessLookupError, PermissionError, OSError):
         return False
-    except OSError:
+    try:
+        with open(f"/proc/{pid}/status", "r") as f:
+            for line in f:
+                if line.startswith("State:"):
+                    # e.g. "State:\tZ (zombie)"  — treat as exited
+                    if "Z" in line.split()[1]:
+                        return False
+                    break
+    except (FileNotFoundError, PermissionError):
         return False
     return True
 
@@ -211,6 +227,15 @@ def count_lines(path: Path) -> int:
             return sum(1 for _ in f)
     except FileNotFoundError:
         return 0
+
+
+def _model_output_present(directory: Path) -> bool:
+    """True if ``directory`` looks like a completed merged HF model."""
+    if not directory.exists():
+        return False
+    if (directory / "model.safetensors.index.json").exists():
+        return True
+    return bool(list(directory.glob("model-*.safetensors")))
 
 
 def merge_corpus(state: Dict[str, Any]) -> bool:
@@ -500,21 +525,34 @@ def orchestrate(pids: List[int]) -> int:
     # Phase 4 — stop vLLM
     stop_vllm(state)
 
-    # Phase 5/6 — SFT
-    sft_pid = launch_sft(state)
-    if sft_pid is None:
-        set_phase(state, "FAILED", reason="sft_launch_failed")
-        return 3
-    if not wait_sft(state, sft_pid):
-        set_phase(state, "FAILED", reason="sft_no_output")
-        return 4
+    # Phase 5/6 — SFT (skip if output already produced by an earlier run)
+    if _model_output_present(SFT_OUT):
+        log(f"SFT output already present at {SFT_OUT} — skipping re-training")
+        set_phase(state, "WAIT_SFT", skipped=True)
+        state["sft_output_present"] = True
+        save_state(state)
+    else:
+        sft_pid = launch_sft(state)
+        if sft_pid is None:
+            set_phase(state, "FAILED", reason="sft_launch_failed")
+            return 3
+        if not wait_sft(state, sft_pid):
+            set_phase(state, "FAILED", reason="sft_no_output")
+            return 4
 
-    # Phase 7/8 — DPO
-    dpo_pid = launch_dpo(state)
-    if dpo_pid is None:
-        set_phase(state, "FAILED", reason="dpo_launch_failed")
-        return 5
-    if not wait_dpo(state, dpo_pid):
+    # Phase 7/8 — DPO (skip if output already produced)
+    if _model_output_present(DPO_OUT):
+        log(f"DPO output already present at {DPO_OUT} — skipping re-training")
+        set_phase(state, "WAIT_DPO", skipped=True)
+        state["dpo_output_present"] = True
+        save_state(state)
+        dpo_pid = None
+    else:
+        dpo_pid = launch_dpo(state)
+        if dpo_pid is None:
+            set_phase(state, "FAILED", reason="dpo_launch_failed")
+            return 5
+    if dpo_pid is not None and not wait_dpo(state, dpo_pid):
         log("DPO produced no output — degrading: using SFT-only output as V5-14B final")
         # Fallback: SFT alone is still a valid V5
         import shutil
@@ -526,12 +564,19 @@ def orchestrate(pids: List[int]) -> int:
     # Phase 9 — 14B gate eval
     eval_14b(state)  # result recorded even if fails
 
-    # Phase 10/11 — distillation
-    distill_pid = launch_distill(state)
-    if distill_pid is None:
-        set_phase(state, "FAILED", reason="distill_launch_failed")
-        return 6
-    if not wait_distill(state, distill_pid):
+    # Phase 10/11 — distillation (skip if output already produced)
+    if _model_output_present(STUDENT_OUT):
+        log(f"Distill output already present at {STUDENT_OUT} — skipping re-training")
+        set_phase(state, "WAIT_DISTILL", skipped=True)
+        state["distill_output_present"] = True
+        save_state(state)
+        distill_pid = None
+    else:
+        distill_pid = launch_distill(state)
+        if distill_pid is None:
+            set_phase(state, "FAILED", reason="distill_launch_failed")
+            return 6
+    if distill_pid is not None and not wait_distill(state, distill_pid):
         log("distillation produced no output — 8B variant not shipped")
         state["distill_failed"] = True
         save_state(state)
