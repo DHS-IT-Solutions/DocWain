@@ -159,11 +159,12 @@ def train(
         max_prompt_length=3072,
         remove_unused_columns=False,
     )
+    # TRL 0.24+ renamed `tokenizer` to `processing_class`. Use the new kw.
     trainer = DPOTrainer(
         model=model,
         args=dpo_config,
         train_dataset=ds,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         peft_config=peft_cfg,
     )
     t0 = time.monotonic()
