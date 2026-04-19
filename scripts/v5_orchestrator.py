@@ -606,8 +606,19 @@ def orchestrate(pids: List[int]) -> int:
         state["dpo_fallback"] = True
         save_state(state)
 
-    # Phase 9 — 14B gate eval
-    eval_14b(state)  # result recorded even if fails
+    # Phase 9 — 14B gate eval (skip if a recent report for this model exists)
+    eval_report_path = ROOT / f"finetune_artifacts/v5/eval/{DPO_OUT.name}.json"
+    if eval_report_path.exists():
+        try:
+            r = json.loads(eval_report_path.read_text())
+            state["eval_14b_report"] = eval_report_path.name
+            state["eval_14b_passed"] = bool(r.get("overall", {}).get("all_hard_gates_passed"))
+            log(f"eval_14b report already present — skipping re-eval. passed={state['eval_14b_passed']}")
+            save_state(state)
+        except Exception:
+            eval_14b(state)
+    else:
+        eval_14b(state)
 
     # Phase 10/11 — distillation (skip if output already produced)
     if _model_output_present(STUDENT_OUT):
