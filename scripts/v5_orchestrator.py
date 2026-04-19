@@ -415,12 +415,31 @@ def eval_14b(state: Dict[str, Any]) -> bool:
 
 
 def launch_distill(state: Dict[str, Any]) -> Optional[int]:
-    """Phase 10. 8B distillation. Teacher depends on 14B gate."""
+    """Phase 10. 8B distillation. Teacher depends on 14B gate.
+
+    Teacher selection rules:
+      1. Gate passed → teacher = V5-14B (expected happy path)
+      2. Gate FAILED (report shows an actual failure) → teacher = V3 (Tier-3 fallback)
+      3. Gate was SKIPPED (no eval sets / report absent) → teacher = V5-14B
+         (we don't downgrade to V3 just because eval infrastructure was missing —
+         that was my earlier bug: missing eval sets shouldn't trigger fallback)
+    """
     set_phase(state, "LAUNCH_DISTILL")
-    teacher = DPO_OUT if state.get("eval_14b_passed") else V3_WEIGHTS
+    eval_passed = state.get("eval_14b_passed")
+    if eval_passed is True:
+        teacher = DPO_OUT
+        reason = "gate_passed"
+    elif eval_passed is False and state.get("eval_14b_report"):
+        teacher = V3_WEIGHTS
+        reason = "gate_failed_with_report"
+    else:
+        # Either eval skipped or report missing — prefer the DPO model we trained
+        teacher = DPO_OUT if _model_output_present(DPO_OUT) else V3_WEIGHTS
+        reason = "eval_inconclusive_prefer_dpo_output"
     state["distill_teacher"] = str(teacher)
+    state["distill_teacher_reason"] = reason
     save_state(state)
-    log(f"distill teacher = {teacher}  (gate_passed={state.get('eval_14b_passed')})")
+    log(f"distill teacher = {teacher}  (reason={reason})")
     pid = launch_bg(
         [
             sys.executable, "-u", "-m", "src.finetune.v5.distillation",

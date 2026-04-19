@@ -1,0 +1,30 @@
+{"prompt": "MASTER SERVICES AGREEMENT between Cascade Digital Solutions and Delta Freight Services. Governs the general terms.", "expected": "msa"}
+{"prompt": "STATEMENT OF WORK #4 under MSA-189. Deliverables: 3 milestones.", "expected": "sow"}
+{"prompt": "STATEMENT OF WORK #24 under MSA-500. Deliverables: 3 milestones.", "expected": "sow"}
+{"prompt": "MUTUAL NON-DISCLOSURE AGREEMENT between Cascade Digital Solutions and Delta Freight Services. Term: 3 years.", "expected": "nda"}
+{"prompt": "STATEMENT OF WORK #50 under MSA-681. Deliverables: 3 milestones.", "expected": "sow"}
+{"prompt": "COMMERCIAL INVOICE No. INV-505. Goods shipped: 10 units. Total £22,772. For customs purposes.", "expected": "commercial_invoice"}
+{"prompt": "DELIVERY NOTE DN6500. Delivered 8 cartons on 1 March 2026. Goods received in good order.", "expected": "delivery_note"}
+{"prompt": "PROFORMA INVOICE — not for payment. Quoted items: 10 units @ $308.", "expected": "proforma_invoice"}
+{"prompt": "DELIVERY NOTE DN6882. Delivered 1 cartons on 16 March 2026. Goods received in good order.", "expected": "delivery_note"}
+{"prompt": "PURCHASE ORDER No. PO796982. Required delivery: 12 Mar 2026.", "expected": "po"}
+{"prompt": "STATEMENT OF WORK #33 under MSA-867. Deliverables: 3 milestones.", "expected": "sow"}
+{"prompt": "PROFORMA INVOICE — not for payment. Quoted items: 10 units @ $263.", "expected": "proforma_invoice"}
+{"prompt": "MASTER SERVICES AGREEMENT between Summit Medical and Aquarius Marketing. Governs the general terms.", "expected": "msa"}
+{"prompt": "MASTER SERVICES AGREEMENT between Redwood Enterprises and Summit Medical. Governs the general terms.", "expected": "msa"}
+{"prompt": "PURCHASE ORDER No. PO462659. Required delivery: 2 Jan 2026.", "expected": "po"}
+{"prompt": "PROFORMA INVOICE — not for payment. Quoted items: 10 units @ $299.", "expected": "proforma_invoice"}
+{"prompt": "MASTER SERVICES AGREEMENT between Blueprint Architects and Apex Consulting Group. Governs the general terms.", "expected": "msa"}
+{"prompt": "COMMERCIAL INVOICE No. INV-842. Goods shipped: 10 units. Total £37,669. For customs purposes.", "expected": "commercial_invoice"}
+{"prompt": "COMMERCIAL INVOICE No. INV-877. Goods shipped: 10 units. Total £44,077. For customs purposes.", "expected": "commercial_invoice"}
+{"prompt": "PURCHASE ORDER No. PO261630. Required delivery: 23 Oct 2026.", "expected": "po"}
+{"prompt": "PROFORMA INVOICE — not for payment. Quoted items: 10 units @ $88.", "expected": "proforma_invoice"}
+{"prompt": "STATEMENT OF WORK #3 under MSA-369. Deliverables: 3 milestones.", "expected": "sow"}
+{"prompt": "PROFORMA INVOICE — not for payment. Quoted items: 10 units @ $482.", "expected": "proforma_invoice"}
+{"prompt": "COMMERCIAL INVOICE No. INV-998. Goods shipped: 10 units. Total £31,480. For customs purposes.", "expected": "commercial_invoice"}
+{"prompt": "COMMERCIAL INVOICE No. INV-367. Goods shipped: 10 units. Total £37,261. For customs purposes.", "expected": "commercial_invoice"}
+{"prompt": "MUTUAL NON-DISCLOSURE AGREEMENT between Pinnacle Dynamics and Briard Bank. Term: 3 years.", "expected": "nda"}
+{"prompt": "PURCHASE ORDER No. PO386604. Required delivery: 26 Oct 2026.", "expected": "po"}
+{"prompt": "COMMERCIAL INVOICE No. INV-703. Goods shipped: 10 units. Total £48,841. For customs purposes.", "expected": "commercial_invoice"}
+{"prompt": "MASTER SERVICES AGREEMENT between Apex Consulting Group and Assurity Ltd. Governs the general terms.", "expected": "msa"}
+{"prompt": "PURCHASE ORDER No. PO828716. Required delivery: 21 Oct 2026.", "expected": "po"}

@@ -1,0 +1,30 @@
+{"prompt": "Get the screening report for profile 8cf07bb3.", "expected": "<tool_call>\n{\"name\": \"get_screening_report\", \"arguments\": {\"profile_id\": \"8cf07bb3\"}}\n</tool_call>"}
+{"prompt": "Get the screening report for profile 7a66c184.", "expected": "<tool_call>\n{\"name\": \"get_screening_report\", \"arguments\": {\"profile_id\": \"7a66c184\"}}\n</tool_call>"}
+{"prompt": "List documents in profile c36ab3ed.", "expected": "<tool_call>\n{\"name\": \"list_profile_documents\", \"arguments\": {\"profile_id\": \"c36ab3ed\"}}\n</tool_call>"}
+{"prompt": "Get the knowledge graph around entity Leica Microsystems up to depth 2.", "expected": "<tool_call>\n{\"name\": \"get_kg_subgraph\", \"arguments\": {\"entity\": \"Leica Microsystems\", \"depth\": 2}}\n</tool_call>"}
+{"prompt": "Extract V2 invoice entities from doc_6050.", "expected": "<tool_call>\n{\"name\": \"extract_entities\", \"arguments\": {\"doc_id\": \"doc_6050\", \"schema\": \"V2 invoice\"}}\n</tool_call>"}
+{"prompt": "Get the screening report for profile da20508d.", "expected": "<tool_call>\n{\"name\": \"get_screening_report\", \"arguments\": {\"profile_id\": \"da20508d\"}}\n</tool_call>"}
+{"prompt": "Classify document doc_4585.", "expected": "<tool_call>\n{\"name\": \"classify_document\", \"arguments\": {\"doc_id\": \"doc_4585\"}}\n</tool_call>"}
+{"prompt": "Get the screening report for profile 8202fae5.", "expected": "<tool_call>\n{\"name\": \"get_screening_report\", \"arguments\": {\"profile_id\": \"8202fae5\"}}\n</tool_call>"}
+{"prompt": "Find chunks about termination clause in profile 8e8adee7.", "expected": "<tool_call>\n{\"name\": \"retrieve_chunks\", \"arguments\": {\"query\": \"termination clause\", \"profile_id\": \"8e8adee7\", \"top_k\": 5}}\n</tool_call>"}
+{"prompt": "Classify document doc_2889.", "expected": "<tool_call>\n{\"name\": \"classify_document\", \"arguments\": {\"doc_id\": \"doc_2889\"}}\n</tool_call>"}
+{"prompt": "Verify that the vendor is Horizon Biotech in document doc_9019.", "expected": "<tool_call>\n{\"name\": \"verify_fact\", \"arguments\": {\"claim\": \"The vendor is Horizon Biotech\", \"doc_id\": \"doc_9019\"}}\n</tool_call>"}
+{"prompt": "Get the screening report for profile 8799fddb.", "expected": "<tool_call>\n{\"name\": \"get_screening_report\", \"arguments\": {\"profile_id\": \"8799fddb\"}}\n</tool_call>"}
+{"prompt": "Classify document doc_7244.", "expected": "<tool_call>\n{\"name\": \"classify_document\", \"arguments\": {\"doc_id\": \"doc_7244\"}}\n</tool_call>"}
+{"prompt": "Get the screening report for profile 2a432f0a.", "expected": "<tool_call>\n{\"name\": \"get_screening_report\", \"arguments\": {\"profile_id\": \"2a432f0a\"}}\n</tool_call>"}
+{"prompt": "List documents in profile f3b56360.", "expected": "<tool_call>\n{\"name\": \"list_profile_documents\", \"arguments\": {\"profile_id\": \"f3b56360\"}}\n</tool_call>"}
+{"prompt": "List documents in profile 84222167.", "expected": "<tool_call>\n{\"name\": \"list_profile_documents\", \"arguments\": {\"profile_id\": \"84222167\"}}\n</tool_call>"}
+{"prompt": "Extract V2 invoice entities from doc_3347.", "expected": "<tool_call>\n{\"name\": \"extract_entities\", \"arguments\": {\"doc_id\": \"doc_3347\", \"schema\": \"V2 invoice\"}}\n</tool_call>"}
+{"prompt": "Classify document doc_8605.", "expected": "<tool_call>\n{\"name\": \"classify_document\", \"arguments\": {\"doc_id\": \"doc_8605\"}}\n</tool_call>"}
+{"prompt": "Classify document doc_2083.", "expected": "<tool_call>\n{\"name\": \"classify_document\", \"arguments\": {\"doc_id\": \"doc_2083\"}}\n</tool_call>"}
+{"prompt": "List sections of document doc_8486.", "expected": "<tool_call>\n{\"name\": \"get_document_sections\", \"arguments\": {\"doc_id\": \"doc_8486\"}}\n</tool_call>"}
+{"prompt": "List documents in profile 83b5bad5.", "expected": "<tool_call>\n{\"name\": \"list_profile_documents\", \"arguments\": {\"profile_id\": \"83b5bad5\"}}\n</tool_call>"}
+{"prompt": "Classify document doc_8770.", "expected": "<tool_call>\n{\"name\": \"classify_document\", \"arguments\": {\"doc_id\": \"doc_8770\"}}\n</tool_call>"}
+{"prompt": "List documents in profile ed39d793.", "expected": "<tool_call>\n{\"name\": \"list_profile_documents\", \"arguments\": {\"profile_id\": \"ed39d793\"}}\n</tool_call>"}
+{"prompt": "Compare invoice doc_7033 against PO doc_9954.", "expected": "<tool_call>\n{\"name\": \"compare_documents\", \"arguments\": {\"doc_id_a\": \"doc_7033\", \"doc_id_b\": \"doc_9954\"}}\n</tool_call>"}
+{"prompt": "Get the screening report for profile c12b6680.", "expected": "<tool_call>\n{\"name\": \"get_screening_report\", \"arguments\": {\"profile_id\": \"c12b6680\"}}\n</tool_call>"}
+{"prompt": "Get the knowledge graph around entity Acme Trading Co up to depth 2.", "expected": "<tool_call>\n{\"name\": \"get_kg_subgraph\", \"arguments\": {\"entity\": \"Acme Trading Co\", \"depth\": 2}}\n</tool_call>"}
+{"prompt": "Get the screening report for profile b3595d1f.", "expected": "<tool_call>\n{\"name\": \"get_screening_report\", \"arguments\": {\"profile_id\": \"b3595d1f\"}}\n</tool_call>"}
+{"prompt": "Get the knowledge graph around entity Leica Microsystems up to depth 2.", "expected": "<tool_call>\n{\"name\": \"get_kg_subgraph\", \"arguments\": {\"entity\": \"Leica Microsystems\", \"depth\": 2}}\n</tool_call>"}
+{"prompt": "List sections of document doc_7939.", "expected": "<tool_call>\n{\"name\": \"get_document_sections\", \"arguments\": {\"doc_id\": \"doc_7939\"}}\n</tool_call>"}
+{"prompt": "Find chunks about VAT in profile b9a54c24.", "expected": "<tool_call>\n{\"name\": \"retrieve_chunks\", \"arguments\": {\"query\": \"VAT\", \"profile_id\": \"b9a54c24\", \"top_k\": 5}}\n</tool_call>"}
