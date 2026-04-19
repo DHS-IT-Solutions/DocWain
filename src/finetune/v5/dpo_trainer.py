@@ -31,6 +31,14 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+# peft's LoRA dispatcher iterates through optional backends (awq, bnb, eetq,
+# hqq, ...) and imports them speculatively. On this host the installed
+# ``awq`` wheel is incompatible with the pinned transformers 4.57.x
+# (PytorchGELUTanh was renamed). We're not training AWQ-quantised weights
+# so we blacklist the module before peft imports it — same pattern as
+# ``sft_trainer.py`` (see commit 73ad46f).
+sys.modules.setdefault("awq", None)  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -158,6 +166,9 @@ def train(
         max_length=4096,
         max_prompt_length=3072,
         remove_unused_columns=False,
+        # TRL defaults to wandb; we don't have it configured and don't need
+        # cloud-side logging for this run. Local file logging is sufficient.
+        report_to=[],
     )
     # TRL 0.24+ renamed `tokenizer` to `processing_class`. Use the new kw.
     trainer = DPOTrainer(
