@@ -2834,11 +2834,15 @@ def main(argv: list[str] | None = None) -> int:
     domain_to_profile = {
         dom: cfg["profile_id"] for dom, cfg in fixtures["profiles"].items()
     }
-    for q in queries:
-        q_sub = sub_id
-        q_prof = domain_to_profile.get(q.profile_domain, q.profile_id)
-        q.subscription_id = q_sub
-        q.profile_id = q_prof
+    queries = [
+        q.model_copy(update={
+            "subscription_id": sub_id,
+            "profile_id": domain_to_profile.get(q.profile_domain, q.profile_id),
+        })
+        for q in queries
+    ]
+    # Rationale: EvalQuery is a pydantic BaseModel; in-place attribute assignment
+    # would skip validation. model_copy(update=...) reruns validation.
 
     # Run
     run_id = f"baseline_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"

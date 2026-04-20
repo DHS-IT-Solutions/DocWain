@@ -3512,7 +3512,10 @@ def _real_read_blob(name: str) -> str:
 
 def _real_feedback_tracker():
     from src.intelligence.feedback_tracker import FeedbackTracker
-    from src.utils.redis_client import get_redis_client  # assumed helper; fallback below
+    # NOTE: verify the real path during Task 1 preflight. Today the repo has
+    # src/utils/redis_cache.py (not redis_client). Use the actual path; the
+    # except below falls back to an offline stub if the import fails.
+    from src.utils.redis_cache import get_redis_client  # or the real helper path
 
     try:
         r = get_redis_client()
