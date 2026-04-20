@@ -382,10 +382,61 @@ SSRF-safe fetcher; ephemeral source; parallel crawl with supplementary/primary c
 ### Phase 6 — Pattern mining + monthly review loop
 First `mine_sme_patterns` run 30 days after Phase 4 wide rollout. Findings in `analytics/sme_patterns_{YYYY-MM}.md`. Review closes the engineering-first → pattern-capture loop and defines trigger conditions for sub-project F.
 
-### Rollback
-Every phase has a feature flag or flag-equivalent reverting to the prior phase's behavior. No phase introduces a data-destroying change. Synthesized edges are confidence-taggable for bulk-hide (not delete) on rollback.
+Per-phase rollback behavior is covered in detail in Section 13.1.
 
-## 13. Risks and mitigations
+## 13. Rollback strategy
+
+Rollback is first-class. Three granularities; all use the same feature-flag infrastructure, and none destroy synthesized data — everything is recoverable for post-mortem or a second attempt.
+
+### 13.1 Per-phase rollback (operational, during rollout)
+Every phase in Section 12 has a feature flag or flag-equivalent that reverts behavior to the prior phase. No phase introduces a data-destroying change. Synthesized Neo4j edges are confidence-tagged so they can be bulk-hidden via a threshold bump rather than deleted. SME artifacts in Qdrant can be left orphaned (retrieval stops pulling them) rather than physically removed.
+
+### 13.2 Partial rollback (capability-by-capability)
+Each capability is independently flag-gated, per-subscription with a global default. Disabling any one leaves the others intact:
+
+| Flag | Effect when disabled |
+|---|---|
+| `sme_redesign_enabled` | Master kill switch. When `false`, all other flags below default to `false`. |
+| `enable_sme_synthesis` | Training stage skips SME synthesis. Existing artifacts remain; no new ones produced. |
+| `enable_sme_retrieval` | Query-time retrieval stops pulling SME artifacts (Layer C). Chunks + KG only. |
+| `enable_kg_synthesized_edges` | Query-time KG retrieval filters out `source:'sme_synthesis'` edges. Original KG only. |
+| `enable_rich_mode` | `prompts.py` reverts to pre-A compact templates. Intent router disables `diagnose/analyze/recommend`. Response shape returns to current behavior. |
+| `enable_url_as_prompt` | URLs in queries treated as plain text; no ephemeral fetch. |
+| `enable_hybrid_retrieval` | Qdrant falls back to dense-only. Sparse vectors remain in storage but unused. |
+| `enable_cross_encoder_rerank` | Reranker bypassed. Retrieval returns raw top-K merged results. |
+
+### 13.3 Full rollback (the kill switch)
+If sub-project A is a net-negative after Phase 4 and tuning fails to recover, full rollback is:
+
+1. **Flip `sme_redesign_enabled=false`** at the affected scope (subscription or global). All capability flags default to disabled under the master flag.
+2. **Verify query path reverts.** Run RAGAS + latency regression against current eval set; metrics must match pre-A baselines within measurement noise (`faithfulness ~0.514`, `hallucination 0.0`, `context_recall ~0.80`).
+3. **Stop producing new artifacts.** Training stage skips SME synthesis (forced by master flag).
+4. **Retain all data.** No deletion of SME artifacts (Qdrant + Blob), synthesized Neo4j edges, trace stores, or adapter YAMLs. Rollback stays reversible.
+5. **Keep the measurement harness running.** `tests/sme_evalset_v1/` and the 6 new metrics continue executing against production to track that the rollback held, and to feed the post-mortem.
+6. **Write a post-mortem.** `analytics/sme_rollback_{YYYY-MM-DD}.md` documents the trigger condition, what was tried, what failed, what the traces show. This post-mortem is a direct input to sub-project F: it may indicate that targeted retraining is the right move where engineering hit a ceiling.
+7. **Preserve configuration.** Adapter YAMLs stay in Blob (original paths); traces remain in place; no destructive migrations. A future attempt at SME reasoning can inherit everything.
+
+### 13.4 Criteria that trigger full rollback (not exhaustive)
+- Launch-gate metrics (Section 10) fail to pass after **two full iterations** of adapter + prompt tuning on the same eval set.
+- Production `hallucination_rate` rises above **0.02** (rolling 7-day window) and is attributable to SME synthesis output.
+- Human-rated SME score regresses below baseline on matched query set after Phase 4 launch.
+- Pattern mining surfaces systematic grounding failures that `SMEVerifier` should have caught but didn't — indicating a design flaw, not a tuning problem.
+- Material customer-reported incidents tied to SME-mode responses.
+
+### 13.5 What full rollback deliberately does NOT undo
+- **Sparse-vector re-indexing of Qdrant chunks.** Sparse retrieval improves relevance independently of SME; it stays. If sparse itself causes a regression, that's its own rollback via `enable_hybrid_retrieval=false`.
+- **Cross-encoder reranker wiring.** Same reasoning — independent improvement.
+- **Trace stores and evaluation harness.** These are permanent audit + measurement infrastructure; they outlive any sub-project.
+- **Adapter YAML infrastructure in Azure Blob.** Structure and APIs remain; content can be emptied out but the plumbing is general-purpose and useful beyond sub-project A.
+
+### 13.6 Decision authority
+- **Per-subscription flag flip:** any DocWain operator with admin access; logged to audit.
+- **Global `sme_redesign_enabled=false`:** owner-level decision, recorded with rationale in the pattern-mining analytics.
+- **Post-mortem:** required for every full rollback; becomes part of the permanent record feeding F's trigger evaluation.
+
+---
+
+## 14. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
@@ -400,7 +451,7 @@ Every phase has a feature flag or flag-equivalent reverting to the prior phase's
 | QA cache serves stale answers after ingest | Cache invalidated on `PIPELINE_TRAINING_COMPLETED` transition; per-synthesis-version stamping |
 | Cross-subscription data leak | Hard `(subscription_id, profile_id)` filter at every retrieval layer; SMEVerifier refuses artifacts if subscription boundary can't be asserted; integration-test gate for cross-sub query rejection |
 
-## 14. Open questions (deferred to implementation plan)
+## 15. Open questions (deferred to implementation plan)
 
 1. Existing-module reuse audit: which of the 8 candidate modules are library-reused, rewritten, or deprecated. Settled in the implementation plan after a read-through.
 2. Cross-encoder reranker model choice (MiniLM / BGE / trained DocWain reranker) and its validation.
@@ -410,7 +461,7 @@ Every phase has a feature flag or flag-equivalent reverting to the prior phase's
 6. `sme_persona_consistency` LLM-judge — local small model vs. gateway call. Decided when the metric is implemented in Phase 0.
 7. Synthesis-failure mode on low-quality corpora: mark-and-fire vs. retry; operator-configurable; default = mark + fire, do not block production.
 
-## 15. File touch list
+## 16. File touch list
 
 ### New files
 ```
@@ -458,7 +509,7 @@ src/intelligence/profile_intelligence.py
 src/intelligence/generator.py                # explicitly NOT modified for formatting (memory rule)
 ```
 
-## 16. Acceptance criteria
+## 17. Acceptance criteria
 
 - All architectural invariants (Section 3) hold under integration tests
 - All launch-gate conditions (Section 10) pass on the eval set
