@@ -1028,3 +1028,115 @@ def build_honest_compact_prompt(
         "Respond with a direct, honest compact answer. If the evidence does not\n"
         "answer the question, say so explicitly.\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — URL citation annotation + supplementary prompt template
+# ---------------------------------------------------------------------------
+#
+# Two small extensions that sit alongside the Phase-4 builders and keep all
+# prompt-string construction inside this module (memory rule: response
+# formatting lives here, not in ``intelligence/generator.py``).
+#
+# 1. :func:`annotate_citation` — builds the citation label for a single
+#    pack item. Profile items use ``[doc_id:chunk_id]``; URL items use the
+#    host + (truncated) path so users see URL provenance distinctly.
+# 2. :func:`build_supplementary_prompt` — constructs the continuation
+#    prompt for the second-pass Reasoner call when URL content arrives
+#    after the primary response has already streamed. Same grounding /
+#    verifier discipline as the rich templates.
+# ---------------------------------------------------------------------------
+
+
+def annotate_citation(
+    *,
+    source_url: Optional[str] = None,
+    doc_id: Optional[str] = None,
+    chunk_id: Optional[str] = None,
+) -> str:
+    """Build the citation label for a single pack item.
+
+    Profile items -> ``[doc_id:chunk_id]``-style label.
+    URL items    -> ``[host<truncated-path>]`` so users can see URL
+    provenance without opening the chunk.
+    """
+    if source_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(source_url)
+        host = parsed.hostname or ""
+        path = parsed.path or ""
+        if len(path) > 32:
+            path = path[:29] + "..."
+        return f"[{host}{path}]"
+
+    parts: List[str] = []
+    if doc_id:
+        parts.append(doc_id[:16])
+    if chunk_id:
+        parts.append(f"#{chunk_id[:8]}")
+    return "[" + "".join(parts) + "]" if parts else "[source]"
+
+
+SUPPLEMENTARY_PROMPT_TEMPLATE = (
+    "You have just answered a user's question using evidence from their profile\n"
+    "documents. A URL they included was fetched in parallel and has now completed.\n"
+    "Write a short supplementary analysis section that:\n\n"
+    "- clearly separates URL-derived observations from the profile-derived answer above,\n"
+    "- labels each URL claim with its source host,\n"
+    "- flags any conflict between URL content and the primary response.\n\n"
+    "Primary response:\n"
+    '"""{primary_response}"""\n\n'
+    "URL content (one block per chunk):\n"
+    "{url_blocks}\n\n"
+    'Produce the supplementary section as markdown under the heading '
+    '"## Supplementary (from URL)".\n'
+    "Do not repeat the primary response. Do not fabricate; omit rather than guess."
+)
+
+
+def build_supplementary_prompt(
+    *,
+    primary_response: str,
+    url_chunks: Sequence[Any],
+    adapter: Optional[Any] = None,
+) -> str:
+    """Construct the continuation prompt for the late-arrival URL supplement.
+
+    ``url_chunks`` may be a list of dicts (``{"text", "source_url"}``) or
+    objects exposing ``.text`` + ``.metadata["source_url"]`` — matches the
+    shapes emitted by :class:`EphemeralChunk` and the merge helper.
+    ``adapter`` is optional; when present its ``.persona`` surface is
+    consulted for a rich-mode preamble, otherwise we fall back to the
+    minimal compact-friendly template.
+    """
+    if not url_chunks:
+        raise ValueError(
+            "build_supplementary_prompt requires at least one url chunk"
+        )
+
+    blocks: List[str] = []
+    for i, chunk in enumerate(url_chunks, start=1):
+        if isinstance(chunk, dict):
+            text = chunk.get("text", "")
+            source_url = chunk.get("source_url") or chunk.get("url", "url")
+        else:
+            text = getattr(chunk, "text", "")
+            md = getattr(chunk, "metadata", {}) or {}
+            source_url = md.get("source_url", "url")
+        blocks.append(f"[{i}] ({source_url}) {text}")
+
+    rendered = SUPPLEMENTARY_PROMPT_TEMPLATE.format(
+        primary_response=primary_response,
+        url_blocks="\n\n".join(blocks),
+    )
+
+    persona = getattr(adapter, "persona", None) if adapter is not None else None
+    if persona:
+        role = getattr(persona, "role", None) or (
+            persona.get("role") if isinstance(persona, dict) else None
+        )
+        if role:
+            rendered = f"You are writing as: {role}.\n\n" + rendered
+
+    return rendered
+
