@@ -1843,9 +1843,15 @@ from dataclasses import dataclass
 
 @dataclass
 class StorageDeps:
+    """Extends Phase 1's StorageDeps with an embedder for vector writes.
+    Phase 1 shipped (blob, qdrant, neo4j) for skeleton persistence; Phase 2
+    adds `embedder` needed for real put_snippet vector computation. `neo4j`
+    is retained here for compatibility but unused by this module (the KG
+    materializer receives neo4j directly — see Task 7)."""
     qdrant: object
     blob: object
     embedder: object
+    neo4j: object | None = None  # reserved; unused by storage module
 
 
 class SMEArtifactStorage:

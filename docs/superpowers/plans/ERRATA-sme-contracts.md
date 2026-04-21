@@ -237,6 +237,37 @@ Phase 2's `KGMultiHopMaterializer` interpolates adapter-provided `rule['pattern'
 
 ---
 
+## 19. Admin router canonical filename
+
+**Canonical:** `src/api/sme_admin_api.py` (Phase 1 Task 4 creates this).
+
+**Drift:** Phase 3 plan originally used `src/api/admin_sme_api.py` (filename swap). **Fixed in Phase 3** on 2026-04-21 — renamed all 5 references to `sme_admin_api.py`.
+
+## 20. StorageDeps shape reconciliation
+
+**Canonical:** `StorageDeps(blob: BlobStore, qdrant: QdrantBridge, neo4j: Neo4jBridge, embedder: object | None = None)`.
+
+Phase 1 ships the four-field dataclass with `embedder` optional. Phase 2 extends it — embedder becomes required at `put_snippet` call sites (it's needed to compute vectors at write time). The `KGMultiHopMaterializer` receives `neo4j` directly, not via StorageDeps, so `neo4j` on StorageDeps is reserved but unused by the storage module itself.
+
+**Fix applied 2026-04-21:** both Phase 1 and Phase 2 StorageDeps updated to match this canonical shape.
+
+## 21. Phase 5 uses Phase 1's feature-flag module (extension of §4)
+
+**Canonical:** Phase 5 is a pure consumer of `src.config.feature_flags` — no parallel module under `src/intelligence/sme/feature_flags.py`.
+
+**Drift:** Phase 5 plan originally shipped its own `src/intelligence/sme/feature_flags.py` with `FeatureFlagResolver` + `UrlAsPromptFlag` constant. This contradicts ERRATA §4 (Phase 1 owns the canonical feature-flag surface).
+
+**Fix applied 2026-04-21:**
+- Phase 5 Task 2 is now an audit-only task that greps `src/config/feature_flags.py` for `ENABLE_URL_AS_PROMPT`, `SMEFeatureFlags`, `get_flag_resolver` — no new file, no code.
+- Consumer imports throughout Phase 5 updated: `from src.config.feature_flags import SMEFeatureFlags, ENABLE_URL_AS_PROMPT, get_flag_resolver`.
+- All `.resolve(...)` calls replaced with `.is_enabled(...)`.
+- `UrlAsPromptFlag` constant references replaced with `ENABLE_URL_AS_PROMPT`.
+- Phase 5 file count dropped by one (no `feature_flags.py` under `src/intelligence/sme/`).
+
+## 22. SMERetrieval rename reached Phase 5 (extension of §8)
+
+**Fix applied 2026-04-21:** Phase 5's sole reference to `SMERetrievalLayer` renamed to `SMERetrieval` to match Phase 3 canonical.
+
 ## Execution order
 
 When executing these plans, follow this order:

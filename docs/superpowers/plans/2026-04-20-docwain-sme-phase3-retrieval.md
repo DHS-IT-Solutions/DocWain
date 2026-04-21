@@ -48,7 +48,7 @@ src/kg/
 └── retrieval.py                         [MODIFIED — include INFERRED_RELATION with confidence floor]
 
 src/api/
-└── admin_sme_api.py                     [MODIFIED — add per-sub enable_sme_retrieval flip endpoint]
+└── sme_admin_api.py                     [MODIFIED — add per-sub enable_sme_retrieval flip endpoint]
 
 src/config/
 └── feature_flags.py                     [EXISTING — Phase 1; Phase 3 adds 2 flag names + monotonic flag-set version]
@@ -198,7 +198,7 @@ git commit -m "phase3(sme-preflight): phase 1 + phase 2 dependencies verified"
 ## Task 2 — Admin endpoint to flip `enable_sme_retrieval` per subscription
 
 **Files:**
-- Modify: `src/api/admin_sme_api.py`
+- Modify: `src/api/sme_admin_api.py`
 - Create: `tests/api/test_admin_sme_flag_flip.py`
 
 Phase 1 shipped the generic flag resolver; Phase 2 shipped a sandbox-only `enable_sme_synthesis` flip. Phase 3 needs an operator-callable endpoint to flip `enable_sme_retrieval` per opt-in subscription with audit logging. The endpoint reuses the existing flag-flip handler; Phase 3 only adds route wiring, a validator for the specific flag names Phase 3 introduces, and an audit-log call.
@@ -306,10 +306,10 @@ Expected: FAIL (route not wired yet).
 
 - [ ] **Step 2: Wire the route**
 
-Modify `src/api/admin_sme_api.py`. Find the existing router and add:
+Modify `src/api/sme_admin_api.py`. Find the existing router and add:
 
 ```python
-# src/api/admin_sme_api.py  (additions only; surrounding module untouched)
+# src/api/sme_admin_api.py  (additions only; surrounding module untouched)
 from fastapi import HTTPException
 from src.config.feature_flags import (
     get_flag_resolver, set_subscription_override, bump_flag_set_version,
@@ -367,7 +367,7 @@ def flip_flag(flag_name: str, body: FlipBody, admin=Depends(require_admin_auth))
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/api/admin_sme_api.py src/config/feature_flags.py \
+git add src/api/sme_admin_api.py src/config/feature_flags.py \
         tests/api/test_admin_sme_flag_flip.py
 git commit -m "phase3(sme-flags): admin flip endpoint for enable_sme_retrieval"
 ```

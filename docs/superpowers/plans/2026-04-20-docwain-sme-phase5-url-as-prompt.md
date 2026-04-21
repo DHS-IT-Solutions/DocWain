@@ -11,8 +11,8 @@
 **Related spec:** `docs/superpowers/specs/2026-04-20-docwain-profile-sme-reasoning-design.md` Sections 3 (invariant 8 — zero internal timeouts, external I/O safety timeouts are fine), 7 (URL-as-prompt handling), 12 Phase 5 (exit gate), 13.2 (`enable_url_as_prompt` flag), 14 (URL-as-prompt data-leak risk / mitigations), 17 (acceptance criteria bullet on SSRF test suite).
 
 **Prior-phase contracts referenced by Phase 5:**
-- Phase 1 — `FeatureFlagResolver` (per-subscription flag resolution, Blob-backed with Redis cache) and `SubscriptionConfig` adapter that exposes domain allow/block lists. If Phase 1 plan has not yet landed, Phase 5 provides a minimal shim at the boundary (`src/intelligence/sme/feature_flags.py`) reading from `Config.FeatureFlags` with the same surface — Phase 1 replaces the shim without Phase 5 rewrites.
-- Phase 2 — `SMERetrievalLayer` signatures for Layer C. Phase 5 only uses the merge hook published by Phase 3; if Phase 3 is not yet landed, Phase 5 falls back to direct pack injection with the same shape (`EphemeralSource` → `List[Chunk]` with `ephemeral: true` metadata).
+- Phase 1 — `SMEFeatureFlags.is_enabled(sub, flag)` + flag constants (`ENABLE_URL_AS_PROMPT` in particular) in `src/config/feature_flags.py`, plus `get_flag_resolver()` factory. No shim needed; Phase 1 is the canonical source. `SubscriptionConfig` adapter exposes domain allow/block lists.
+- Phase 2 — `SMERetrieval` signatures for Layer C. Phase 5 only uses the merge hook published by Phase 3; if Phase 3 is not yet landed, Phase 5 falls back to direct pack injection with the same shape (`EphemeralSource` → `List[Chunk]` with `ephemeral: true` metadata).
 - Phase 3 — `UnifiedRetriever.retrieve()` parallel-layer orchestration and the pack-assembly `PackBudget`. Phase 5 adds Layer D (ephemeral URL) as a new concurrent leg; if Phase 3 is not yet landed, Phase 5 injects URL chunks directly into the reranker input with equivalent metadata.
 - Phase 4 — adapter `response_persona_prompts.supplementary_analysis` template and the `compose_with_supplementary()` helper in `src/generation/prompts.py`. If Phase 4 is not yet landed, Phase 5 writes the supplementary-composition template in `prompts.py` as a standalone addition scoped to URL queries only — nothing else changes in `prompts.py`.
 
@@ -38,7 +38,6 @@ src/tools/                                          [existing]
 
 src/agent/core_agent.py                             [MODIFIED — add Stage 0 URL task leg + merge logic]
 src/generation/prompts.py                           [MODIFIED — citation annotation + (fallback) supplementary template]
-src/intelligence/sme/feature_flags.py               [NEW OR SHIM — enable_url_as_prompt resolver]
 
 src/retrieval/unified_retriever.py                  [MODIFIED — accept Layer D ephemeral chunks]
 src/retrieval/ephemeral_merge.py                    [NEW — merge helper; keeps core_agent.py lean]
@@ -104,7 +103,6 @@ Each file does one thing. Fetcher does not know about chunking; ephemeral source
 - Create: `src/tools/url_fetcher.py` (empty stub)
 - Create: `src/tools/url_ephemeral_source.py` (empty stub)
 - Create: `src/retrieval/ephemeral_merge.py` (empty stub)
-- Create: `src/intelligence/sme/feature_flags.py` (empty stub)
 - Create: `tests/tools/url_fetcher/__init__.py` (empty)
 - Create: `tests/tools/url_fetcher/conftest.py`
 - Create: `tests/tools/url_ephemeral_source/__init__.py` (empty)
@@ -125,7 +123,7 @@ Read and record what is reusable:
 
 ```bash
 mkdir -p tests/tools/url_fetcher tests/tools/url_ephemeral_source tests/agent tests/retrieval tests/generation tests/perf tests/intelligence/sme
-touch src/tools/url_fetcher.py src/tools/url_ephemeral_source.py src/retrieval/ephemeral_merge.py src/intelligence/sme/feature_flags.py
+touch src/tools/url_fetcher.py src/tools/url_ephemeral_source.py src/retrieval/ephemeral_merge.py
 touch tests/tools/url_fetcher/__init__.py tests/tools/url_ephemeral_source/__init__.py
 ```
 
@@ -251,7 +249,7 @@ def stub_embedder() -> StubEmbedder:
 
 ```bash
 git add -f src/tools/url_fetcher.py src/tools/url_ephemeral_source.py \
-    src/retrieval/ephemeral_merge.py src/intelligence/sme/feature_flags.py \
+    src/retrieval/ephemeral_merge.py \
     tests/tools/url_fetcher/__init__.py tests/tools/url_fetcher/conftest.py \
     tests/tools/url_ephemeral_source/__init__.py tests/tools/url_ephemeral_source/conftest.py
 git commit -m "phase5(sme-url): scaffold url fetcher + ephemeral source dirs and fixtures"
@@ -259,156 +257,28 @@ git commit -m "phase5(sme-url): scaffold url fetcher + ephemeral source dirs and
 
 ---
 
-## Task 2: Feature-flag resolver (shim for Phase 1 flag infra)
+## Task 2: Verify Phase 1 feature flags exports `ENABLE_URL_AS_PROMPT`
 
 **Files:**
-- Create: `src/intelligence/sme/feature_flags.py`
-- Create: `tests/intelligence/sme/test_url_feature_flag.py`
+- Audit only: `src/config/feature_flags.py` (Phase 1 canonical module)
 
-Phase 1's `FeatureFlagResolver` may or may not have landed when Phase 5 begins. This task ships a minimal resolver that reads from `Config.FeatureFlags` (with a per-subscription override map) and exposes the exact shape Phase 1 will provide (`resolve(subscription_id, flag_name) -> bool`). If Phase 1 is present, this task detects the import and delegates.
+Per ERRATA §4, `src/config/feature_flags.py` is the canonical source for feature flags — it exports `SMEFeatureFlags.is_enabled(sub, flag)`, module-level string constants (including `ENABLE_URL_AS_PROMPT`), and the `get_flag_resolver()` factory. Phase 5 is a pure consumer; no parallel resolver module is created here.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Preflight grep**
 
-Create `tests/intelligence/sme/test_url_feature_flag.py`:
-
-```python
-"""Tests for the enable_url_as_prompt feature-flag resolver (Phase 5 shim)."""
-from __future__ import annotations
-
-from unittest.mock import patch
-
-import pytest
-
-from src.intelligence.sme.feature_flags import FeatureFlagResolver, UrlAsPromptFlag
-
-
-def test_default_is_off():
-    r = FeatureFlagResolver(default_map={}, subscription_overrides={})
-    assert r.resolve("sub_a", UrlAsPromptFlag) is False
-
-
-def test_global_default_on_applies():
-    r = FeatureFlagResolver(
-        default_map={UrlAsPromptFlag: True},
-        subscription_overrides={},
-    )
-    assert r.resolve("sub_a", UrlAsPromptFlag) is True
-
-
-def test_subscription_override_beats_default():
-    r = FeatureFlagResolver(
-        default_map={UrlAsPromptFlag: True},
-        subscription_overrides={"sub_a": {UrlAsPromptFlag: False}},
-    )
-    assert r.resolve("sub_a", UrlAsPromptFlag) is False
-    assert r.resolve("sub_b", UrlAsPromptFlag) is True
-
-
-def test_unknown_flag_returns_false():
-    r = FeatureFlagResolver(default_map={}, subscription_overrides={})
-    assert r.resolve("sub_a", "enable_frobnicator") is False
-
-
-def test_loads_from_config(monkeypatch):
-    class StubConfig:
-        class FeatureFlags:
-            DEFAULT = {UrlAsPromptFlag: True}
-            SUBSCRIPTION_OVERRIDES = {"sub_a": {UrlAsPromptFlag: False}}
-
-    monkeypatch.setattr("src.intelligence.sme.feature_flags._config_module", StubConfig)
-    r = FeatureFlagResolver.from_config()
-    assert r.resolve("sub_a", UrlAsPromptFlag) is False
-    assert r.resolve("sub_b", UrlAsPromptFlag) is True
-
-
-def test_missing_config_section_gives_safe_default(monkeypatch):
-    class StubConfig:
-        pass
-
-    monkeypatch.setattr("src.intelligence.sme.feature_flags._config_module", StubConfig)
-    r = FeatureFlagResolver.from_config()
-    assert r.resolve("sub_a", UrlAsPromptFlag) is False
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-```
-pytest tests/intelligence/sme/test_url_feature_flag.py -v
-```
-Expected: FAIL — module has no implementation yet.
-
-- [ ] **Step 3: Write the resolver**
-
-Create `src/intelligence/sme/feature_flags.py`:
-
-```python
-"""Feature-flag resolver for sub-project A.
-
-Phase-5 scope: only `enable_url_as_prompt` is consumed here. Phase 1 may
-later introduce a richer resolver backed by Azure Blob + Redis; this module
-is designed to be replaced by that resolver without any caller changes —
-same `resolve(subscription_id, flag_name) -> bool` signature.
-
-No timeouts. Reads are in-memory; the first read may trigger a lazy Config
-import but never does network I/O on the query path.
-"""
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
-
-# Flag constants — the only place their canonical names live.
-UrlAsPromptFlag = "enable_url_as_prompt"
-SmeRedesignFlag = "sme_redesign_enabled"
-
-# Deferred import sentinel so tests can monkeypatch.
-try:
-    from src.api import config as _config_module  # type: ignore
-except Exception:  # noqa: BLE001
-    _config_module = None  # type: ignore[assignment]
-
-
-@dataclass
-class FeatureFlagResolver:
-    """In-memory per-subscription flag resolution.
-
-    Attributes:
-        default_map: flag -> bool; global default.
-        subscription_overrides: subscription_id -> (flag -> bool).
-    """
-
-    default_map: Dict[str, bool] = field(default_factory=dict)
-    subscription_overrides: Dict[str, Dict[str, bool]] = field(default_factory=dict)
-
-    def resolve(self, subscription_id: str, flag_name: str) -> bool:
-        sub = self.subscription_overrides.get(subscription_id, {})
-        if flag_name in sub:
-            return bool(sub[flag_name])
-        return bool(self.default_map.get(flag_name, False))
-
-    @classmethod
-    def from_config(cls) -> "FeatureFlagResolver":
-        """Build from Config.FeatureFlags, with safe defaults when absent."""
-        cfg = _config_module
-        ff = getattr(cfg, "FeatureFlags", None) if cfg is not None else None
-        default_map = dict(getattr(ff, "DEFAULT", {}) or {}) if ff else {}
-        overrides = dict(getattr(ff, "SUBSCRIPTION_OVERRIDES", {}) or {}) if ff else {}
-        return cls(default_map=default_map, subscription_overrides=overrides)
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-```
-pytest tests/intelligence/sme/test_url_feature_flag.py -v
-```
-Expected: PASS for all 6 tests.
-
-- [ ] **Step 5: Commit**
+Confirm Phase 1's canonical surface is present before any Phase 5 consumer task imports it.
 
 ```bash
-git add src/intelligence/sme/feature_flags.py tests/intelligence/sme/test_url_feature_flag.py
-git commit -m "phase5(sme-url): feature-flag resolver shim for enable_url_as_prompt"
+grep -E 'ENABLE_URL_AS_PROMPT\s*=' src/config/feature_flags.py
+grep -E 'SMEFeatureFlags' src/config/feature_flags.py
+grep -E 'get_flag_resolver' src/config/feature_flags.py
 ```
+
+Expected: each grep returns at least one non-empty match. If any is empty, stop Phase 5 and land the missing Phase 1 export first per ERRATA §4.
+
+- [ ] **Step 2: No code or tests created in this task**
+
+Phase 5 does not create a parallel feature-flags module under `src/intelligence/sme/` and does not add any flag-resolver tests of its own — Phase 1 owns that surface and its tests. Consumer wiring in Tasks 3+ imports directly from `src.config.feature_flags`.
 
 ---
 
@@ -3178,7 +3048,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.intelligence.sme.feature_flags import FeatureFlagResolver, UrlAsPromptFlag
+from src.config.feature_flags import SMEFeatureFlags, ENABLE_URL_AS_PROMPT, get_flag_resolver
 
 
 def test_no_fetch_when_flag_off(monkeypatch):
@@ -3193,13 +3063,13 @@ Edit `src/agent/core_agent.py`:
 1. Add imports at the top:
 ```python
 from src.agent.url_case_selector import CaseSelection, RetrievalSignal, select_case
-from src.intelligence.sme.feature_flags import FeatureFlagResolver, UrlAsPromptFlag
+from src.config.feature_flags import SMEFeatureFlags, ENABLE_URL_AS_PROMPT, get_flag_resolver
 from src.retrieval.ephemeral_merge import merge_ephemeral
 from src.tools.url_ephemeral_source import EphemeralResult, UrlEphemeralSource
 from src.tools.url_fetcher import DomainPolicy, FetcherConfig
 from src.tools.web_search import detect_urls_in_query
 ```
-2. Extend `CoreAgent.__init__` with `flag_resolver: Optional[FeatureFlagResolver] = None`; default to `FeatureFlagResolver.from_config()` when omitted. Store as `self._flags`.
+2. Extend `CoreAgent.__init__` with `flag_resolver: Optional[SMEFeatureFlags] = None`; default to `get_flag_resolver()` when omitted (Phase 1 handles the singleton — no constructor needed in consumer code). Store as `self._flags`.
 3. Add a private helper `_build_fetcher_config(subscription_id: str) -> FetcherConfig` that pulls per-subscription domain policy / timeouts from Config or Phase 1 subscription adapter (use `Config.UrlFetcher` shim with safe defaults).
 4. In `handle()`, immediately after `query` is resolved, compute:
 ```python
@@ -3207,7 +3077,7 @@ urls: List[str] = []
 cleaned_query = query
 url_case = CaseSelection.NONE
 _ephemeral_future = None
-if self._flags.resolve(subscription_id, UrlAsPromptFlag):
+if self._flags.is_enabled(subscription_id, ENABLE_URL_AS_PROMPT):
     urls, cleaned_query = detect_urls_in_query(query)
     if urls:
         fetcher_cfg = self._build_fetcher_config(subscription_id)
@@ -3464,10 +3334,11 @@ Fill in the body of `tests/agent/test_core_agent_url_flag_off.py`:
 def test_no_fetch_when_flag_off(monkeypatch):
     from unittest.mock import MagicMock, patch
     from src.agent.core_agent import CoreAgent
-    from src.intelligence.sme.feature_flags import FeatureFlagResolver, UrlAsPromptFlag
+    from src.config.feature_flags import SMEFeatureFlags, ENABLE_URL_AS_PROMPT, get_flag_resolver
 
     llm, qdrant, embedder, mongo = MagicMock(), MagicMock(), MagicMock(), MagicMock()
-    flag_resolver = FeatureFlagResolver(default_map={UrlAsPromptFlag: False})
+    flag_resolver = MagicMock(spec=SMEFeatureFlags)
+    flag_resolver.is_enabled.return_value = False
     agent = CoreAgent(
         llm_gateway=llm, qdrant_client=qdrant, embedder=embedder, mongodb=mongo,
     )
@@ -3940,6 +3811,8 @@ Run this before declaring Phase 5 done. Each box must be genuinely ticked, not w
 2. For PDF URL content, Phase 5 does a minimal text decode rather than running the full PDF extraction pipeline. Is a richer PDF path needed in Phase 5, or can it wait for sub-project C (URL ingestion)?
 3. The curated URL list size (~50) for fail-rate measurement — operators may want to expand this per domain. Plan ships a starter; ops can extend.
 4. Does the ephemeral session cache need TTL-based expiry (e.g., 10 minutes)? Plan keeps it session-scoped only (cleared on session teardown) — no TTL needed. Revisit if memory pressure shows up in pattern mining.
+
+**Post-draft errata alignment (2026-04-21):** Applied ERRATA §4 (feature flags canonical — Phase 1's `src.config.feature_flags`) and §8 (SMERetrieval rename) on 2026-04-21. Parallel `src/intelligence/sme/feature_flags.py` removed from Phase 5 scope; Phase 5 is a pure consumer of Phase 1's feature-flag surface.
 
 ---
 

@@ -1305,7 +1305,14 @@ class Neo4jBridge(Protocol):
 
 @dataclass
 class StorageDeps:
-    blob: BlobStore; qdrant: QdrantBridge; neo4j: Neo4jBridge
+    """Phase 1 skeleton deps. Phase 2 extends with `embedder` for
+    real put_snippet vector computation (see Phase 2 Task 11). `embedder`
+    here is optional so Phase 1 tests that don't exercise vector writes
+    can omit it; Phase 2 makes it required at call sites."""
+    blob: BlobStore
+    qdrant: QdrantBridge
+    neo4j: Neo4jBridge
+    embedder: object | None = None  # Phase 2 populates; Phase 1 skeleton may leave None
 
 
 class SMEArtifactStorage:
