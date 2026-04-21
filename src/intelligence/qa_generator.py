@@ -602,9 +602,110 @@ class QACacheManager:
         scored_pairs.sort(key=lambda x: x["match_score"], reverse=True)
         return scored_pairs[:max_results]
 
+# ---------------------------------------------------------------------------
+# QA cache-index emission (ERRATA §13, user Task 14)
+#
+# Phase 3's ``QAFastPath.lookup`` reads ``qa_idx:{sub}:{prof}:{fingerprint}``
+# Redis keys to short-circuit familiar questions. Phase 2 owns the emission
+# + invalidation contract: :func:`emit_qa_index` writes the per-Q&A keys as
+# part of the synthesis pipeline; :func:`qa_index_fingerprint` gives the
+# exact fingerprint Phase 3 must compute to hit the cache (normalized
+# question → SHA-256 hex). The invalidation hook lives in
+# ``src/api/pipeline_api.invalidate_qa_index`` so the Phase 2 training-stage
+# flow can clear the cache on ``PIPELINE_TRAINING_COMPLETED`` transition.
+# ---------------------------------------------------------------------------
+_QA_INDEX_TTL_S = 86400  # 24h; the next synthesis run refreshes stale keys.
+
+
+def qa_index_fingerprint(question: str) -> str:
+    """Return the canonical fingerprint for ``question``.
+
+    Normalizes whitespace + lowercases the question before hashing — Phase
+    3's ``QAFastPath.lookup`` MUST apply the same normalization for the
+    cache to hit. Bug here = silent cache miss, so this helper is the
+    single source of truth and is tested directly.
+    """
+    norm = " ".join((question or "").strip().lower().split())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+
+
+def emit_qa_index(
+    *,
+    subscription_id: str,
+    profile_id: str,
+    pairs: List[Dict[str, Any]],
+    redis_client: Any = None,
+    ttl_s: int = _QA_INDEX_TTL_S,
+) -> int:
+    """Emit ``qa_idx:{sub}:{prof}:{fingerprint}`` Redis keys for each pair.
+
+    ``pairs`` is a list of dicts with at minimum ``question`` / ``answer``
+    keys (extra keys are passed through into the stored JSON). Returns the
+    number of keys successfully written. ``redis_client`` is injectable so
+    tests can pass a MagicMock without standing up Redis; production callers
+    leave it unset and we resolve via :func:`src.api.dw_newron.get_redis_client`.
+
+    Profile isolation is enforced at the key level — the subscription +
+    profile live in every key so Phase 3's scan-and-delete invalidation
+    operates on a bounded, per-profile namespace.
+    """
+    if not subscription_id or not profile_id:
+        raise ValueError(
+            "subscription_id and profile_id are required for QA index emission"
+        )
+    client = redis_client if redis_client is not None else _resolve_redis_client()
+    if client is None:
+        logger.debug("qa_idx emit skipped — no redis client available")
+        return 0
+    written = 0
+    for pair in pairs:
+        question = (pair or {}).get("question")
+        if not question:
+            continue
+        fingerprint = qa_index_fingerprint(question)
+        key = f"qa_idx:{subscription_id}:{profile_id}:{fingerprint}"
+        try:
+            payload = json.dumps(
+                {
+                    "question": question,
+                    "answer": pair.get("answer", ""),
+                    "metadata": pair.get("metadata", {}),
+                },
+                ensure_ascii=False,
+            )
+            client.set(key, payload, ex=int(ttl_s))
+            written += 1
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "qa_idx emit failed for %s/%s fingerprint=%s",
+                subscription_id,
+                profile_id,
+                fingerprint,
+                exc_info=True,
+            )
+    return written
+
+
+def _resolve_redis_client():
+    """Lazy import the process-wide Redis client.
+
+    Wrapped so tests can patch without having the network-facing Redis
+    module imported at module load time.
+    """
+    try:
+        from src.api.dw_newron import get_redis_client
+
+        return get_redis_client()
+    except Exception:  # noqa: BLE001
+        logger.debug("get_redis_client unavailable", exc_info=True)
+        return None
+
+
 __all__ = [
     "QAGenerator",
     "GeneratedQA",
     "QAGenerationResult",
     "QACacheManager",
+    "emit_qa_index",
+    "qa_index_fingerprint",
 ]
