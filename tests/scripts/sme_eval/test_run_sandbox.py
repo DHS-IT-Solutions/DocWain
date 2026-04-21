@@ -41,6 +41,14 @@ def test_unreachable_api_writes_skipped_snapshot(tmp_path: Path) -> None:
     assert "api unreachable" in snapshot["reason"]
 
 
+def _stub_baseline(out: Path, live_snapshot: dict):
+    def _run(argv):
+        out.write_text(json.dumps(live_snapshot), encoding="utf-8")
+        return 0
+
+    return _run
+
+
 def test_live_run_with_positive_hit_rate_exits_ok(tmp_path: Path) -> None:
     out = tmp_path / "sandbox.json"
     live_snapshot = {
@@ -50,17 +58,8 @@ def test_live_run_with_positive_hit_rate_exits_ok(tmp_path: Path) -> None:
             "hallucination_rate": {"value": 0.0, "status": "ok"},
         },
     }
-
-    class _FakeBaseline:
-        @staticmethod
-        def main(argv):
-            out.write_text(
-                json.dumps(live_snapshot), encoding="utf-8"
-            )
-            return 0
-
-    with patch.object(run_sandbox, "_probe_api", return_value=True), patch.dict(
-        "sys.modules", {"scripts.sme_eval.run_baseline": _FakeBaseline}
+    with patch.object(run_sandbox, "_probe_api", return_value=True), patch.object(
+        run_sandbox, "_baseline_main", _stub_baseline(out, live_snapshot)
     ):
         rc = run_sandbox.main(["--out", str(out)])
     assert rc == 0
@@ -77,17 +76,8 @@ def test_live_run_zero_hit_rate_exits_nonzero(tmp_path: Path) -> None:
             "sme_artifact_hit_rate": {"value": 0.0, "status": "ok"},
         },
     }
-
-    class _FakeBaseline:
-        @staticmethod
-        def main(argv):
-            out.write_text(
-                json.dumps(live_snapshot), encoding="utf-8"
-            )
-            return 0
-
-    with patch.object(run_sandbox, "_probe_api", return_value=True), patch.dict(
-        "sys.modules", {"scripts.sme_eval.run_baseline": _FakeBaseline}
+    with patch.object(run_sandbox, "_probe_api", return_value=True), patch.object(
+        run_sandbox, "_baseline_main", _stub_baseline(out, live_snapshot)
     ):
         rc = run_sandbox.main(["--out", str(out)])
     assert rc == 1
@@ -104,17 +94,8 @@ def test_live_run_hallucination_regression_exits_nonzero(
             "hallucination_rate": {"value": 0.08, "status": "ok"},
         },
     }
-
-    class _FakeBaseline:
-        @staticmethod
-        def main(argv):
-            out.write_text(
-                json.dumps(live_snapshot), encoding="utf-8"
-            )
-            return 0
-
-    with patch.object(run_sandbox, "_probe_api", return_value=True), patch.dict(
-        "sys.modules", {"scripts.sme_eval.run_baseline": _FakeBaseline}
+    with patch.object(run_sandbox, "_probe_api", return_value=True), patch.object(
+        run_sandbox, "_baseline_main", _stub_baseline(out, live_snapshot)
     ):
         rc = run_sandbox.main(["--out", str(out)])
     assert rc == 1

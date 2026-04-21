@@ -27,6 +27,18 @@ from pathlib import Path
 _METRIC_KEYS_WATCH = ("sme_artifact_hit_rate", "hallucination_rate")
 
 
+def _baseline_main(argv: list[str]) -> int:
+    """Indirection over the Phase 0 baseline entrypoint.
+
+    Wrapped as a module-level callable so tests can ``patch.object`` this
+    directly — ``patch.dict('sys.modules', ...)`` leaks across tests when
+    another test has already imported ``run_baseline``.
+    """
+    from scripts.sme_eval import run_baseline
+
+    return run_baseline.main(argv)
+
+
 def _probe_api(base_url: str, timeout: float = 2.0) -> bool:
     """Return True iff ``/health`` (or equivalent) responds 2xx. Best-effort."""
     try:
@@ -114,11 +126,9 @@ def main(argv: list[str] | None = None) -> int:
             f"api unreachable at {args.api_base_url}"
         )
     else:
-        # Live run: delegate to run_baseline's main entrypoint. We do this
-        # via module import so the resulting snapshot JSON is exactly what
-        # Phase 0 would produce — no shape drift between dev and prod.
-        from scripts.sme_eval import run_baseline
-
+        # Live run: delegate to the module-level ``_baseline_main`` callable
+        # so tests can inject a stub without patching ``sys.modules`` (which
+        # leaks across tests when the module has already been imported).
         baseline_argv = [
             "--eval-dir",
             "tests/sme_evalset_v1/queries",
@@ -130,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
             args.api_base_url,
             "--skip-llm-judge",
         ]
-        exit_code = run_baseline.main(baseline_argv)
+        exit_code = _baseline_main(baseline_argv)
         if exit_code != 0 or not out.exists():
             snapshot = _synthetic_snapshot(
                 f"baseline exit_code={exit_code}"
