@@ -91,3 +91,8 @@ def test_grep_gate_no_fast_smart_refs(repo_root: pathlib.Path):
         + "\n  ".join(offenders[:50])
         + (f"\n  ...and {len(offenders) - 50} more" if len(offenders) > 50 else "")
     )
+
+
+def test_intelligence_handler_importable():
+    """The new unified handler must import without error."""
+    from src.serving.intelligence_handler import IntelligenceHandler  # noqa: F401
