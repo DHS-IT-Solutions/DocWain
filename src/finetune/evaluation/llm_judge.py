@@ -48,7 +48,7 @@ JUDGE_DIMENSIONS = [
 ]
 
 DEFAULT_VLLM_URL = "http://localhost:8100/v1/chat/completions"
-DEFAULT_VLLM_MODEL = "docwain-fast"
+DEFAULT_VLLM_MODEL = "docwain"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_OLLAMA_MODEL = "qwen3:14b"
 

@@ -39,7 +39,7 @@ class VLLMManager:
     def __init__(
         self,
         url: str = "http://localhost:8100",
-        model: str = "docwain-fast",
+        model: str = "docwain",
         gpu_mode_file: str = GPU_MODE_FILE,
     ) -> None:
         self._url = url.rstrip("/")
