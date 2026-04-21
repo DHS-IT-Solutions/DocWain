@@ -6,13 +6,13 @@
 
 **Architecture:** A new orchestration layer lives in `src/retrieval/unified_retriever.py` (extended, not replaced) and a thin coordinator `src/retrieval/pack_assembler.py`. Four layer fetchers run in parallel via a single `ThreadPoolExecutor` (max_workers=4). Layer A is the existing dense-or-hybrid Qdrant path (hybrid already landed in Phase 1 under `enable_hybrid_retrieval`). Layer B is `src/kg/retrieval.py` extended to include synthesized edges with a confidence floor (Phase 2 landed the edges; Phase 3 turns on the query-time filter flip). Layer C is `src/retrieval/sme_retrieval.py` from Phase 2, now **called from the agent** instead of being dark. Layer D is a stub that returns an empty result for all queries — Phase 5 owns URL fetch. Results from all four layers flow through a merge step that deduplicates on `(doc_id, chunk_id)`-equivalent keys, then a cross-encoder reranker (`src/retrieval/reranker.py` already exists — extended with the SME-aware score blend), then MMR diversity selection with adapter-tunable lambda, then `PackAssembler` enforces the per-intent `max_pack_tokens` budget from the adapter and drops lowest-confidence items first. A QA-cache fast path short-circuits the entire retrieval and reasoning pipeline when the query fingerprint hits a pre-grounded Q&A pair from `src/intelligence/qa_generator.py`. A Redis retrieval cache keyed by `(subscription_id, profile_id, query_fingerprint, flag_set_version)` memoizes the merged pack for five minutes so near-duplicate queries skip Stages 1–2 entirely. Intent-aware layer gating — driven off the intent field that `src/agent/intent.py` produces — turns Layer B and Layer C **off** for `greeting`, `identity`, `lookup`, `count`, and `extract` intents, where SME artifacts add latency but no recall. Three feature flags (`enable_sme_retrieval`, `enable_hybrid_retrieval`, `enable_cross_encoder_rerank`) default ON under the Phase 1 master `sme_redesign_enabled` flag; `enable_sme_retrieval` remains the one that must be flipped per-subscription to actually pull Layer C.
 
-**Tech Stack:** Python 3.12, existing `qdrant-client` (dense + sparse via hybrid helper from Phase 1), existing `neo4j` driver (Phase 2's `INFERRED_RELATION` edges), existing `sentence-transformers` cross-encoder (already loaded once at app startup in `src/api/rag_state.py`), existing Redis (`src/cache/redis_store.py`), existing `FeatureFlagResolver` from Phase 1 (`src/intelligence/sme/feature_flags.py`), existing `AdapterLoader` from Phase 1 (`src/intelligence/sme/adapter_loader.py`), existing `SMERetrievalLayer` from Phase 2 (`src/retrieval/sme_retrieval.py`), existing `QAGenerator` from `src/intelligence/qa_generator.py`, `pytest` + `pytest-asyncio` for tests, `hypothesis` for property-based pack-budget tests.
+**Tech Stack:** Python 3.12, existing `qdrant-client` (dense + sparse via hybrid helper from Phase 1), existing `neo4j` driver (Phase 2's `INFERRED_RELATION` edges), existing `sentence-transformers` cross-encoder (already loaded once at app startup in `src/api/rag_state.py`), existing Redis (`src/cache/redis_store.py`), existing `SMEFeatureFlags` from Phase 1 (`src/config/feature_flags.py`), existing `AdapterLoader` from Phase 1 (`src/intelligence/sme/adapter_loader.py`), existing `SMERetrieval` from Phase 2 (`src/retrieval/sme_retrieval.py`), existing `QAGenerator` from `src/intelligence/qa_generator.py`, `pytest` + `pytest-asyncio` for tests, `hypothesis` for property-based pack-budget tests.
 
 **Related spec:** `docs/superpowers/specs/2026-04-20-docwain-profile-sme-reasoning-design.md` Sections 7 (query-time retrieval architecture — fully implemented here), 8 (grounding — only the retrieval-filter + pack provenance parts; prompt work is Phase 4), 10 (measurement — Phase 3 launch gate), 12 (rollout — Phase 3 gate: faithfulness 0.514 → ≥ 0.80, hallucination unchanged, context_recall ≥ 0.80).
 
 **Prior-phase contracts referenced by Phase 3:**
-- Phase 1 — `FeatureFlagResolver.resolve(sub_id, flag_name)`, `AdapterLoader.load(sub_id, profile_domain)`, Qdrant sparse-vector re-index complete, embedded cross-encoder available as `app_state.reranker`.
-- Phase 2 — `SMERetrievalLayer.retrieve(query, sub_id, profile_id, top_k, artifact_types=None)` returns `List[SMEArtifactHit]`; KG multi-hop materializer has populated `INFERRED_RELATION` edges with a `confidence` property that clients filter by.
+- Phase 1 — `SMEFeatureFlags.is_enabled(sub_id, flag)` (from `src.config.feature_flags`, singleton via `get_flag_resolver()`), `AdapterLoader.load(sub_id, profile_domain)` (singleton via `get_adapter_loader()`), Qdrant sparse-vector re-index complete, embedded cross-encoder available as `app_state.reranker`.
+- Phase 2 — `SMERetrieval.retrieve(query, sub_id, profile_id, top_k, artifact_types=None)` returns `List[SMEArtifactHit]`; `UnifiedRetriever.retrieve_layer_b(query, subscription_id, profile_id, top_k, include_inferred=True, inferred_confidence_floor=0.6)` is the canonical KG helper; KG multi-hop materializer has populated `INFERRED_RELATION` edges with a `confidence` property that clients filter by.
 - Phase 0 — `tests/sme_evalset_v1/` plus `scripts/sme_eval/run_baseline.py` plus `tests/sme_metrics_baseline_YYYY-MM-DD.json` committed. Phase 3 re-runs the same harness against the flag-ON deployment to produce `tests/sme_metrics_phase3_YYYY-MM-DD.json`.
 
 **Memory rules that constrain this plan (hard):**
@@ -50,8 +50,8 @@ src/kg/
 src/api/
 └── admin_sme_api.py                     [MODIFIED — add per-sub enable_sme_retrieval flip endpoint]
 
-src/intelligence/sme/
-└── feature_flags.py                     [EXISTING — Phase 1; Phase 3 adds 2 flag names to schema]
+src/config/
+└── feature_flags.py                     [EXISTING — Phase 1; Phase 3 adds 2 flag names + monotonic flag-set version]
 
 tests/retrieval/                         [existing dir]
 ├── test_unified_retriever_four_layer.py [NEW]
@@ -91,21 +91,21 @@ Each file does one thing. `pack_assembler.py` does not know about HTTP or the LL
 ## Task 1 — Audit Phase 1 + Phase 2 prerequisites
 
 **Files:**
-- Audit only: `src/intelligence/sme/feature_flags.py`, `src/intelligence/sme/adapter_loader.py`, `src/retrieval/hybrid_search.py`, `src/retrieval/sme_retrieval.py`, `src/kg/retrieval.py`, `src/api/rag_state.py`, `scripts/reindex_qdrant_sparse.py`.
+- Audit only: `src/config/feature_flags.py`, `src/intelligence/sme/adapter_loader.py`, `src/retrieval/hybrid_search.py`, `src/retrieval/sme_retrieval.py`, `src/kg/retrieval.py`, `src/retrieval/unified_retriever.py`, `src/api/rag_state.py`, `scripts/reindex_qdrant_sparse.py`.
 
 Purpose: before a single line of Phase 3 code ships, confirm the prior-phase surfaces Phase 3 depends on are actually in place in the branch, at the shape the plan assumes. Phase 3 fails silently and nastily if Layer C is not retrievable or if the cross-encoder is not cached on the app state.
 
-- [ ] **Step 1: Verify `FeatureFlagResolver` surface**
+- [ ] **Step 1: Verify `SMEFeatureFlags` surface**
 
-Run: `grep -n "class FeatureFlagResolver" src/intelligence/sme/feature_flags.py` and confirm these methods exist with the signatures below. If any are missing, STOP and file a Phase 1 bug — do not proceed.
+Run: `grep -n "class SMEFeatureFlags" src/config/feature_flags.py` and confirm the canonical surface exists. If any item below is missing, STOP and file a Phase 1 bug — do not proceed.
 
 Required:
-- `FeatureFlagResolver.resolve(subscription_id: str, flag_name: str) -> bool`
-- `FeatureFlagResolver.resolve_all(subscription_id: str) -> dict[str, bool]`
-- `FeatureFlagResolver.set(subscription_id: str, flag_name: str, value: bool, actor: str) -> None` (used by the admin API in Task 2)
-- Known flag constants: `SME_REDESIGN_ENABLED`, `ENABLE_SME_SYNTHESIS`, `ENABLE_SME_RETRIEVAL`, `ENABLE_KG_SYNTHESIZED_EDGES`, `ENABLE_RICH_MODE`, `ENABLE_URL_AS_PROMPT`.
+- `SMEFeatureFlags.is_enabled(subscription_id: str, flag: str) -> bool` (master-gating precedence)
+- `get_flag_resolver() -> SMEFeatureFlags` module-level singleton factory
+- An override entry point that can be used by the admin endpoint in Task 2 (e.g. `set_subscription_override(subscription_id, flag, value, actor)` — exact name TBD by Phase 1; audit confirms it exists and is callable)
+- Known flag constants (exact string values per ERRATA §4): `SME_REDESIGN_ENABLED`, `ENABLE_SME_SYNTHESIS`, `ENABLE_SME_RETRIEVAL`, `ENABLE_KG_SYNTHESIZED_EDGES`, `ENABLE_RICH_MODE`, `ENABLE_URL_AS_PROMPT`, `ENABLE_HYBRID_RETRIEVAL`, `ENABLE_CROSS_ENCODER_RERANK`.
 
-If `ENABLE_HYBRID_RETRIEVAL` and `ENABLE_CROSS_ENCODER_RERANK` are missing from the constant list: Task 10 adds them. Other missing flags → stop.
+If any flag constant is missing from `src.config.feature_flags`: stop and file a Phase 1 bug (Phase 1 is responsible for the full 8-flag set).
 
 - [ ] **Step 2: Verify `AdapterLoader` produces `retrieval_caps`**
 
@@ -118,12 +118,12 @@ python -c "from src.intelligence.sme.adapter_loader import get_adapter_loader; \
 
 Expected: prints the adapter's per-intent `max_pack_tokens` map for `analyze`, `diagnose`, `recommend`, `investigate` (and inherits `generic` for smaller intents). If the output is empty or the key is missing, update the `generic.yaml` in Blob per the spec Section 5 example, invalidate the adapter cache, retry. This is a blocker.
 
-- [ ] **Step 3: Verify `SMERetrievalLayer` is callable against a seeded sandbox profile**
+- [ ] **Step 3: Verify `SMERetrieval` is callable against a seeded sandbox profile**
 
 ```bash
 python -c "
-from src.retrieval.sme_retrieval import SMERetrievalLayer
-layer = SMERetrievalLayer()
+from src.retrieval.sme_retrieval import SMERetrieval
+layer = SMERetrieval()
 hits = layer.retrieve(
     query='summarize revenue trends',
     subscription_id='REPLACE_WITH_SANDBOX_SUB',
@@ -213,7 +213,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.main import app
-from src.intelligence.sme.feature_flags import get_flag_resolver
+from src.config.feature_flags import (
+    get_flag_resolver, ENABLE_SME_RETRIEVAL, SME_REDESIGN_ENABLED,
+)
+from src.config import feature_flags as _ff_mod
 
 
 @pytest.fixture
@@ -222,22 +225,33 @@ def client():
 
 
 @pytest.fixture(autouse=True)
-def _reset_flags():
-    get_flag_resolver().clear_cache()
+def _reset_flag_store(monkeypatch):
+    # Reset the in-memory override store and the monotonic version counter.
+    # The admin endpoint calls set_subscription_override which bumps the
+    # module-level counter (see Task 10).
+    from tests.helpers.flag_store import reset_test_flag_store  # helper shipped with Phase 1
+    reset_test_flag_store()
     yield
-    get_flag_resolver().clear_cache()
+    reset_test_flag_store()
 
 
 def test_flip_enable_sme_retrieval_on(client, admin_auth_headers):
+    # Master must be on for the dependent flag to resolve True end-to-end.
+    resp_master = client.post(
+        f"/admin/sme/flags/{SME_REDESIGN_ENABLED}",
+        json={"subscription_id": "sub_fin_1", "value": True, "reason": "phase3 rollout"},
+        headers=admin_auth_headers,
+    )
+    assert resp_master.status_code == 200
     resp = client.post(
-        "/admin/sme/flags/enable_sme_retrieval",
+        f"/admin/sme/flags/{ENABLE_SME_RETRIEVAL}",
         json={"subscription_id": "sub_fin_1", "value": True, "reason": "opt-in fin"},
         headers=admin_auth_headers,
     )
     assert resp.status_code == 200
-    assert resp.json()["flag"] == "enable_sme_retrieval"
+    assert resp.json()["flag"] == ENABLE_SME_RETRIEVAL
     assert resp.json()["value"] is True
-    assert get_flag_resolver().resolve("sub_fin_1", "enable_sme_retrieval") is True
+    assert get_flag_resolver().is_enabled("sub_fin_1", ENABLE_SME_RETRIEVAL) is True
 
 
 def test_flip_rejects_unknown_flag(client, admin_auth_headers):
@@ -252,7 +266,7 @@ def test_flip_rejects_unknown_flag(client, admin_auth_headers):
 
 def test_flip_requires_admin_auth(client):
     resp = client.post(
-        "/admin/sme/flags/enable_sme_retrieval",
+        f"/admin/sme/flags/{ENABLE_SME_RETRIEVAL}",
         json={"subscription_id": "sub_fin_1", "value": True},
     )
     assert resp.status_code in (401, 403)
@@ -260,25 +274,31 @@ def test_flip_requires_admin_auth(client):
 
 def test_flip_writes_audit_log(client, admin_auth_headers, captured_audit):
     client.post(
-        "/admin/sme/flags/enable_sme_retrieval",
+        f"/admin/sme/flags/{ENABLE_SME_RETRIEVAL}",
         json={"subscription_id": "sub_fin_1", "value": True, "reason": "opt-in"},
         headers=admin_auth_headers,
     )
     assert any(
-        e["flag"] == "enable_sme_retrieval" and e["new_value"] is True
+        e["flag"] == ENABLE_SME_RETRIEVAL and e["new_value"] is True
         for e in captured_audit
     )
 
 
 def test_flip_off_disables_layer_c(client, admin_auth_headers):
-    get_flag_resolver().set("sub_fin_1", "enable_sme_retrieval", True, actor="test")
+    # Seed master ON + flag ON via the admin endpoint, then flip flag OFF.
+    for flag in (SME_REDESIGN_ENABLED, ENABLE_SME_RETRIEVAL):
+        client.post(
+            f"/admin/sme/flags/{flag}",
+            json={"subscription_id": "sub_fin_1", "value": True, "reason": "seed"},
+            headers=admin_auth_headers,
+        )
     resp = client.post(
-        "/admin/sme/flags/enable_sme_retrieval",
+        f"/admin/sme/flags/{ENABLE_SME_RETRIEVAL}",
         json={"subscription_id": "sub_fin_1", "value": False, "reason": "rollback"},
         headers=admin_auth_headers,
     )
     assert resp.status_code == 200
-    assert get_flag_resolver().resolve("sub_fin_1", "enable_sme_retrieval") is False
+    assert get_flag_resolver().is_enabled("sub_fin_1", ENABLE_SME_RETRIEVAL) is False
 ```
 
 Run: `pytest tests/api/test_admin_sme_flag_flip.py -v`
@@ -291,14 +311,18 @@ Modify `src/api/admin_sme_api.py`. Find the existing router and add:
 ```python
 # src/api/admin_sme_api.py  (additions only; surrounding module untouched)
 from fastapi import HTTPException
-from src.intelligence.sme.feature_flags import (
-    FeatureFlagResolver, get_flag_resolver,
+from src.config.feature_flags import (
+    get_flag_resolver, set_subscription_override, bump_flag_set_version,
     SME_REDESIGN_ENABLED, ENABLE_SME_SYNTHESIS, ENABLE_SME_RETRIEVAL,
     ENABLE_KG_SYNTHESIZED_EDGES, ENABLE_RICH_MODE, ENABLE_URL_AS_PROMPT,
     ENABLE_HYBRID_RETRIEVAL, ENABLE_CROSS_ENCODER_RERANK,
 )
 
+# Phase 3 owns the retrieval-side flips. Master + dependent toggles remain
+# Phase 2 territory but are whitelisted here too so a single endpoint serves
+# both phases.
 _PHASE3_FLIPPABLE = {
+    SME_REDESIGN_ENABLED,
     ENABLE_SME_RETRIEVAL,
     ENABLE_KG_SYNTHESIZED_EDGES,
     ENABLE_HYBRID_RETRIEVAL,
@@ -310,13 +334,17 @@ _PHASE3_FLIPPABLE = {
 def flip_flag(flag_name: str, body: FlipBody, admin=Depends(require_admin_auth)):
     if flag_name not in _PHASE3_FLIPPABLE:
         raise HTTPException(status_code=400, detail=f"unknown flag: {flag_name}")
-    prior = get_flag_resolver().resolve(body.subscription_id, flag_name)
-    get_flag_resolver().set(
+    resolver = get_flag_resolver()
+    prior = resolver.is_enabled(body.subscription_id, flag_name)
+    # Phase 1's override helper persists the override to the flag store and
+    # bumps the monotonic flag_set_version counter Task 10 reads.
+    set_subscription_override(
         subscription_id=body.subscription_id,
-        flag_name=flag_name,
+        flag=flag_name,
         value=body.value,
         actor=admin.email,
     )
+    bump_flag_set_version()  # idempotent; invalidates retrieval cache keys
     _audit_log({
         "kind": "sme_flag_flip",
         "flag": flag_name,
@@ -330,7 +358,7 @@ def flip_flag(flag_name: str, body: FlipBody, admin=Depends(require_admin_auth))
             "value": body.value, "prior_value": prior}
 ```
 
-Add `ENABLE_HYBRID_RETRIEVAL` and `ENABLE_CROSS_ENCODER_RERANK` as flag constants in `src/intelligence/sme/feature_flags.py` if missing (Task 10 confirms).
+`set_subscription_override` and `bump_flag_set_version` are Phase 1 exports (canonical per ERRATA §4). If missing at audit time, stop and file a Phase 1 bug; Phase 3 must not define a parallel override path.
 
 - [ ] **Step 3: Run tests green**
 
@@ -339,7 +367,7 @@ Add `ENABLE_HYBRID_RETRIEVAL` and `ENABLE_CROSS_ENCODER_RERANK` as flag constant
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/api/admin_sme_api.py src/intelligence/sme/feature_flags.py \
+git add src/api/admin_sme_api.py src/config/feature_flags.py \
         tests/api/test_admin_sme_flag_flip.py
 git commit -m "phase3(sme-flags): admin flip endpoint for enable_sme_retrieval"
 ```
@@ -365,6 +393,27 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.retrieval.unified_retriever import UnifiedRetriever, RetrievalBundle
+from src.config.feature_flags import ENABLE_SME_RETRIEVAL, SME_REDESIGN_ENABLED
+
+
+@pytest.fixture
+def _all_flags_on(monkeypatch):
+    """Stub get_flag_resolver() to return a fake that reports everything on."""
+    from src.config import feature_flags as ff
+    class _AllOn:
+        def is_enabled(self, *_a, **_kw): return True
+    monkeypatch.setattr(ff, "get_flag_resolver", lambda: _AllOn())
+    yield
+
+
+@pytest.fixture
+def _sme_flag_off(monkeypatch):
+    from src.config import feature_flags as ff
+    class _Resolver:
+        def is_enabled(self, sub, flag):
+            return flag != ENABLE_SME_RETRIEVAL
+    monkeypatch.setattr(ff, "get_flag_resolver", lambda: _Resolver())
+    yield
 
 
 @pytest.fixture
@@ -383,12 +432,14 @@ def fake_qdrant():
 
 @pytest.fixture
 def fake_kg():
+    # Phase 2 KGRetrievalClient surface: one_hop + inferred_relations.
     k = MagicMock()
-    k.retrieve_context.return_value = {
-        "nodes": [{"id": "n1", "name": "Revenue"}],
-        "edges": [{"type": "INFERRED_RELATION", "from": "n1", "to": "n2",
-                   "confidence": 0.82, "relation_type": "correlates_with"}],
-    }
+    k.one_hop.return_value = [
+        {"from": "n1", "to": "n2", "relation_type": "cites", "confidence": 0.9},
+    ]
+    k.inferred_relations.return_value = [
+        {"from": "n1", "to": "n3", "relation_type": "correlates_with", "confidence": 0.82},
+    ]
     return k
 
 
@@ -402,15 +453,13 @@ def fake_sme():
     return s
 
 
-def test_all_four_layers_invoked(fake_qdrant, fake_kg, fake_sme):
-    ur = UnifiedRetriever(qdrant=fake_qdrant, kg=fake_kg, sme=fake_sme)
+def test_all_four_layers_invoked(_all_flags_on, fake_qdrant, fake_kg, fake_sme):
+    ur = UnifiedRetriever(kg_client=fake_kg, qdrant=fake_qdrant, sme=fake_sme)
     bundle = ur.retrieve(
         query="revenue trend",
         subscription_id="s1", profile_id="p1",
         query_understanding={"intent": "analyze"},
-        flags={"enable_sme_retrieval": True,
-               "enable_hybrid_retrieval": True,
-               "enable_cross_encoder_rerank": True},
+        flags={},  # resolver is the source of truth; flags dict is legacy
     )
     assert isinstance(bundle, RetrievalBundle)
     assert bundle.layer_a_chunks is not None
@@ -418,58 +467,61 @@ def test_all_four_layers_invoked(fake_qdrant, fake_kg, fake_sme):
     assert bundle.layer_c_sme is not None
     assert bundle.layer_d_url == []
     fake_qdrant.search.assert_called()
-    fake_kg.retrieve_context.assert_called()
+    # retrieve_layer_b drives one_hop + inferred_relations under the hood.
+    fake_kg.one_hop.assert_called()
     fake_sme.retrieve.assert_called()
 
 
-def test_layers_run_in_parallel(fake_qdrant, fake_kg, fake_sme):
+def test_layers_run_in_parallel(_all_flags_on, fake_qdrant, fake_kg, fake_sme):
     import time
     def slow_qdrant(*a, **kw): time.sleep(0.15); return fake_qdrant.search.return_value
-    def slow_kg(*a, **kw): time.sleep(0.15); return fake_kg.retrieve_context.return_value
+    def slow_kg(*a, **kw): time.sleep(0.15); return fake_kg.one_hop.return_value
     def slow_sme(*a, **kw): time.sleep(0.15); return fake_sme.retrieve.return_value
     fake_qdrant.search.side_effect = slow_qdrant
-    fake_kg.retrieve_context.side_effect = slow_kg
+    fake_kg.one_hop.side_effect = slow_kg
     fake_sme.retrieve.side_effect = slow_sme
-    ur = UnifiedRetriever(qdrant=fake_qdrant, kg=fake_kg, sme=fake_sme)
+    ur = UnifiedRetriever(kg_client=fake_kg, qdrant=fake_qdrant, sme=fake_sme)
     t0 = time.perf_counter()
     ur.retrieve(query="x", subscription_id="s", profile_id="p",
                 query_understanding={"intent": "analyze"},
-                flags={"enable_sme_retrieval": True})
+                flags={})
     elapsed = time.perf_counter() - t0
     # three slow legs × 0.15s serial = 0.45s. parallel must be <= ~0.30s.
     assert elapsed < 0.32, f"layers ran serially: {elapsed:.2f}s"
 
 
-def test_layer_c_skipped_when_flag_off(fake_qdrant, fake_kg, fake_sme):
-    ur = UnifiedRetriever(qdrant=fake_qdrant, kg=fake_kg, sme=fake_sme)
+def test_layer_c_skipped_when_flag_off(_sme_flag_off, fake_qdrant, fake_kg, fake_sme):
+    ur = UnifiedRetriever(kg_client=fake_kg, qdrant=fake_qdrant, sme=fake_sme)
     bundle = ur.retrieve(
         query="x", subscription_id="s", profile_id="p",
         query_understanding={"intent": "analyze"},
-        flags={"enable_sme_retrieval": False},
+        flags={},
     )
     fake_sme.retrieve.assert_not_called()
     assert bundle.layer_c_sme == []
 
 
-def test_layer_failure_does_not_kill_others(fake_qdrant, fake_kg, fake_sme):
+def test_layer_failure_does_not_kill_others(_all_flags_on, fake_qdrant, fake_kg, fake_sme):
     fake_sme.retrieve.side_effect = RuntimeError("qdrant down")
-    ur = UnifiedRetriever(qdrant=fake_qdrant, kg=fake_kg, sme=fake_sme)
+    ur = UnifiedRetriever(kg_client=fake_kg, qdrant=fake_qdrant, sme=fake_sme)
     bundle = ur.retrieve(
         query="x", subscription_id="s", profile_id="p",
         query_understanding={"intent": "analyze"},
-        flags={"enable_sme_retrieval": True},
+        flags={},
     )
     assert bundle.layer_a_chunks is not None
     assert bundle.layer_b_kg is not None
     assert bundle.layer_c_sme == []  # degraded gracefully
+    # Fix per ERRATA §11: only the full layer name is appended (no 'c' stub).
     assert "layer_c" in bundle.degraded_layers
+    assert "c" not in bundle.degraded_layers
 
 
-def test_profile_isolation_filter_on_every_layer(fake_qdrant, fake_kg, fake_sme):
-    ur = UnifiedRetriever(qdrant=fake_qdrant, kg=fake_kg, sme=fake_sme)
+def test_profile_isolation_filter_on_every_layer(_all_flags_on, fake_qdrant, fake_kg, fake_sme):
+    ur = UnifiedRetriever(kg_client=fake_kg, qdrant=fake_qdrant, sme=fake_sme)
     ur.retrieve(query="x", subscription_id="s1", profile_id="p_a",
                 query_understanding={"intent": "analyze"},
-                flags={"enable_sme_retrieval": True})
+                flags={})
     # Qdrant call must include profile_id filter
     q_kwargs = fake_qdrant.search.call_args.kwargs
     # check the filter includes the profile_id key somewhere
@@ -478,13 +530,13 @@ def test_profile_isolation_filter_on_every_layer(fake_qdrant, fake_kg, fake_sme)
     s_kwargs = fake_sme.retrieve.call_args.kwargs
     assert s_kwargs.get("subscription_id") == "s1"
     assert s_kwargs.get("profile_id") == "p_a"
-    # KG call likewise
-    k_kwargs = fake_kg.retrieve_context.call_args.kwargs
+    # KG call likewise (via retrieve_layer_b → one_hop)
+    k_kwargs = fake_kg.one_hop.call_args.kwargs
     assert k_kwargs.get("subscription_id") == "s1"
     assert k_kwargs.get("profile_id") == "p_a"
 
 
-def test_no_internal_timeout(fake_qdrant, fake_kg, fake_sme):
+def test_no_internal_timeout(_all_flags_on, fake_qdrant, fake_kg, fake_sme):
     """as_completed must NOT be called with a timeout argument (memory rule)."""
     import concurrent.futures as cf
     original_as_completed = cf.as_completed
@@ -496,10 +548,10 @@ def test_no_internal_timeout(fake_qdrant, fake_kg, fake_sme):
         return original_as_completed(*a, **kw)
 
     with patch("src.retrieval.unified_retriever.as_completed", side_effect=spy_as_completed):
-        ur = UnifiedRetriever(qdrant=fake_qdrant, kg=fake_kg, sme=fake_sme)
+        ur = UnifiedRetriever(kg_client=fake_kg, qdrant=fake_qdrant, sme=fake_sme)
         ur.retrieve(query="x", subscription_id="s", profile_id="p",
                     query_understanding={"intent": "analyze"},
-                    flags={"enable_sme_retrieval": True})
+                    flags={})
     assert "timeout" not in captured["kw"]
 ```
 
@@ -531,9 +583,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RetrievalBundle:
-    """Raw per-layer results plus telemetry; consumed by merge + rerank."""
+    """Raw per-layer results plus telemetry; consumed by merge + rerank.
+
+    layer_b_kg is a flat List[Dict] of edge dicts as returned by
+    retrieve_layer_b (ERRATA §7), not the legacy {nodes, edges} graph shape.
+    Each dict carries a ``kind`` key of "kg_direct" or "kg_inferred".
+    """
     layer_a_chunks: List[Dict[str, Any]] = field(default_factory=list)
-    layer_b_kg: Dict[str, Any] = field(default_factory=dict)
+    layer_b_kg: List[Dict[str, Any]] = field(default_factory=list)
     layer_c_sme: List[Dict[str, Any]] = field(default_factory=list)
     layer_d_url: List[Dict[str, Any]] = field(default_factory=list)
     degraded_layers: List[str] = field(default_factory=list)
@@ -541,12 +598,14 @@ class RetrievalBundle:
 
 
 class UnifiedRetriever:
-    """Phase 3 four-layer orchestrator."""
+    """Phase 3 four-layer orchestrator. Constructor matches Phase 2's
+    `UnifiedRetriever(kg_client, qdrant, sme)` surface with optional Phase 3
+    additions (`hybrid`, `intent_gate`)."""
 
-    def __init__(self, qdrant=None, kg=None, sme=None, hybrid=None,
-                 intent_gate=None):
+    def __init__(self, kg_client=None, qdrant=None, sme=None, *,
+                 hybrid=None, intent_gate=None):
         self._qdrant = qdrant
-        self._kg = kg
+        self._kg = kg_client
         self._sme = sme
         self._hybrid = hybrid
         self._gate = intent_gate  # src.retrieval.intent_gating.IntentGate
@@ -560,16 +619,29 @@ class UnifiedRetriever:
         gate = self._gate.decide(intent) if self._gate else _default_gate(intent)
         top_k = _resolve_top_k(intent, top_k_overrides)
 
+        from src.config.feature_flags import (
+            get_flag_resolver,
+            ENABLE_SME_RETRIEVAL, ENABLE_HYBRID_RETRIEVAL,
+            ENABLE_KG_SYNTHESIZED_EDGES,
+        )
+        resolver = get_flag_resolver()
+
         bundle = RetrievalBundle()
         jobs = {}
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="dw-retrieve") as ex:
             if gate.run_a:
                 jobs[ex.submit(self._layer_a, query, profile_id, subscription_id,
                                 query_understanding, top_k.a, flags)] = ("layer_a", time.perf_counter())
-            if gate.run_b and flags.get("enable_sme_retrieval", False) is not None:
+            # Layer B (KG) runs whenever the gate says so — it is independent of
+            # the SME retrieval master flag (KG direct-edges ship without SME).
+            # Synthesized edges are filtered inside retrieve_layer_b by the
+            # enable_kg_synthesized_edges flag.
+            if gate.run_b:
                 jobs[ex.submit(self._layer_b, query, profile_id, subscription_id,
                                 query_understanding, top_k.b, flags)] = ("layer_b", time.perf_counter())
-            if gate.run_c and flags.get("enable_sme_retrieval", False):
+            # Layer C (SME artifacts) only runs when enable_sme_retrieval is on
+            # for this subscription.
+            if gate.run_c and resolver.is_enabled(subscription_id, ENABLE_SME_RETRIEVAL):
                 jobs[ex.submit(self._layer_c, query, profile_id, subscription_id,
                                 query_understanding, top_k.c)] = ("layer_c", time.perf_counter())
             # Layer D is a placeholder in Phase 3 — Phase 5 wires URL fetch.
@@ -586,7 +658,6 @@ class UnifiedRetriever:
                                                   else "url"), result)
                 except Exception as e:
                     logger.warning("%s degraded: %s", name, e)
-                    bundle.degraded_layers.append(name[-1])  # 'a','b','c','d'
                     bundle.degraded_layers.append(name)
                 bundle.per_layer_ms[name] = (time.perf_counter() - t0) * 1000.0
 
@@ -595,18 +666,23 @@ class UnifiedRetriever:
     # --- layer implementations -------------------------------------------
 
     def _layer_a(self, query, profile_id, subscription_id, qu, k, flags):
-        if flags.get("enable_hybrid_retrieval", True) and self._hybrid is not None:
+        from src.config.feature_flags import get_flag_resolver, ENABLE_HYBRID_RETRIEVAL
+        hybrid_on = get_flag_resolver().is_enabled(subscription_id, ENABLE_HYBRID_RETRIEVAL)
+        if hybrid_on and self._hybrid is not None:
             return self._hybrid.search(query=query, subscription_id=subscription_id,
                                        profile_id=profile_id,
                                        query_understanding=qu, top_k=k)
         return _dense_only_search(self._qdrant, query, subscription_id, profile_id, qu, k)
 
     def _layer_b(self, query, profile_id, subscription_id, qu, k, flags):
-        include_inferred = flags.get("enable_kg_synthesized_edges", True)
-        return self._kg.retrieve_context(
+        # Canonical KG routing per ERRATA §7 and Phase 2's published surface:
+        # UnifiedRetriever.retrieve_layer_b handles direct + inferred edges and
+        # the enable_kg_synthesized_edges flag is read inside that helper.
+        # The 0.6 floor is the canonical default from Phase 2
+        # `inferred_edge_confidence_floor()`; adapter-tunable.
+        return self.retrieve_layer_b(
             query=query, subscription_id=subscription_id, profile_id=profile_id,
-            top_k=k, include_inferred=include_inferred,
-            inferred_confidence_floor=0.7,
+            top_k=k, include_inferred=True, inferred_confidence_floor=0.6,
         )
 
     def _layer_c(self, query, profile_id, subscription_id, qu, k):
@@ -620,6 +696,8 @@ class UnifiedRetriever:
         # Phase 5 replaces this with the URL-ephemeral pipeline.
         return []
 ```
+
+`retrieve_layer_b` is the Phase 2 helper on `UnifiedRetriever` (ERRATA §7). It filters `INFERRED_RELATION` edges by `subscription_id`, `profile_id`, and `min_confidence` when `enable_kg_synthesized_edges` is on for the subscription, and always returns direct edges.
 
 Helpers `_resolve_top_k`, `_default_gate`, `_dense_only_search`, `_sme_hit_to_dict` live at module bottom (~25 lines total; trivial). The `top_k` table follows spec Section 7 — Task 6 tunes the concrete values.
 
@@ -717,6 +795,21 @@ def test_merge_dedups_on_evidence_key():
     # When Layer A and C have the same evidence, merged item keeps Layer C flag
     # so the pack assembler can mark it as SME-backed.
     assert merged[0].get("sme_backed") is True
+
+
+def test_merge_marks_kg_inferred_as_sme_backed():
+    """Per ERRATA §11: Layer B items with kind=='kg_inferred' are SME-backed."""
+    from src.retrieval.reranker import merge_layers
+    b_direct = {"layer": "layer_b", "kind": "kg_direct",
+                "from": "n1", "to": "n2", "relation_type": "cites",
+                "confidence": 0.95, "text": "n1 cites n2"}
+    b_inferred = {"layer": "layer_b", "kind": "kg_inferred",
+                  "from": "n1", "to": "n3", "relation_type": "correlates_with",
+                  "confidence": 0.82, "text": "n1 correlates_with n3"}
+    merged = merge_layers(a=[], b=[b_direct, b_inferred], c=[], d=[])
+    by_relation = {m["relation_type"]: m for m in merged}
+    assert by_relation["cites"].get("sme_backed") is not True
+    assert by_relation["correlates_with"].get("sme_backed") is True
 ```
 
 Create `tests/retrieval/test_reranker_mmr.py`:
@@ -776,19 +869,28 @@ _SME_INTENT_BONUS = {"analyze": 0.08, "diagnose": 0.08, "recommend": 0.10,
 
 def merge_layers(*, a: List[Dict], b: List[Dict], c: List[Dict],
                  d: List[Dict]) -> List[Dict]:
-    """Union layer outputs, dedup on (doc_id, chunk_id) keeping SME flag on overlap."""
+    """Union layer outputs, dedup on (doc_id, chunk_id) keeping SME flag on overlap.
+
+    Per ERRATA §11: Layer C items AND Layer B items with ``kind == "kg_inferred"``
+    are SME-backed (both represent pre-reasoned synthesis output). Layer B direct
+    edges are NOT SME-backed.
+    """
     seen: Dict[tuple, Dict] = {}
     for layer_name, items in (("layer_a", a), ("layer_b", b), ("layer_c", c), ("layer_d", d)):
         for it in items or []:
             it = dict(it)
             it.setdefault("layer", layer_name)
+            is_sme_source = (
+                layer_name == "layer_c"
+                or (layer_name == "layer_b" and it.get("kind") == "kg_inferred")
+            )
             key = (it.get("doc_id"), it.get("chunk_id"))
             if key in seen and key != (None, None):
-                # If same evidence appears via Layer C, flag the existing item.
-                if layer_name == "layer_c":
+                # If same evidence appears via an SME source, flag the existing item.
+                if is_sme_source:
                     seen[key]["sme_backed"] = True
                 continue
-            if layer_name == "layer_c":
+            if is_sme_source:
                 it["sme_backed"] = True
             seen[key if key != (None, None) else (layer_name, id(it))] = it
     return list(seen.values())
@@ -1221,6 +1323,8 @@ git commit -m "phase3(sme-topk): adaptive per-intent top-K table"
 
 Phase 1 already emits Q&A pairs into Redis at ingestion (`src/intelligence/qa_generator.py` → `to_redis_format`). Phase 3 turns that cache into a **pre-grounded-answer fast path** that short-circuits the entire retrieval + reasoning pipeline when a near-exact query match exists.
 
+**Index prerequisite (cross-ref ERRATA §13):** the `qa_idx:{sub}:{prof}:{fingerprint}` keys that `QAFastPath.lookup` reads are emitted by Phase 2's `qa_generator.py` when Q&A pairs are produced. Phase 3 **assumes** these keys exist. If they do not (Phase 2 Task wasn't implemented, or a profile was synthesized before the emission was added), Phase 3 must populate them once as a backfill — see Step 1.5 below.
+
 - [ ] **Step 1: Write failing tests**
 
 ```python
@@ -1270,6 +1374,42 @@ def test_key_is_per_profile():
         redis.get.call_args.args[0], bytes) else redis.get.call_args.args[0]
     assert "s1" in key_seen and "p1" in key_seen
 ```
+
+- [ ] **Step 1.5: Verify the `qa_idx:` index exists; backfill if missing**
+
+Before the fast path can return anything, the index Phase 2 should have emitted must exist. Probe the sandbox:
+
+```bash
+python -c "
+from src.cache.redis_store import get_redis_client
+r = get_redis_client()
+n = sum(1 for _ in r.scan_iter(match='qa_idx:REPLACE_SUB:*'))
+print('qa_idx entries:', n)
+"
+```
+
+If `0`, run this one-shot backfill (do not commit — it is an operator step):
+
+```bash
+python -c "
+import json
+from src.cache.redis_store import get_redis_client
+from src.retrieval.qa_fast_path import _fingerprint
+r = get_redis_client()
+for qa_key in r.scan_iter(match='qa:*:*'):
+    raw = r.get(qa_key)
+    if not raw: continue
+    qa = json.loads(raw)
+    sub = qa.get('subscription_id'); prof = qa.get('profile_id')
+    q = qa.get('question'); qa_id = qa.get('qa_id') or qa_key.decode().split(':')[-1]
+    if not (sub and prof and q): continue
+    idx_key = f'qa_idx:{sub}:{prof}:{_fingerprint(q)}'
+    r.set(idx_key, json.dumps({**qa, 'qa_id': qa_id}))
+print('backfill complete')
+"
+```
+
+Long-term the emission lives in Phase 2's `qa_generator.py` (ERRATA §13). This backfill is for profiles synthesized before the emission was wired.
 
 - [ ] **Step 2: Implement `qa_fast_path.py`**
 
@@ -1485,14 +1625,131 @@ class RetrievalCache:
             logger.debug("retrieval_cache.invalidate failed", exc_info=True)
 ```
 
-Wire a call to `invalidate_profile` from the existing `PIPELINE_TRAINING_COMPLETED` transition handler (`src/api/pipeline_api.py` — search for the completion branch; add one line calling the cache). Task 11 verifies via integration test.
-
-- [ ] **Step 3: Green + Commit**
+- [ ] **Step 3: Green (cache unit tests) + Commit the cache module**
 
 ```bash
 pytest tests/retrieval/test_retrieval_cache.py -v
 git add src/retrieval/retrieval_cache.py tests/retrieval/test_retrieval_cache.py
 git commit -m "phase3(sme-cache): redis retrieval cache + per-profile invalidate"
+```
+
+---
+
+## Task 8.5 — Wire retrieval-cache invalidation into `PIPELINE_TRAINING_COMPLETED`
+
+**Files:**
+- Modify: `src/api/pipeline_api.py`
+- Create: `tests/api/test_pipeline_cache_invalidation.py`
+
+Per ERRATA §14 the previous Task 8 hand-waved the cache-invalidation hook. This task spells it out: the retrieval cache is keyed by `(sub, prof, query_fp, flag_set_version)`, and on `PIPELINE_TRAINING_COMPLETED` transitions new SME artifacts become visible. Any cached pack for that profile is now stale and MUST be evicted before the next query.
+
+Memory-rule check: `pipeline_status` strings are immutable — this task only reads `PIPELINE_TRAINING_COMPLETED`, never renames or adds values.
+
+- [ ] **Step 1: Locate the completion branch**
+
+```bash
+grep -n "PIPELINE_TRAINING_COMPLETED" src/api/pipeline_api.py
+```
+
+Expected: at least one branch where the status transition is written. If the constant lives in `src/api/document_status.py` under a different spelling, update the import accordingly.
+
+- [ ] **Step 2: Write the failing integration test FIRST**
+
+Create `tests/api/test_pipeline_cache_invalidation.py`:
+
+```python
+"""PIPELINE_TRAINING_COMPLETED must evict the retrieval cache for the profile."""
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+def test_training_complete_invalidates_retrieval_cache(monkeypatch):
+    from src.api import pipeline_api
+    from src.retrieval.retrieval_cache import RetrievalCache
+
+    fake_redis = MagicMock()
+    fake_redis.scan_iter.return_value = [
+        b"dwx:retrieval:sub_A:prof_X:abc123:v1",
+        b"dwx:retrieval:sub_A:prof_X:def456:v1",
+    ]
+    cache = RetrievalCache(redis_client=fake_redis)
+    monkeypatch.setattr(pipeline_api, "get_retrieval_cache", lambda: cache)
+
+    # Drive the handler that fires on the status transition.
+    pipeline_api._on_pipeline_training_completed(
+        subscription_id="sub_A", profile_id="prof_X",
+    )
+    assert fake_redis.delete.called
+    deleted_keys = [c.args[0] for c in fake_redis.delete.call_args_list]
+    assert all(b"sub_A:prof_X" in k for k in deleted_keys)
+
+
+def test_training_complete_skips_when_cache_unavailable(monkeypatch):
+    """If Redis is down, invalidation must not raise."""
+    from src.api import pipeline_api
+    from src.retrieval.retrieval_cache import RetrievalCache
+
+    monkeypatch.setattr(pipeline_api, "get_retrieval_cache",
+                        lambda: RetrievalCache(redis_client=None))
+    # Must not raise.
+    pipeline_api._on_pipeline_training_completed(
+        subscription_id="sub_A", profile_id="prof_X",
+    )
+```
+
+Run: `pytest tests/api/test_pipeline_cache_invalidation.py -v` → FAIL (hook not wired).
+
+- [ ] **Step 3: Wire the hook**
+
+In `src/api/pipeline_api.py`, next to the completion branch:
+
+```python
+from src.retrieval.retrieval_cache import RetrievalCache
+
+_retrieval_cache_singleton: RetrievalCache | None = None
+
+
+def get_retrieval_cache() -> RetrievalCache:
+    global _retrieval_cache_singleton
+    if _retrieval_cache_singleton is None:
+        from src.cache.redis_store import get_redis_client
+        _retrieval_cache_singleton = RetrievalCache(redis_client=get_redis_client())
+    return _retrieval_cache_singleton
+
+
+def _on_pipeline_training_completed(*, subscription_id: str, profile_id: str) -> None:
+    """Invoked from the status-transition branch when pipeline_status enters
+    PIPELINE_TRAINING_COMPLETED. Evicts cached retrieval packs for the profile
+    so the next query re-retrieves against freshly-materialized SME artifacts.
+    """
+    try:
+        get_retrieval_cache().invalidate_profile(
+            subscription_id=subscription_id, profile_id=profile_id,
+        )
+    except Exception:
+        # Cache invalidation is best-effort; log via the existing logger
+        # but never block the training-completion transition itself.
+        import logging
+        logging.getLogger(__name__).warning(
+            "retrieval_cache.invalidate_profile failed", exc_info=True,
+        )
+```
+
+Then find the existing completion branch (where `pipeline_status` is written to `PIPELINE_TRAINING_COMPLETED`) and add one line immediately after the Mongo write:
+
+```python
+_on_pipeline_training_completed(
+    subscription_id=subscription_id, profile_id=profile_id,
+)
+```
+
+- [ ] **Step 4: Green + Commit**
+
+```bash
+pytest tests/api/test_pipeline_cache_invalidation.py -v
+git add src/api/pipeline_api.py tests/api/test_pipeline_cache_invalidation.py
+git commit -m "phase3(sme-cache): invalidate retrieval cache on training complete"
 ```
 
 ---
@@ -1606,93 +1863,128 @@ git commit -m "phase3(sme-gating): intent-aware per-layer gating"
 
 ---
 
-## Task 10 — Flag wiring: `enable_hybrid_retrieval` + `enable_cross_encoder_rerank`
+## Task 10 — Flag wiring: `enable_hybrid_retrieval` + `enable_cross_encoder_rerank` + flag-set versioning
 
 **Files:**
-- Modify: `src/intelligence/sme/feature_flags.py`
-- Modify: `src/retrieval/unified_retriever.py` (read flags from resolver when not passed explicitly)
+- Modify: `src/config/feature_flags.py`
+- Modify: `src/retrieval/unified_retriever.py` (no change — retriever reads resolver directly; confirm)
+- Modify: `src/agent/core_agent.py`
 - Create: `tests/retrieval/test_hybrid_flag_off.py`
+- Create: `tests/config/test_flag_set_version.py`
 
-Phase 1 should have introduced these two flags as constants; Task 1's audit confirms. If missing, add them here. Both **default ON** under the master `sme_redesign_enabled` flag — the retrieval pipeline shipped in Phase 1+2 already uses hybrid+CE internally; Phase 3 only makes those toggle-able for rollback.
+Phase 1 ships all 8 flag constants (ERRATA §4). This task confirms the two infrastructure-independent flags (`ENABLE_HYBRID_RETRIEVAL`, `ENABLE_CROSS_ENCODER_RERANK`) are present and adds a **monotonic flag-set version counter** that the retrieval cache key consumes. The counter bumps on any `set_subscription_override` call; retrieval-cache entries keyed off the old version become unreachable and eventually TTL-expire.
 
-- [ ] **Step 1: Confirm or add flag constants**
+Per ERRATA §4, `SMEFeatureFlags` does not expose a `version_for(sub)` method. Phase 3 adds a simpler primitive: a module-level monotonic counter `_flag_set_version_counter` incremented from the override setter. `flag_set_version()` returns its current string form. This is *subscription-agnostic* — any override flip invalidates the cache globally. That is acceptable because override flips are rare and the alternative (per-sub counter with bookkeeping) adds cost for no win.
 
-In `src/intelligence/sme/feature_flags.py`:
+- [ ] **Step 1: Confirm Phase 1 constants exist; add flag-set version counter**
+
+Verify in `src/config/feature_flags.py`:
 
 ```python
-# Ensure these constants exist; Phase 3 needs them for the admin flip endpoint + defaults.
-ENABLE_HYBRID_RETRIEVAL = "enable_hybrid_retrieval"
-ENABLE_CROSS_ENCODER_RERANK = "enable_cross_encoder_rerank"
-
-# Default map — master flag gates these; when master off, all default false.
-_DEFAULT_ON_UNDER_MASTER = {
-    ENABLE_SME_RETRIEVAL: False,       # must be explicitly opted in
-    ENABLE_KG_SYNTHESIZED_EDGES: True,
-    ENABLE_HYBRID_RETRIEVAL: True,
-    ENABLE_CROSS_ENCODER_RERANK: True,
-}
-
-
-def resolve_with_defaults(subscription_id: str, flag_name: str,
-                          resolver: FeatureFlagResolver) -> bool:
-    """Resolve a Phase 3 flag, falling back to the default-on-under-master map."""
-    if not resolver.resolve(subscription_id, SME_REDESIGN_ENABLED):
-        return False
-    explicit = resolver.resolve_explicit(subscription_id, flag_name)
-    if explicit is not None:
-        return explicit
-    return _DEFAULT_ON_UNDER_MASTER.get(flag_name, False)
+# These are owned by Phase 1 per ERRATA §4 — Phase 3 only confirms presence.
+# SME_REDESIGN_ENABLED, ENABLE_SME_SYNTHESIS, ENABLE_SME_RETRIEVAL,
+# ENABLE_KG_SYNTHESIZED_EDGES, ENABLE_RICH_MODE, ENABLE_URL_AS_PROMPT,
+# ENABLE_HYBRID_RETRIEVAL, ENABLE_CROSS_ENCODER_RERANK
 ```
+
+Add (if not already present — Phase 1's plan owns these):
+
+```python
+# --- Monotonic flag-set version counter (Phase 3) -------------------------
+_flag_set_version_counter: int = 0
+
+
+def flag_set_version() -> str:
+    """Return current flag-set version as a short string.
+
+    Consumers (retrieval cache key) treat this as opaque. It bumps on any
+    set_subscription_override() call so cache entries keyed off the old
+    version are naturally bypassed until TTL expiry.
+    """
+    return f"v{_flag_set_version_counter}"
+
+
+def bump_flag_set_version() -> None:
+    """Increment the counter. Called from set_subscription_override and from
+    admin flip endpoints; idempotent to call directly from tests."""
+    global _flag_set_version_counter
+    _flag_set_version_counter += 1
+```
+
+Phase 1's `set_subscription_override(subscription_id, flag, value, actor)` MUST call `bump_flag_set_version()` internally so callers do not need to remember to. If Phase 1 missed this, add a one-line patch here and reference ERRATA §4.
 
 - [ ] **Step 2: Test that hybrid OFF falls back to dense-only**
 
 ```python
 # tests/retrieval/test_hybrid_flag_off.py
 from unittest.mock import MagicMock
+
 from src.retrieval.unified_retriever import UnifiedRetriever
+from src.config.feature_flags import ENABLE_HYBRID_RETRIEVAL
 
 
-def test_hybrid_flag_off_skips_sparse_path():
-    qd = MagicMock()
-    qd.search.return_value = []
+def test_hybrid_flag_off_skips_sparse_path(monkeypatch):
+    from src.config import feature_flags as ff
+    class _HybridOff:
+        def is_enabled(self, sub, flag):
+            return flag != ENABLE_HYBRID_RETRIEVAL
+    monkeypatch.setattr(ff, "get_flag_resolver", lambda: _HybridOff())
+
+    qd = MagicMock(); qd.search.return_value = []
     hy = MagicMock()
-    ur = UnifiedRetriever(qdrant=qd, kg=MagicMock(), sme=MagicMock(), hybrid=hy)
+    ur = UnifiedRetriever(kg_client=MagicMock(), qdrant=qd, sme=MagicMock(), hybrid=hy)
     ur.retrieve(query="q", subscription_id="s", profile_id="p",
                 query_understanding={"intent": "lookup"},
-                flags={"enable_sme_retrieval": False,
-                        "enable_hybrid_retrieval": False})
+                flags={})
     hy.search.assert_not_called()
     qd.search.assert_called()  # fell back to dense
 ```
 
-- [ ] **Step 3: Wire `core_agent.py` to pass the resolved flag set into `UnifiedRetriever.retrieve()`**
+- [ ] **Step 2.5: Test the flag-set version counter**
+
+```python
+# tests/config/test_flag_set_version.py
+def test_flag_set_version_bumps_on_override():
+    from src.config.feature_flags import (
+        flag_set_version, bump_flag_set_version,
+    )
+    before = flag_set_version()
+    bump_flag_set_version()
+    after = flag_set_version()
+    assert before != after
+```
+
+- [ ] **Step 3: Wire `core_agent.py` to resolve flags and cache-key by version**
 
 In `CoreAgent.handle()`, right before calling `retrieve()`, compute:
 
 ```python
-from src.intelligence.sme.feature_flags import (
-    get_flag_resolver, resolve_with_defaults,
+from src.config.feature_flags import (
+    get_flag_resolver, flag_set_version,
     ENABLE_SME_RETRIEVAL, ENABLE_KG_SYNTHESIZED_EDGES,
     ENABLE_HYBRID_RETRIEVAL, ENABLE_CROSS_ENCODER_RERANK,
 )
 
-_rfr = get_flag_resolver()
+resolver = get_flag_resolver()
 flags = {
-    "enable_sme_retrieval":        resolve_with_defaults(subscription_id, ENABLE_SME_RETRIEVAL, _rfr),
-    "enable_kg_synthesized_edges": resolve_with_defaults(subscription_id, ENABLE_KG_SYNTHESIZED_EDGES, _rfr),
-    "enable_hybrid_retrieval":     resolve_with_defaults(subscription_id, ENABLE_HYBRID_RETRIEVAL, _rfr),
-    "enable_cross_encoder_rerank": resolve_with_defaults(subscription_id, ENABLE_CROSS_ENCODER_RERANK, _rfr),
+    "enable_sme_retrieval":        resolver.is_enabled(subscription_id, ENABLE_SME_RETRIEVAL),
+    "enable_kg_synthesized_edges": resolver.is_enabled(subscription_id, ENABLE_KG_SYNTHESIZED_EDGES),
+    "enable_hybrid_retrieval":     resolver.is_enabled(subscription_id, ENABLE_HYBRID_RETRIEVAL),
+    "enable_cross_encoder_rerank": resolver.is_enabled(subscription_id, ENABLE_CROSS_ENCODER_RERANK),
 }
-flag_set_version = _rfr.version_for(subscription_id)  # opaque string, bumps on any set()
+version = flag_set_version()  # bumps on any override flip
 ```
+
+Note: `flags` is still populated for downstream convenience (pack assembler, reranker read specific keys). The retriever itself calls `resolver.is_enabled` directly; no need to thread a dict through every layer.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-pytest tests/retrieval/test_hybrid_flag_off.py -v
-git add src/intelligence/sme/feature_flags.py src/retrieval/unified_retriever.py \
-        src/agent/core_agent.py tests/retrieval/test_hybrid_flag_off.py
-git commit -m "phase3(sme-flags): hybrid + CE rerank flags default ON under master"
+pytest tests/retrieval/test_hybrid_flag_off.py tests/config/test_flag_set_version.py -v
+git add src/config/feature_flags.py src/agent/core_agent.py \
+        tests/retrieval/test_hybrid_flag_off.py \
+        tests/config/test_flag_set_version.py
+git commit -m "phase3(sme-flags): hybrid+CE flag gates + flag-set version counter"
 ```
 
 ---
@@ -1726,6 +2018,8 @@ Skeleton for `tests/agent/test_core_agent_sme_retrieval.py`:
 from unittest.mock import MagicMock, patch
 import pytest
 
+from src.config.feature_flags import ENABLE_SME_RETRIEVAL
+
 
 @pytest.fixture
 def agent_with_fakes(monkeypatch):
@@ -1734,22 +2028,28 @@ def agent_with_fakes(monkeypatch):
     a._llm = MagicMock()
     a._llm.generate.return_value = MagicMock(text="Q3 revenue grew 12%.", sources=[])
     a._qdrant = MagicMock(); a._qdrant.search.return_value = []
-    a._kg = MagicMock(); a._kg.retrieve_context.return_value = {"nodes": [], "edges": []}
+    a._kg = MagicMock()
+    # Phase 2 KGRetrievalClient surface — retrieve_layer_b drives these two.
+    a._kg.one_hop.return_value = []
+    a._kg.inferred_relations.return_value = []
     a._sme = MagicMock()
     a._sme.retrieve.return_value = [
         MagicMock(artifact_type="dossier", narrative="Q3 up 12%",
                   confidence=0.92, evidence=["d1#c1"], score=0.85)
     ]
-    # the rest of the wiring (intent classifier, reranker, cache) is patched
-    # via monkeypatch here to keep the test focused.
+    # Patch get_flag_resolver everywhere it might be imported so tests are
+    # independent of the real MongoDB-backed store.
+    class _AllOn:
+        def is_enabled(self, sub, flag): return True
+    from src.config import feature_flags as ff
+    monkeypatch.setattr(ff, "get_flag_resolver", lambda: _AllOn())
     return a
 
 
 def test_analyze_query_pulls_layer_c(agent_with_fakes):
     a = agent_with_fakes
     resp = a.handle(query="Analyze Q3 revenue trend",
-                    subscription_id="s1", profile_id="p_fin",
-                    flags_override={"enable_sme_retrieval": True})
+                    subscription_id="s1", profile_id="p_fin")
     a._sme.retrieve.assert_called()
     # The Reasoner prompt must have received a pack containing Layer C text.
     reason_args = a._llm.generate.call_args
@@ -1760,8 +2060,7 @@ def test_analyze_query_pulls_layer_c(agent_with_fakes):
 def test_lookup_query_skips_layer_c(agent_with_fakes):
     a = agent_with_fakes
     a.handle(query="What is the Q3 revenue number?",
-             subscription_id="s1", profile_id="p_fin",
-             flags_override={"enable_sme_retrieval": True})
+             subscription_id="s1", profile_id="p_fin")
     a._sme.retrieve.assert_not_called()
 ```
 
@@ -1769,11 +2068,19 @@ Skeleton for `tests/agent/test_core_agent_sme_retrieval_off.py`:
 
 ```python
 """Flag OFF → Layer C never called; response shape is identical to baseline."""
-def test_layer_c_off(agent_with_fakes):
+from src.config.feature_flags import ENABLE_SME_RETRIEVAL
+
+
+def test_layer_c_off(agent_with_fakes, monkeypatch):
     a = agent_with_fakes
+    from src.config import feature_flags as ff
+    class _SMEoff:
+        def is_enabled(self, sub, flag):
+            return flag != ENABLE_SME_RETRIEVAL
+    monkeypatch.setattr(ff, "get_flag_resolver", lambda: _SMEoff())
+
     a.handle(query="Analyze Q3 revenue trend",
-             subscription_id="s1", profile_id="p_fin",
-             flags_override={"enable_sme_retrieval": False})
+             subscription_id="s1", profile_id="p_fin")
     a._sme.retrieve.assert_not_called()
 ```
 
@@ -1784,13 +2091,13 @@ Skeleton for `tests/agent/test_core_agent_qa_short_circuit.py`:
 def test_qa_hit_skips_retrieval(agent_with_fakes, monkeypatch):
     a = agent_with_fakes
     import src.agent.core_agent as mod
+    from unittest.mock import MagicMock
     hit = MagicMock(answer="Q3 was $12.4M.", confidence=0.95,
                     source_section_id="sec_7",
                     source_entities=["Q3"], qa_id="abc")
     monkeypatch.setattr(mod, "_qa_fast_path_lookup", lambda **kw: hit)
     resp = a.handle(query="What is our Q3 revenue?",
-                    subscription_id="s1", profile_id="p_fin",
-                    flags_override={"enable_sme_retrieval": True})
+                    subscription_id="s1", profile_id="p_fin")
     a._sme.retrieve.assert_not_called()
     a._qdrant.search.assert_not_called()
     assert "$12.4M" in resp.text
@@ -1802,10 +2109,10 @@ Skeleton for `tests/agent/test_core_agent_isolation.py`:
 """Cross-subscription retrieval MUST be rejected at every layer."""
 def test_subscription_id_forwarded_to_layers(agent_with_fakes):
     a = agent_with_fakes
-    a.handle(query="x", subscription_id="sub_A", profile_id="p",
-             flags_override={"enable_sme_retrieval": True})
+    a.handle(query="x", subscription_id="sub_A", profile_id="p")
     assert a._sme.retrieve.call_args.kwargs["subscription_id"] == "sub_A"
-    assert a._kg.retrieve_context.call_args.kwargs["subscription_id"] == "sub_A"
+    # retrieve_layer_b drives one_hop; assert the subscription_id is forwarded.
+    assert a._kg.one_hop.call_args.kwargs["subscription_id"] == "sub_A"
     # Qdrant profile_id filter must be present in the search call.
     q_call = a._qdrant.search.call_args
     assert "p" in str(q_call)
@@ -1825,10 +2132,26 @@ from src.retrieval.pack_assembler import PackAssembler
 from src.retrieval.mmr import mmr_select
 from src.retrieval.intent_gating import IntentGate
 from src.intelligence.sme.adapter_loader import get_adapter_loader
+from src.config.feature_flags import (
+    get_flag_resolver, flag_set_version,
+    ENABLE_SME_RETRIEVAL, ENABLE_KG_SYNTHESIZED_EDGES,
+    ENABLE_HYBRID_RETRIEVAL, ENABLE_CROSS_ENCODER_RERANK,
+)
 
-def handle(self, *, query, subscription_id, profile_id, flags_override=None, **kw):
-    flags = flags_override or self._resolve_flags(subscription_id)
-    flag_set_version = self._flag_set_version(subscription_id)
+
+def handle(self, *, query, subscription_id, profile_id, **kw):
+    resolver = get_flag_resolver()
+    flags = {
+        "enable_sme_retrieval":
+            resolver.is_enabled(subscription_id, ENABLE_SME_RETRIEVAL),
+        "enable_kg_synthesized_edges":
+            resolver.is_enabled(subscription_id, ENABLE_KG_SYNTHESIZED_EDGES),
+        "enable_hybrid_retrieval":
+            resolver.is_enabled(subscription_id, ENABLE_HYBRID_RETRIEVAL),
+        "enable_cross_encoder_rerank":
+            resolver.is_enabled(subscription_id, ENABLE_CROSS_ENCODER_RERANK),
+    }
+    version = flag_set_version()  # bumps on any override flip; opaque key fragment
 
     qa_hit = self._qa_fast_path.lookup(query=query, subscription_id=subscription_id,
                                         profile_id=profile_id)
@@ -1837,14 +2160,16 @@ def handle(self, *, query, subscription_id, profile_id, flags_override=None, **k
 
     qu = self._understand(query)  # existing LLM call
     cache_key_args = dict(subscription_id=subscription_id, profile_id=profile_id,
-                          query=query, flag_set_version=flag_set_version)
+                          query=query, flag_set_version=version)
     cached_pack = self._retrieval_cache.get(**cache_key_args)
     if cached_pack is None:
         bundle = self._retriever.retrieve(
             query=query, subscription_id=subscription_id, profile_id=profile_id,
             query_understanding=qu, flags=flags,
         )
-        merged = merge_layers(a=bundle.layer_a_chunks, b=bundle.layer_b_kg.get("edges", []),
+        # Layer B is now a flat list of edge dicts (via retrieve_layer_b), not
+        # the legacy {"nodes", "edges"} shape — merge_layers consumes dicts.
+        merged = merge_layers(a=bundle.layer_a_chunks, b=bundle.layer_b_kg or [],
                               c=bundle.layer_c_sme, d=bundle.layer_d_url)
         reranked = rerank_merged_candidates(
             query=query, candidates=merged, cross_encoder=self._ce,
@@ -1852,7 +2177,8 @@ def handle(self, *, query, subscription_id, profile_id, flags_override=None, **k
             enable_cross_encoder=flags["enable_cross_encoder_rerank"],
         )
         diverse = mmr_select(items=reranked, top_k=10, lam=0.7)
-        adapter = self._adapter_loader.load(subscription_id, qu.get("profile_domain") or "generic")
+        adapter = get_adapter_loader().load(subscription_id,
+                                            qu.get("profile_domain") or "generic")
         pack = self._pack_assembler_for(adapter).assemble(items=diverse, intent=qu["intent"])
         self._retrieval_cache.set(pack=[p.__dict__ for p in pack], **cache_key_args)
     else:
@@ -1861,6 +2187,8 @@ def handle(self, *, query, subscription_id, profile_id, flags_override=None, **k
     reasoner_result = self._llm.generate(query=query, pack=pack, intent=qu["intent"])
     return self._compose(reasoner_result, pack, intent=qu["intent"])
 ```
+
+`bundle.layer_b_kg` is typed as `List[Dict]` in the updated Task 3 implementation (it comes from `retrieve_layer_b`, a flat list of direct + inferred edge dicts). If Phase 2 returns the legacy `{"nodes": ..., "edges": ...}` shape instead, update `retrieve_layer_b` to normalize before returning — do not normalize here.
 
 The `_compose_qa_hit`, `_compose`, `_packed_item_from_dict`, `_resolve_flags`, `_flag_set_version`, and `_pack_assembler_for` helpers are thin adapters (~5 lines each). The existing `composer.py` and `citation_verifier.py` are called unchanged.
 
@@ -1900,11 +2228,11 @@ Verify with:
 
 ```bash
 python -c "
-from src.intelligence.sme.feature_flags import get_flag_resolver
+from src.config.feature_flags import get_flag_resolver, ENABLE_SME_RETRIEVAL
 import yaml
 fixt = yaml.safe_load(open('tests/sme_evalset_v1/fixtures/test_profiles.yaml'))
 sub = fixt['test_subscription']['subscription_id']
-print('enable_sme_retrieval:', get_flag_resolver().resolve(sub, 'enable_sme_retrieval'))
+print('enable_sme_retrieval:', get_flag_resolver().is_enabled(sub, ENABLE_SME_RETRIEVAL))
 "
 ```
 
@@ -2172,7 +2500,7 @@ PackedItem(
     layer: str,                        # layer_a | layer_b | layer_c | layer_d
     confidence: float,
     rerank_score: float,
-    sme_backed: bool,                  # True when Layer C or Layer A overlap with Layer C
+    sme_backed: bool,                  # True for Layer C items, for Layer B items with kind=="kg_inferred", or for Layer A items that overlap such SME sources (ERRATA §11)
     metadata: dict,                    # {artifact_type: "dossier|insight|comparative|recommendation",
                                        #  relation_type: "...indirectly_funds..."}
 )
@@ -2197,3 +2525,18 @@ PackAssembler(adapter).assemble(*, items, intent) -> List[PackedItem]
 ```
 
 Phase 4 adds response shape only; every retrieval surface above stays fixed.
+
+---
+
+## Appendix — ERRATA alignment (2026-04-21)
+
+Applied ERRATA §§1, 4, 7, 8, 11, 14 on 2026-04-21. Specifically:
+
+- **§1 (AdapterLoader)** — confirmed `AdapterLoader.load(sub_id, profile_domain)` usage throughout; `get_adapter_loader()` factory import standardized to `src.intelligence.sme.adapter_loader`.
+- **§4 (Feature flags)** — replaced all `FeatureFlagResolver` references with `SMEFeatureFlags`; replaced `.resolve()` with `.is_enabled()`; replaced `src.intelligence.sme.feature_flags` imports with `src.config.feature_flags`; all string-literal flag names replaced with imported constants (`SME_REDESIGN_ENABLED`, `ENABLE_SME_RETRIEVAL`, `ENABLE_KG_SYNTHESIZED_EDGES`, `ENABLE_RICH_MODE`, `ENABLE_URL_AS_PROMPT`, `ENABLE_HYBRID_RETRIEVAL`, `ENABLE_CROSS_ENCODER_RERANK`). Methods `resolve_explicit`, `resolve_all`, `set`, `version_for`, `clear_cache`, `resolve_with_defaults` removed or replaced; flag-set versioning implemented as a module-level monotonic counter (`flag_set_version()` / `bump_flag_set_version()`) rather than a per-subscription resolver method. The broken flag-gating expression `flags.get("enable_sme_retrieval", False) is not None` was fixed to `get_flag_resolver().is_enabled(subscription_id, ENABLE_SME_RETRIEVAL)`.
+- **§7 (KG Layer B routing)** — replaced `self._kg.retrieve_context(...)` with `self.retrieve_layer_b(...)` per Phase 2's canonical helper; `include_inferred=True, inferred_confidence_floor=0.6` match Phase 2's `inferred_edge_confidence_floor()` default.
+- **§8 (SMERetrieval class name)** — all `SMERetrievalLayer` references renamed to `SMERetrieval`.
+- **§11 (PackedItem sme_backed + degraded_layers)** — `merge_layers` now sets `sme_backed=True` for Layer B items with `kind == "kg_inferred"` in addition to all Layer C items; `bundle.degraded_layers` double-append bug (appending both `'c'` and `'layer_c'`) fixed to append only the full-name form.
+- **§14 (cache invalidation hook)** — hand-waved cache invalidation step promoted to a concrete `Task 8.5` that (a) locates the `PIPELINE_TRAINING_COMPLETED` branch in `src/api/pipeline_api.py`, (b) adds a call to `retrieval_cache.invalidate_profile(sub, prof)`, and (c) ships a failing-test-first integration test verifying the cache is cleared when the status transitions.
+
+Cross-references: ERRATA §13 (Phase 2 emits `qa_idx:{sub}:{prof}:{fingerprint}` keys) acknowledged in Task 7; inline backfill provided for legacy profiles.

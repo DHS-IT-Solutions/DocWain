@@ -4,7 +4,7 @@
 
 **Goal:** Flip DocWain from extractive RAG to pre-reasoned SME synthesis in the user-visible surface. Three new intents (`diagnose`, `analyze`, `recommend`) land with rich-default response shape; domain-SME persona injection goes live; every response shape decision is governed by `src/generation/prompts.py` and adapter YAMLs loaded from Azure Blob; `src/intelligence/generator.py` remains formatting-free. Recommendation-intent responses gain a post-generation grounding pass that drops unverifiable claims. Existing 0.0 hallucination rate is preserved as a regression gate.
 
-**Architecture (additive):** `src/serving/model_router.py` intent classifier extended with three labels plus `format_hint`. `src/generation/prompts.py` gains rich templates, shape resolution, compact override, and persona injection. `src/agent/core_agent.py` wires the adapter resolver through to prompt builders and enforces per-intent output caps. `src/generation/recommendation_grounding.py` (NEW) runs the post-pass on recommend-intent outputs only. `src/config/features.py` (extended) carries the `enable_rich_mode` flag. No other `src/` files change for formatting.
+**Architecture (additive):** `src/serving/model_router.py` intent classifier extended with three labels plus `format_hint`. `src/generation/prompts.py` gains rich templates, shape resolution, compact override, and persona injection. `src/agent/core_agent.py` wires the adapter resolver through to prompt builders and enforces per-intent output caps. `src/generation/recommendation_grounding.py` (NEW) runs the post-pass on recommend-intent outputs only. `src/config/feature_flags.py` (from Phase 1 per ERRATA §4) carries the `enable_rich_mode` flag; Phase 4 is a consumer only. No other `src/` files change for formatting.
 
 **Tech Stack:** Python 3.12, pydantic (existing), asyncio (existing), pytest, `pyyaml` for adapter schema tests. Adapter YAMLs + rich-mode prompt templates live in Azure Blob under `sme_adapters/` (established in Phase 1); Phase 4 loads them via the Phase 1 `AdapterLoader`. No new storage systems.
 
@@ -38,7 +38,7 @@ src/generation/recommendation_grounding.py       [NEW — post-generation ground
 src/generation/__init__.py                       [MODIFIED — re-export new helpers]
 src/serving/model_router.py                      [MODIFIED — extend classifier labels + format_hint + URL detection]
 src/agent/core_agent.py                          [MODIFIED — wire adapter resolver, pass persona + output_caps]
-src/config/features.py                           [MODIFIED — add enable_rich_mode flag + resolver helper]
+src/config/feature_flags.py                      [CONSUMER ONLY — Phase 1 owns this module per ERRATA §4]
 src/api/admin_flags.py                           [MODIFIED — expose toggle endpoint]
 
 tests/generation/test_prompts_rich.py            [NEW]
@@ -80,7 +80,7 @@ Boundary: `src/generation/prompts.py` owns prompt text. `src/generation/recommen
 ## Task 1: Audit Phase 1-3 prerequisites
 
 **Files:**
-- Audit only (no modifications): `src/intelligence/sme/adapter_loader.py`, `src/retrieval/sme_retrieval.py`, `src/agent/core_agent.py`, `src/generation/prompts.py`, `src/config/features.py`, `tests/sme_metrics_baseline_*.json`
+- Audit only (no modifications): `src/intelligence/sme/adapter_loader.py`, `src/retrieval/sme_retrieval.py`, `src/agent/core_agent.py`, `src/generation/prompts.py`, `src/config/feature_flags.py`, `tests/sme_metrics_baseline_*.json`
 
 No production code touched; this is a pre-flight pass. The implementer confirms the artifacts Phase 4 depends on are in place and records the exact call signatures they must integrate with.
 
@@ -128,13 +128,13 @@ grep -n "unified_retriever" src/agent/core_agent.py
 
 There must be a code path that already populates the pack from Layer A / B / C. Phase 4 adds ONLY shape + persona + post-pass on top.
 
-- [ ] **Step 5: Confirm `enable_rich_mode` flag is either already a stub (from Phase 1) or absent**
+- [ ] **Step 5: Confirm `enable_rich_mode` flag is shipped by Phase 1 per ERRATA §4**
 
 ```bash
-grep -n "enable_rich_mode" src/config/features.py
+grep -n "ENABLE_RICH_MODE\|enable_rich_mode" src/config/feature_flags.py
 ```
 
-If absent, Task 10 introduces it. If present as a stub default-OFF, Task 10 extends the admin toggle. Note the current state.
+Expected: Phase 1 exposes the string constant `ENABLE_RICH_MODE = "enable_rich_mode"` and the flag is in `_DEFAULTS` with value `False`. Phase 4 does NOT create a parallel `src/config/features.py` module — the consumer path in Task 8/10 calls `get_flag_resolver().is_enabled(sub, ENABLE_RICH_MODE)`. If the constant is missing, halt and reconcile with Phase 1.
 
 - [ ] **Step 6: Confirm `src/intelligence/generator.py` has no formatting code to remove**
 
@@ -320,6 +320,10 @@ class FormatHint(str, enum.Enum):
 
 @dataclass(frozen=True)
 class ClassifiedQuery:
+    # `query_text` is the canonical ERRATA §9 field — always populated from the
+    # classifier input so downstream builders (Task 8) can read it directly
+    # without hasattr/getattr fallbacks.
+    query_text: str
     intent: str
     format_hint: FormatHint
     entities: list[str]
@@ -338,7 +342,13 @@ async def classify_query(query_text: str) -> ClassifiedQuery:
         hint = FormatHint.COMPACT
     urls = _URL_RE.findall(query_text)
     ents = [e for e in parsed.get("entities", []) if isinstance(e, str)]
-    return ClassifiedQuery(intent=intent, format_hint=hint, entities=ents, urls=urls)
+    return ClassifiedQuery(
+        query_text=query_text,
+        intent=intent,
+        format_hint=hint,
+        entities=ents,
+        urls=urls,
+    )
 
 
 def _safe_parse(raw: str) -> dict[str, Any]:
@@ -788,6 +798,64 @@ def _pack(has_sme_artifacts=True, total_chunks=12, distinct_docs=3):
     )
 
 
+def _packed_item(text, *, artifact_type=None, provenance=(("d1", "c1"),),
+                 sme_backed=False):
+    """Builds a PackedItem for from_packed_items factory tests."""
+    from src.retrieval.types import PackedItem
+    return PackedItem(
+        text=text,
+        provenance=list(provenance),
+        layer="a",
+        confidence=0.9,
+        rerank_score=0.8,
+        sme_backed=sme_backed,
+        metadata={"artifact_type": artifact_type} if artifact_type else {},
+    )
+
+
+def test_from_packed_items_splits_by_artifact_type():
+    # ERRATA §10 — canonical factory covers bank / evidence / insights.
+    items = [
+        _packed_item("Q3 revenue $5.3M"),
+        _packed_item("QoQ growth 14%", artifact_type="insight", sme_backed=True),
+        _packed_item("Renegotiate top-3 vendor contracts",
+                     artifact_type="recommendation",
+                     provenance=(("q3_pl", "c2"),), sme_backed=True),
+    ]
+    summary = PackSummary.from_packed_items(items)
+    assert summary.total_chunks == 3
+    assert summary.distinct_docs == 2
+    assert summary.has_sme_artifacts is True
+    assert len(summary.bank_entries) == 1
+    assert summary.bank_entries[0]["recommendation"] == (
+        "Renegotiate top-3 vendor contracts"
+    )
+    assert summary.bank_entries[0]["evidence"] == ["q3_pl:c2"]
+    assert len(summary.insights) == 1
+    assert summary.insights[0].text == "QoQ growth 14%"
+    # Every item with provenance lands in evidence_items
+    assert len(summary.evidence_items) == 3
+
+
+def test_from_packed_items_empty_pack():
+    summary = PackSummary.from_packed_items([])
+    assert summary.total_chunks == 0
+    assert summary.distinct_docs == 0
+    assert summary.has_sme_artifacts is False
+    assert summary.bank_entries == ()
+    assert summary.evidence_items == ()
+    assert summary.insights == ()
+
+
+def test_from_packed_items_sme_backed_without_artifact_type():
+    # A Layer-C-overlap item may have sme_backed=True without an artifact_type.
+    items = [_packed_item("generic chunk", sme_backed=True)]
+    summary = PackSummary.from_packed_items(items)
+    assert summary.has_sme_artifacts is True
+    assert summary.bank_entries == ()
+    assert summary.insights == ()
+
+
 def test_compact_override_always_wins():
     shape = resolve_response_shape(
         intent="analyze",
@@ -887,6 +955,7 @@ Append to `src/generation/prompts.py`:
 import enum
 from dataclasses import dataclass
 
+from src.retrieval.types import PackedItem
 from src.serving.model_router import FormatHint
 
 
@@ -898,9 +967,62 @@ class ResponseShape(str, enum.Enum):
 
 @dataclass(frozen=True)
 class PackSummary:
+    """ERRATA §10 — canonical PackSummary shape.
+
+    `bank_entries` / `evidence_items` / `insights` are derived views over the
+    underlying `PackedItem` list that Task 8 and Task 9 read directly. The
+    factory `from_packed_items` is the single construction path; callers
+    never instantiate PackSummary by hand.
+    """
     total_chunks: int
     distinct_docs: int
     has_sme_artifacts: bool
+    bank_entries: tuple[dict, ...] = ()
+    evidence_items: tuple[PackedItem, ...] = ()
+    insights: tuple[PackedItem, ...] = ()
+
+    @classmethod
+    def from_packed_items(cls, items: list[PackedItem]) -> "PackSummary":
+        """Build PackSummary from a post-assembly PackedItem list (Phase 3).
+
+        Filters by `metadata["artifact_type"]`:
+          - `"recommendation"` → emitted as plain-dict `bank_entries`
+            (Task 9 rewrites operate on dicts, not dataclasses).
+          - `"insight"` → kept as `PackedItem` for inline insight refs.
+          - everything with `provenance` populated contributes to
+            `evidence_items` — what Task 8 passes into rich templates.
+        """
+        evidence: list[PackedItem] = []
+        insights: list[PackedItem] = []
+        bank: list[dict] = []
+        docs: set[str] = set()
+        has_sme = False
+        for it in items:
+            artifact = it.metadata.get("artifact_type") if it.metadata else None
+            if it.sme_backed or artifact in {
+                "dossier", "insight", "comparative", "recommendation",
+            }:
+                has_sme = True
+            if it.provenance:
+                evidence.append(it)
+                for doc_id, _ in it.provenance:
+                    docs.add(doc_id)
+            if artifact == "insight":
+                insights.append(it)
+            if artifact == "recommendation":
+                bank.append({
+                    "recommendation": it.text,
+                    "evidence": [f"{d}:{c}" for d, c in it.provenance],
+                    "metadata": dict(it.metadata or {}),
+                })
+        return cls(
+            total_chunks=len(items),
+            distinct_docs=len(docs),
+            has_sme_artifacts=has_sme,
+            bank_entries=tuple(bank),
+            evidence_items=tuple(evidence),
+            insights=tuple(insights),
+        )
 
 
 _TRIVIAL_INTENTS: frozenset[str] = frozenset({
@@ -1087,7 +1209,9 @@ def persona_bundle_from_adapter(adapter, *, intent: str) -> PersonaBundle:
     as read — we never mutate it, and we never re-fetch from Blob here.
     Empty intent_template_body signals "no per-domain override, use the
     global rich_{intent}.md template" — the caller handles that fallback
-    in Task 8.
+    in Task 8. Per ERRATA §1, `content_hash` + `version` are direct
+    attributes on the Adapter instance (populated at load time); we do
+    NOT call `last_load_metadata()` to obtain them.
     """
     if intent not in _RICH_INTENTS:
         raise ValueError(
@@ -1195,6 +1319,7 @@ def _stub_adapter():
 async def test_rich_mode_off_uses_compact_path():
     agent = CoreAgent()
     classified = ClassifiedQuery(
+        query_text="Analyze Q3 trends.",
         intent="analyze", format_hint=FormatHint.AUTO,
         entities=[], urls=[],
     )
@@ -1206,7 +1331,9 @@ async def test_rich_mode_off_uses_compact_path():
         await agent._build_prompt_for_test(
             classified=classified,
             pack_summary=MagicMock(has_sme_artifacts=True,
-                                   total_chunks=10, distinct_docs=3),
+                                   total_chunks=10, distinct_docs=3,
+                                   evidence_items=(), insights=(),
+                                   bank_entries=()),
             subscription_id="s", profile_id="p",
         )
     rich_mock.assert_not_called()
@@ -1216,6 +1343,7 @@ async def test_rich_mode_off_uses_compact_path():
 async def test_rich_mode_on_analyze_builds_rich_prompt():
     agent = CoreAgent()
     classified = ClassifiedQuery(
+        query_text="Analyze Q3 revenue trends across quarters.",
         intent="analyze", format_hint=FormatHint.AUTO,
         entities=[], urls=[],
     )
@@ -1228,7 +1356,9 @@ async def test_rich_mode_on_analyze_builds_rich_prompt():
         prompt = await agent._build_prompt_for_test(
             classified=classified,
             pack_summary=MagicMock(has_sme_artifacts=True,
-                                   total_chunks=10, distinct_docs=3),
+                                   total_chunks=10, distinct_docs=3,
+                                   evidence_items=(), insights=(),
+                                   bank_entries=()),
             subscription_id="s", profile_id="p",
         )
     assert prompt == "RICH_PROMPT"
@@ -1236,12 +1366,16 @@ async def test_rich_mode_on_analyze_builds_rich_prompt():
     inputs = rich_mock.call_args.args[0]
     assert inputs.persona_role == "senior financial analyst"
     assert inputs.output_cap_tokens == 1200
+    assert inputs.query_text == (
+        "Analyze Q3 revenue trends across quarters."
+    )
 
 
 @pytest.mark.asyncio
 async def test_compact_override_bypasses_rich_even_with_flag_on():
     agent = CoreAgent()
     classified = ClassifiedQuery(
+        query_text="Keep it short please.",
         intent="analyze", format_hint=FormatHint.COMPACT,
         entities=[], urls=[],
     )
@@ -1253,7 +1387,9 @@ async def test_compact_override_bypasses_rich_even_with_flag_on():
         await agent._build_prompt_for_test(
             classified=classified,
             pack_summary=MagicMock(has_sme_artifacts=True,
-                                   total_chunks=10, distinct_docs=3),
+                                   total_chunks=10, distinct_docs=3,
+                                   evidence_items=(), insights=(),
+                                   bank_entries=()),
             subscription_id="s", profile_id="p",
         )
     rich_mock.assert_not_called()
@@ -1263,6 +1399,7 @@ async def test_compact_override_bypasses_rich_even_with_flag_on():
 async def test_honest_compact_is_used_when_pack_is_thin():
     agent = CoreAgent()
     classified = ClassifiedQuery(
+        query_text="Analyze with thin evidence.",
         intent="analyze", format_hint=FormatHint.AUTO,
         entities=[], urls=[],
     )
@@ -1276,7 +1413,9 @@ async def test_honest_compact_is_used_when_pack_is_thin():
         prompt = await agent._build_prompt_for_test(
             classified=classified,
             pack_summary=MagicMock(has_sme_artifacts=False,
-                                   total_chunks=2, distinct_docs=1),
+                                   total_chunks=2, distinct_docs=1,
+                                   evidence_items=(), insights=(),
+                                   bank_entries=()),
             subscription_id="s", profile_id="p",
         )
     assert prompt == "HONEST_COMPACT_PROMPT"
@@ -1298,7 +1437,7 @@ Modify `src/agent/core_agent.py`. The minimal change:
 
 ```python
 # src/agent/core_agent.py — additions; existing handle() structure preserved
-from src.config.features import is_rich_mode_enabled as _is_rich_mode_enabled
+from src.config.feature_flags import ENABLE_RICH_MODE, get_flag_resolver
 from src.generation.prompts import (
     AnalyzePromptInputs,
     DiagnosePromptInputs,
@@ -1312,14 +1451,21 @@ from src.generation.prompts import (
     persona_bundle_from_adapter,
     resolve_response_shape,
 )
-from src.intelligence.sme.adapter_loader import AdapterLoader
-
-_adapter_loader = AdapterLoader()
+from src.intelligence.sme.adapter_loader import get_adapter_loader
 
 
 async def _load_adapter(subscription_id: str, profile_domain: str):
     """Thin wrapper — kept as module-level so tests can patch it."""
-    return await _adapter_loader.load(subscription_id, profile_domain)
+    return get_adapter_loader().load(subscription_id, profile_domain)
+
+
+async def _is_rich_mode_enabled(subscription_id: str) -> bool:
+    """Thin wrapper — tests patch this to control the flag per call.
+
+    Delegates to Phase 1's canonical SMEFeatureFlags (ERRATA §4). Default
+    OFF is encoded in `feature_flags._DEFAULTS`; no duplicate handling here.
+    """
+    return get_flag_resolver().is_enabled(subscription_id, ENABLE_RICH_MODE)
 
 
 class CoreAgent:
@@ -1345,32 +1491,86 @@ class CoreAgent:
         adapter = await _load_adapter(subscription_id, domain)
         if shape is ResponseShape.HONEST_COMPACT:
             return build_honest_compact_prompt(
-                query_text=classified.query_text if hasattr(classified, "query_text") else "",
+                query_text=classified.query_text,
                 pack_summary=pack_summary,
             )
-        persona = persona_bundle_from_adapter(adapter, intent=classified.intent)
-        cap = getattr(adapter.output_caps, classified.intent, 1200)
-        pack_tokens = adapter.retrieval_caps.max_pack_tokens.get(classified.intent, 6000)
-        evidence = self._evidence_items_from_pack(pack_summary)
-        if classified.intent == "analyze":
+        # Investigate is spec §8 analyze-like; reuse the analyze persona lookup
+        # so rich-shaped investigate falls into the analyze template.
+        template_intent = (
+            "analyze" if classified.intent in ("investigate", "overview")
+            else classified.intent
+        )
+        persona = persona_bundle_from_adapter(adapter, intent=template_intent)
+        cap = getattr(adapter.output_caps, template_intent, 1200)
+        pack_tokens = adapter.retrieval_caps.max_pack_tokens.get(
+            template_intent, 6000
+        )
+        # ERRATA §10: PackSummary already exposes these tuples directly;
+        # no _evidence_items_from_pack / _insights_from_pack helpers needed.
+        evidence = [
+            {"doc_id": p[0][0], "chunk_id": p[0][1], "text": it.text}
+            for it in pack_summary.evidence_items
+            for p in [it.provenance] if p
+        ]
+        insights = [
+            {"type": it.metadata.get("insight_type", "insight"),
+             "narrative": it.text}
+            for it in pack_summary.insights
+        ]
+        if template_intent == "analyze":
             return build_analyze_rich_prompt(AnalyzePromptInputs(
-                query_text=getattr(classified, "query_text", ""),
+                query_text=classified.query_text,
                 persona_role=persona.role, persona_voice=persona.voice,
                 grounding_rules=persona.grounding_rules,
                 pack_tokens=pack_tokens, output_cap_tokens=cap,
-                evidence_items=evidence, insight_refs=self._insights_from_pack(pack_summary),
+                evidence_items=evidence, insight_refs=insights,
                 domain=domain,
             ))
-        if classified.intent == "diagnose":
-            return build_diagnose_rich_prompt(DiagnosePromptInputs(...))
-        if classified.intent == "recommend":
-            return build_recommend_rich_prompt(RecommendPromptInputs(...))
+        if template_intent == "diagnose":
+            # Diagnose template maps `insights` to `diagnostic_hits`
+            # (Task 4). Each hit needs symptom + doc/chunk + rank.
+            hits = [
+                {"symptom": it.metadata.get("symptom", it.text[:120]),
+                 "doc_id": it.provenance[0][0] if it.provenance else "",
+                 "chunk_id": it.provenance[0][1] if it.provenance else "",
+                 "rank": i + 1}
+                for i, it in enumerate(pack_summary.insights)
+            ]
+            return build_diagnose_rich_prompt(DiagnosePromptInputs(
+                query_text=classified.query_text,
+                persona_role=persona.role, persona_voice=persona.voice,
+                grounding_rules=persona.grounding_rules,
+                pack_tokens=pack_tokens, output_cap_tokens=cap,
+                evidence_items=evidence, diagnostic_hits=hits,
+                domain=domain,
+            ))
+        if template_intent == "recommend":
+            return build_recommend_rich_prompt(RecommendPromptInputs(
+                query_text=classified.query_text,
+                persona_role=persona.role, persona_voice=persona.voice,
+                grounding_rules=persona.grounding_rules,
+                pack_tokens=pack_tokens, output_cap_tokens=cap,
+                evidence_items=evidence,
+                bank_entries=list(pack_summary.bank_entries),
+                domain=domain,
+            ))
         return self._build_compact_prompt(classified, pack_summary)
 ```
 
-(The `...` placeholders expand to the same construction pattern as `analyze` — expand in the real implementation; omitted here to respect the "≤50 lines Python per step" constraint.)
+Notes:
+- `investigate` and `overview` are routed through the `analyze` template per
+  spec §8 ("overview/investigate are treated as analyze-like"). This closes
+  the fall-through where a RICH-shaped `investigate` previously reached the
+  compact default.
+- Evidence / insight / bank extraction reads `pack_summary.evidence_items`,
+  `.insights`, and `.bank_entries` directly per ERRATA §10 — no private
+  helper methods on `CoreAgent`.
+- The flag resolver wrapper delegates to `SMEFeatureFlags.is_enabled` with
+  `ENABLE_RICH_MODE`; default-OFF is Phase 1's responsibility.
 
-`handle()` itself gains four lines: pack_summary assembly (already exists in Phase 3), the `enable_rich` lookup, the shape dispatch, and the adapter load. Nothing else in `handle()` moves.
+`handle()` itself gains four lines: pack_summary assembly (already exists in
+Phase 3 via `PackSummary.from_packed_items`), the `enable_rich` lookup, the
+shape dispatch, and the adapter load. Nothing else in `handle()` moves.
 
 - [ ] **Step 4: Run tests and commit**
 
@@ -1615,96 +1815,98 @@ git commit -m "phase4(sme-grounding): recommendation post-pass drops unverifiabl
 
 ---
 
-## Task 10: `enable_rich_mode` flag + admin toggle
+## Task 10: `enable_rich_mode` flag wiring + admin toggle
 
 **Files:**
-- Modify: `src/config/features.py`
 - Modify: `src/api/admin_flags.py`
 - Create: `tests/config/test_features_rich_flag.py`
 
-Per Section 13.2, every new capability is independently flag-gated per-subscription with a global default. Phase 4's flag is `enable_rich_mode`, default OFF.
+Per ERRATA §4 the canonical flag module is Phase 1's `src/config/feature_flags.py`
+(class `SMEFeatureFlags`, flag constant `ENABLE_RICH_MODE`, singleton
+`get_flag_resolver()`). Phase 4 does NOT create a parallel `src/config/features.py`.
+Default-OFF is already encoded in Phase 1's `_DEFAULTS` map; there is no
+duplicate default-handling needed here. Phase 4's contribution in Task 10 is:
+(a) consumer-side tests showing the master-kill / per-subscription override /
+global default semantics via the canonical resolver, and (b) the admin toggle
+endpoint that writes through the same `FlagStore`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the consumer tests**
 
 Create `tests/config/test_features_rich_flag.py`:
 
 ```python
-"""Tests for enable_rich_mode flag resolution."""
-from unittest.mock import AsyncMock, patch
+"""Tests for enable_rich_mode flag resolution via the Phase 1 resolver."""
+from unittest.mock import MagicMock
 
 import pytest
 
-from src.config.features import is_rich_mode_enabled
+from src.config.feature_flags import (
+    ENABLE_RICH_MODE,
+    FlagStore,
+    SMEFeatureFlags,
+)
 
 
-@pytest.mark.asyncio
-async def test_defaults_to_false_when_nothing_configured():
-    with patch("src.config.features._lookup_flag",
-               new=AsyncMock(return_value=None)):
-        assert await is_rich_mode_enabled("sub_any") is False
+def _flags(overrides: dict[str, bool]) -> SMEFeatureFlags:
+    store = MagicMock(spec=FlagStore)
+    store.get_subscription_overrides.return_value = overrides
+    return SMEFeatureFlags(store=store)
 
 
-@pytest.mark.asyncio
-async def test_returns_true_when_subscription_override_is_true():
-    with patch("src.config.features._lookup_flag",
-               new=AsyncMock(return_value=True)):
-        assert await is_rich_mode_enabled("sub_a") is True
+def test_defaults_to_false_when_nothing_configured():
+    assert _flags({}).is_enabled("sub_any", ENABLE_RICH_MODE) is False
 
 
-@pytest.mark.asyncio
-async def test_master_kill_switch_forces_false():
-    async def _lookup(sub, name):
-        if name == "sme_redesign_enabled":
-            return False
-        if name == "enable_rich_mode":
-            return True
-        return None
-    with patch("src.config.features._lookup_flag", new=_lookup):
-        assert await is_rich_mode_enabled("sub_a") is False
+def test_requires_master_flag_on_for_per_sub_override():
+    # Per Phase 1 semantics, dependent flags need master ON to surface.
+    assert _flags({"enable_rich_mode": True}).is_enabled(
+        "sub_a", ENABLE_RICH_MODE,
+    ) is False
 
 
-@pytest.mark.asyncio
-async def test_global_default_applied_when_no_subscription_override():
-    async def _lookup(sub, name):
-        if sub is None and name == "enable_rich_mode":
-            return True
-        return None
-    with patch("src.config.features._lookup_flag", new=_lookup):
-        assert await is_rich_mode_enabled("sub_a") is True
+def test_master_plus_per_sub_returns_true():
+    assert _flags({
+        "sme_redesign_enabled": True,
+        "enable_rich_mode": True,
+    }).is_enabled("sub_a", ENABLE_RICH_MODE) is True
+
+
+def test_master_off_forces_false_even_with_per_sub_on():
+    assert _flags({
+        "sme_redesign_enabled": False,
+        "enable_rich_mode": True,
+    }).is_enabled("sub_a", ENABLE_RICH_MODE) is False
 ```
 
-- [ ] **Step 2: Extend `src/config/features.py`**
+- [ ] **Step 2: Confirm `src/config/feature_flags.py` already exposes what Phase 4 needs**
+
+Phase 1 already ships:
 
 ```python
-# src/config/features.py — addition; existing flags preserved
-async def is_rich_mode_enabled(subscription_id: str) -> bool:
-    """Resolve enable_rich_mode flag with master kill switch precedence.
-
-    Precedence: subscription override → global default → False.
-    Overridden to False whenever sme_redesign_enabled is explicitly False
-    at either scope (Section 13.3 master kill switch).
-    """
-    master = await _lookup_flag(subscription_id, "sme_redesign_enabled")
-    if master is False:
-        return False
-    per_sub = await _lookup_flag(subscription_id, "enable_rich_mode")
-    if per_sub is not None:
-        return per_sub
-    global_default = await _lookup_flag(None, "enable_rich_mode")
-    return bool(global_default) if global_default is not None else False
+from src.config.feature_flags import (
+    ENABLE_RICH_MODE,        # string constant "enable_rich_mode"
+    SMEFeatureFlags,         # resolver class
+    get_flag_resolver,       # process-wide singleton accessor
+)
 ```
+
+Phase 4 code paths call `get_flag_resolver().is_enabled(subscription_id, ENABLE_RICH_MODE)`
+— see Task 8's `_is_rich_mode_enabled` wrapper. No new resolver code is added
+by Phase 4.
 
 - [ ] **Step 3: Expose admin toggle in `src/api/admin_flags.py`**
 
-Add a `PATCH /admin/flags/enable_rich_mode` endpoint that accepts `{subscription_id, value}` and writes via the existing flag store. No new storage — this uses the Phase 1 flag infrastructure. Audit-logged via the existing admin-audit middleware.
+Add a `PATCH /admin/flags/enable_rich_mode` endpoint that accepts
+`{subscription_id, value}` and writes via the Phase 1 `FlagStore` used by
+`SMEFeatureFlags`. No new storage — this reuses the Phase 1 flag infrastructure.
+Audit-logged via the existing admin-audit middleware.
 
 - [ ] **Step 4: Run tests and commit**
 
 ```bash
 pytest tests/config/test_features_rich_flag.py -v
-git add src/config/features.py src/api/admin_flags.py \
-        tests/config/test_features_rich_flag.py
-git commit -m "phase4(sme-flag): enable_rich_mode per-subscription toggle + admin API"
+git add src/api/admin_flags.py tests/config/test_features_rich_flag.py
+git commit -m "phase4(sme-flag): enable_rich_mode admin toggle + consumer tests"
 ```
 
 ---
@@ -1734,6 +1936,7 @@ from src.serving.model_router import ClassifiedQuery, FormatHint
 async def test_rich_mode_on_produces_rich_skeleton(intent):
     agent = CoreAgent()
     classified = ClassifiedQuery(
+        query_text=f"Sample {intent} query.",
         intent=intent, format_hint=FormatHint.AUTO,
         entities=[], urls=[],
     )
@@ -1755,6 +1958,7 @@ async def test_compact_override_bypasses_rich_for_every_new_intent():
     agent = CoreAgent()
     for intent in ("analyze", "diagnose", "recommend"):
         classified = ClassifiedQuery(
+            query_text=f"Compact {intent} please.",
             intent=intent, format_hint=FormatHint.COMPACT,
             entities=[], urls=[],
         )
@@ -1775,6 +1979,7 @@ async def test_trivial_intent_stays_compact_when_rich_on():
     agent = CoreAgent()
     for intent in ("greeting", "lookup", "count"):
         classified = ClassifiedQuery(
+            query_text=f"Trivial {intent} query.",
             intent=intent, format_hint=FormatHint.AUTO,
             entities=[], urls=[],
         )
@@ -1795,6 +2000,7 @@ async def test_honest_compact_is_taken_when_pack_is_thin():
     # Analytical intent + thin pack → honest_compact, not rich
     agent = CoreAgent()
     classified = ClassifiedQuery(
+        query_text="Analyze trends with scant evidence.",
         intent="analyze", format_hint=FormatHint.AUTO,
         entities=[], urls=[],
     )
@@ -2088,6 +2294,26 @@ Commit the exit checklist itself only if it introduces doc changes — the plan 
 - Task 2's classifier prompt change is reused across environments; if any environment pins the classifier prompt separately (e.g., a fine-tuned head), it needs the same update — flagged for the operator.
 
 **Line budget:** target 2000–2400 lines; this plan lands within it.
+
+**ERRATA reconciliation (2026-04-21):** Applied ERRATA §§1, 4, 9, 10 on 2026-04-21.
+- §1 (AdapterLoader): Task 7's `persona_bundle_from_adapter` reads
+  `adapter.content_hash` / `.version` as direct attributes; Task 8 uses
+  `get_adapter_loader()` singleton and `.load()` (no `.get()`).
+- §4 (Feature flags): Task 10 no longer creates a parallel
+  `src/config/features.py`; all consumers call
+  `get_flag_resolver().is_enabled(sub, ENABLE_RICH_MODE)` from Phase 1's
+  `src/config/feature_flags.py`.
+- §9 (ClassifiedQuery): `query_text` added as first dataclass field in
+  Task 2; populated by `classify_query`; Task 8 / Task 11 tests read it
+  directly (no hasattr/getattr fallback).
+- §10 (PackSummary): extended with `bank_entries`, `evidence_items`,
+  `insights`, and `from_packed_items(...)` classmethod factory, with
+  unit tests. Task 8 wires directly to these fields; the transient
+  `_evidence_items_from_pack` / `_insights_from_pack` helpers were
+  removed. Task 9's `pack_summary.bank_entries` access is now supported.
+- Collateral fix: Task 8 routes `investigate` (and the `overview`
+  fallback) through the `analyze` template per spec §8; no longer
+  falls through to compact.
 
 ---
 

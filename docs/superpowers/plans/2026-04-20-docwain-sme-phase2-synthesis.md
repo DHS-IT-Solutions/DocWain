@@ -32,16 +32,21 @@ src/intelligence/sme/                           [extended from Phase 1]
 ├── __init__.py                                 [modified — export public API]
 ├── adapter_loader.py, verifier.py, trace.py    [Phase 1 — unchanged]
 ├── storage.py                                  [Phase 1 — extended Task 11]
+├── artifact_models.py                          [Phase 1 — extended Task 2 with per-type schemas]
 ├── synthesizer.py                              [MODIFIED — full orchestrator]
-├── dossier_builder.py                          [MODIFIED — full LLM synthesis]
-├── insight_index_builder.py                    [MODIFIED — compact full impl]
-├── comparative_register_builder.py             [MODIFIED — compact full impl]
-├── kg_materializer.py                          [MODIFIED — full Cypher writer]
-├── recommendation_bank_builder.py              [MODIFIED — compact full impl]
-├── llm_gateway.py, artifact_schemas.py         [NEW]
-├── input_snapshot.py, flags.py                 [NEW]
+├── builders/                                   [Phase 1 subpackage — stubs replaced]
+│   ├── _base.py                                [Phase 1 — unchanged]
+│   ├── dossier.py                              [MODIFIED — full LLM synthesis]
+│   ├── insight_index.py                        [MODIFIED — compact full impl]
+│   ├── comparative_register.py                 [MODIFIED — compact full impl]
+│   ├── kg_materializer.py                      [MODIFIED — full Cypher writer]
+│   └── recommendation_bank.py                  [MODIFIED — compact full impl]
+├── llm_gateway.py                              [NEW]
+├── input_snapshot.py                           [NEW]
 
+src/config/feature_flags.py                     [Phase 1 — SMEFeatureFlags + constants; consumed here]
 src/api/pipeline_api.py                         [MODIFIED — synthesis wiring]
+src/api/document_status.py                      [MODIFIED — +4 control-plane helpers per Task 9.5]
 src/tasks/embedding.py                          [MODIFIED — delegation]
 src/retrieval/unified_retriever.py              [MODIFIED — Layer B]
 src/retrieval/sme_retrieval.py                  [NEW — Layer C]
@@ -49,6 +54,7 @@ src/kg/retrieval.py                             [MODIFIED — INFERRED_RELATION]
 
 tests/intelligence/sme/test_*.py                [per-module unit tests]
 tests/api/test_pipeline_api_sme.py              [training-stage wiring]
+tests/api/test_document_status_helpers.py       [Task 9.5 unit tests]
 tests/retrieval/test_unified_retriever_layer_b.py, test_sme_retrieval.py
 tests/integration/test_sme_end_to_end.py        [sandbox end-to-end]
 ```
@@ -60,13 +66,21 @@ Phase 1 contract — `synthesize_profile(sub, prof, adapter, traces, storage) ->
 ## Task 1: Preflight audit of Phase 1 artifacts and Phase 2 setup
 
 **Files:**
-- Audit only: `src/intelligence/sme/adapter_loader.py`, `verifier.py`, `trace.py`, `storage.py`, `synthesizer.py` (stub), the five `*_builder.py` stubs
+- Audit only: `src/intelligence/sme/adapter_loader.py`, `verifier.py`, `trace.py`, `storage.py`, `artifact_models.py`, `synthesizer.py` (stub), and the five stubs under `src/intelligence/sme/builders/` (`dossier.py`, `insight_index.py`, `comparative_register.py`, `kg_materializer.py`, `recommendation_bank.py`) + `builders/_base.py`
 - Audit only: `src/api/pipeline_api.py`, `src/tasks/embedding.py`, `src/retrieval/unified_retriever.py`, `src/kg/retrieval.py`, `src/api/statuses.py`
 - Confirm: sandbox subscription + profile IDs from Phase 1's `tests/intelligence/sme/conftest.py`
 
 - [ ] **Step 1: Read the Phase 1 SME modules and note the public contract**
 
-For each of `adapter_loader.py`, `verifier.py`, `trace.py`, `storage.py`, `synthesizer.py`: record exported class names + signatures + stub behavior. Key contracts Phase 2 builders must match: `AdapterLoader.load(sub, domain) -> LoadedAdapter`; `SMEVerifier.verify(items, profile_ctx) -> VerifierReport`; `ArtifactStorage.{put_snippet, put_canonical, put_manifest}`. Surface any required signature change in the self-review gap list.
+For each of `adapter_loader.py`, `verifier.py`, `trace.py`, `storage.py`, `artifact_models.py`, `synthesizer.py`, and `src/config/feature_flags.py`: record exported class names + signatures + stub behavior. Key contracts Phase 2 builders must match:
+- `AdapterLoader.load(sub, domain) -> Adapter` (with `adapter.version` + `adapter.content_hash` attributes); module-level `get_adapter_loader()` factory.
+- `SMEVerifier.verify_batch(items, ctx) -> list[Verdict]` (per-item use `verify(item, ctx) -> Verdict`).
+- `SMEArtifactStorage.{put_snippet, put_canonical, put_manifest, persist_items}` constructed via `StorageDeps(...)` per Phase 1.
+- `SynthesisTraceWriter.append(entry: dict)` (canonical per ERRATA §5); Phase 2 custom `record_*` helpers are thin adapters built on top.
+- `src/config/feature_flags.py` exports `SMEFeatureFlags`, `get_flag_resolver()`, `init_flag_resolver()`, and the 8 flag-name `Final[str]` constants (`SME_REDESIGN_ENABLED`, `ENABLE_SME_SYNTHESIS`, `ENABLE_SME_RETRIEVAL`, `ENABLE_KG_SYNTHESIZED_EDGES`, `ENABLE_RICH_MODE`, `ENABLE_URL_AS_PROMPT`, `ENABLE_HYBRID_RETRIEVAL`, `ENABLE_CROSS_ENCODER_RERANK`).
+- `artifact_models.py` exports `ArtifactItem` + `EvidenceRef` from Phase 1; Phase 2 Task 2 extends with five per-type schemas — do NOT create a parallel `artifact_schemas.py`.
+
+Surface any required signature change in the self-review gap list. This Task 1 audit replaces any legacy drift grep — fail fast if Phase 1 didn't ship all of the above.
 
 - [ ] **Step 2: Read the current training-stage terminal step**
 
@@ -84,29 +98,30 @@ Phase 1's `tests/intelligence/sme/conftest.py` provides `sandbox_subscription_id
 
 ```bash
 mkdir -p tests/api tests/retrieval tests/integration
-touch tests/api/test_pipeline_api_sme.py tests/retrieval/test_unified_retriever_layer_b.py \
+touch tests/api/test_pipeline_api_sme.py tests/api/test_document_status_helpers.py \
+      tests/retrieval/test_unified_retriever_layer_b.py \
       tests/retrieval/test_sme_retrieval.py tests/integration/test_sme_end_to_end.py
-touch src/intelligence/sme/llm_gateway.py src/intelligence/sme/artifact_schemas.py \
-      src/intelligence/sme/input_snapshot.py src/intelligence/sme/flags.py \
+touch src/intelligence/sme/llm_gateway.py \
+      src/intelligence/sme/input_snapshot.py \
       src/retrieval/sme_retrieval.py
 git add -A tests/api tests/retrieval tests/integration \
-           src/intelligence/sme/llm_gateway.py src/intelligence/sme/artifact_schemas.py \
-           src/intelligence/sme/input_snapshot.py src/intelligence/sme/flags.py \
+           src/intelligence/sme/llm_gateway.py \
+           src/intelligence/sme/input_snapshot.py \
            src/retrieval/sme_retrieval.py
 git commit -m "phase2(sme-scaffold): empty Phase 2 module and test files"
 ```
 
-Empty-file scaffolding is intentional. Each file receives its real content in a dedicated later task. This keeps individual task commits focused.
+Empty-file scaffolding is intentional. Each file receives its real content in a dedicated later task. This keeps individual task commits focused. Note: no `src/intelligence/sme/flags.py` or `src/intelligence/sme/artifact_schemas.py` is scaffolded — Phase 1 ships `src/config/feature_flags.py` (reused via `SMEFeatureFlags`, `get_flag_resolver()`, and the flag constants) and `src/intelligence/sme/artifact_models.py` (extended with the five per-type schemas in Task 2).
 
 ---
 
 ## Task 2: Artifact schemas — the five pydantic contracts
 
 **Files:**
-- Create: `src/intelligence/sme/artifact_schemas.py`
+- Modify: `src/intelligence/sme/artifact_models.py` (Phase 1 shipped `ArtifactItem` + `EvidenceRef`; this task extends it with the five per-type schemas)
 - Create: `tests/intelligence/sme/test_artifact_schemas.py`
 
-Every artifact item carries provenance + confidence per spec Section 6. This task makes the contract explicit. Phase 3 (retrieval-on) consumes these same types; nothing downstream may change the shape without a breaking-change migration.
+Per ERRATA §6 the canonical module is `src/intelligence/sme/artifact_models.py` (Phase 1 already defines `ArtifactItem` + `EvidenceRef` there). Phase 2 adds the five per-type schemas (`DossierSection`, `InsightItem`, `ComparativeItem`, `RecommendationItem`, `InferredEdge`) into the same module — no parallel `artifact_schemas.py` is created. Every artifact item carries provenance + confidence per spec Section 6. This task makes the contract explicit. Phase 3 (retrieval-on) consumes these same types; nothing downstream may change the shape without a breaking-change migration.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -119,7 +134,7 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from src.intelligence.sme.artifact_schemas import (
+from src.intelligence.sme.artifact_models import (
     Evidence, DossierSection, InsightItem, ComparativeItem,
     RecommendationItem, InferredEdge, ArtifactType,
 )
@@ -171,9 +186,9 @@ def test_artifact_type_enum_stable():
 
 - [ ] **Step 2: Run failing tests** — `pytest tests/intelligence/sme/test_artifact_schemas.py -v` (module missing).
 
-- [ ] **Step 3: Write the schemas**
+- [ ] **Step 3: Extend the schemas module**
 
-Create `src/intelligence/sme/artifact_schemas.py`:
+Extend `src/intelligence/sme/artifact_models.py` (Phase 1 already ships the base `ArtifactItem` + `EvidenceRef` in this module; Phase 2 appends the per-type schemas below — do NOT create `artifact_schemas.py`):
 
 ```python
 """Pydantic contracts for the five SME artifact types + inferred KG edge.
@@ -181,6 +196,11 @@ Create `src/intelligence/sme/artifact_schemas.py`:
 These types are the single source of truth shared by builders, verifier,
 storage, and retrieval. Any field change is a breaking migration; bump
 synthesis_version on the artifact manifest and dual-read during rollout.
+
+Every per-type schema exposes a `.text` property returning the substantively-
+checkable string; the Phase 1 SMEVerifier operates on `.text`, while per-type
+attributes (narrative / analysis / recommendation / relation_type) remain for
+downstream consumers.
 """
 from __future__ import annotations
 
@@ -212,6 +232,10 @@ class DossierSection(_WithConfidence):
     evidence: list[Evidence] = Field(..., min_length=1)
     entity_refs: list[str] = Field(default_factory=list)
 
+    @property
+    def text(self) -> str:
+        return self.narrative
+
 
 class DossierArtifact(BaseModel):
     subscription_id: str
@@ -231,6 +255,10 @@ class InsightItem(_WithConfidence):
     temporal_scope: str | None = None
     entity_refs: list[str] = Field(default_factory=list)
 
+    @property
+    def text(self) -> str:
+        return self.narrative
+
 
 class InsightIndexArtifact(BaseModel):
     subscription_id: str
@@ -248,6 +276,10 @@ class ComparativeItem(_WithConfidence):
     analysis: str
     resolution: str | None = None
     evidence: list[Evidence] = Field(..., min_length=1)
+
+    @property
+    def text(self) -> str:
+        return self.analysis
 
 
 class ComparativeRegisterArtifact(BaseModel):
@@ -268,6 +300,10 @@ class RecommendationItem(_WithConfidence):
     caveats: list[str] = Field(default_factory=list)
     evidence: list[Evidence] = Field(..., min_length=1)
     domain_tags: list[str] = Field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return self.recommendation
 
 
 class RecommendationBankArtifact(BaseModel):
@@ -291,6 +327,10 @@ class InferredEdge(_WithConfidence):
     subscription_id: str
     profile_id: str
 
+    @property
+    def text(self) -> str:
+        return f"{self.src_node_id} -[{self.relation_type}]-> {self.dst_node_id}"
+
 
 class KGMaterializationReport(BaseModel):
     edges_created: int
@@ -300,11 +340,11 @@ class KGMaterializationReport(BaseModel):
     synthesis_version: int
 ```
 
-Keep under 50 lines of logic per file; pydantic does the work. `ArtifactType` literal is intentionally stable — adding members is breaking for Phase 3 filters.
+Keep under 50 lines of logic per file; pydantic does the work. `ArtifactType` literal is intentionally stable — adding members is breaking for Phase 3 filters. The `.text` property is required per ERRATA §3 so Phase 1's `SMEVerifier` can run its evidence-validity and contradiction checks on a unified string across all artifact types.
 
 - [ ] **Step 4: Verify tests pass** — `pytest tests/intelligence/sme/test_artifact_schemas.py -v`
 
-- [ ] **Step 5: Commit** — `git add src/intelligence/sme/artifact_schemas.py tests/intelligence/sme/test_artifact_schemas.py && git commit -m "phase2(sme-schemas): pydantic contracts for all five artifacts + inferred edge"`
+- [ ] **Step 5: Commit** — `git add src/intelligence/sme/artifact_models.py tests/intelligence/sme/test_artifact_schemas.py && git commit -m "phase2(sme-schemas): pydantic contracts for all five artifacts + inferred edge"`
 
 ---
 
@@ -449,7 +489,7 @@ pytest tests/intelligence/sme/test_llm_gateway.py -v
 ## Task 4: SME Dossier builder — full LLM-driven synthesis
 
 **Files:**
-- Modify: `src/intelligence/sme/dossier_builder.py` (Phase 1 stub replaced)
+- Modify: `src/intelligence/sme/builders/dossier.py` (Phase 1 stub replaced — subpackage per ERRATA §6)
 - Create: `tests/intelligence/sme/test_dossier_builder.py`
 
 Illustrative full-flow builder. Tasks 5, 6, 8 follow the same pattern in prose.
@@ -467,10 +507,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.intelligence.sme.artifact_schemas import (
+from src.intelligence.sme.artifact_models import (
     DossierArtifact, DossierSection, Evidence,
 )
-from src.intelligence.sme.dossier_builder import DossierBuilder
+from src.intelligence.sme.builders.dossier import DossierBuilder
 from src.intelligence.sme.llm_gateway import SynthesisLLMResponse
 
 
@@ -516,14 +556,14 @@ def _three_responses():
     ]
 
 
-def _pass_all(items, profile_ctx):
+def _pass_all(items, ctx):
     return MagicMock(passed=items, dropped=[], reasons=[])
 
 
 def test_build_produces_sections_persists_and_drops_verifier_failures():
     # Happy path
     llm = MagicMock(); llm.call.side_effect = _three_responses()
-    verifier = MagicMock(); verifier.verify.side_effect = _pass_all
+    verifier = MagicMock(); verifier.verify_batch.side_effect = _pass_all
     storage = MagicMock(); trace = MagicMock()
     art = DossierBuilder(llm, _adapter(), verifier, storage, trace).build(_ctx())
     assert isinstance(art, DossierArtifact)
@@ -535,12 +575,12 @@ def test_build_produces_sections_persists_and_drops_verifier_failures():
     # Drops: "risks" fails verifier
     llm2 = MagicMock(); llm2.call.side_effect = _three_responses()
     v2 = MagicMock()
-    def _drop_risks(items, profile_ctx):
+    def _drop_risks(items, ctx):
         passed = [i for i in items if i.section != "risks"]
         dropped = [i for i in items if i.section == "risks"]
         return MagicMock(passed=passed, dropped=dropped,
                           reasons=[("risks", "evidence_validity_failed")])
-    v2.verify.side_effect = _drop_risks
+    v2.verify_batch.side_effect = _drop_risks
     s2 = MagicMock(); t2 = MagicMock()
     art2 = DossierBuilder(llm2, _adapter(), v2, s2, t2).build(_ctx())
     assert {s.section for s in art2.sections} == {"overview", "trends"}
@@ -558,7 +598,7 @@ def test_build_applies_all_five_verifier_checks():
     """
     llm = MagicMock(); llm.call.side_effect = _three_responses()
     verifier = MagicMock(); checks_run = []
-    def _verify(items, profile_ctx):
+    def _verify(items, ctx):
         checks_run.append(("evidence_presence", all(i.evidence for i in items)))
         checks_run.append(("evidence_validity", len(items)))
         checks_run.append(("inference_provenance", "non-inferred: pass"))
@@ -566,7 +606,7 @@ def test_build_applies_all_five_verifier_checks():
                            [(i.section, len(i.evidence), i.confidence) for i in items]))
         checks_run.append(("contradiction_check", len(items)))
         return MagicMock(passed=items, dropped=[], reasons=[])
-    verifier.verify.side_effect = _verify
+    verifier.verify_batch.side_effect = _verify
     storage = MagicMock(); trace = MagicMock()
 
     DossierBuilder(llm, _adapter(), verifier, storage, trace).build(_ctx())
@@ -583,7 +623,7 @@ def test_build_applies_all_five_verifier_checks():
 
 - [ ] **Step 3: Write the builder**
 
-Replace `src/intelligence/sme/dossier_builder.py`:
+Replace `src/intelligence/sme/builders/dossier.py`:
 
 ```python
 """SME Dossier builder — per-section LLM synthesis with fail-closed verification.
@@ -596,7 +636,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from src.intelligence.sme.artifact_schemas import (
+from src.intelligence.sme.artifact_models import (
     DossierArtifact, DossierSection, Evidence,
 )
 
@@ -631,7 +671,7 @@ class DossierBuilder:
                 self._trace.record_parse_failure(builder="dossier",
                                                   section=section_name, error=str(e))
 
-        report = self._verifier.verify(candidates, profile_ctx=ctx)
+        report = self._verifier.verify_batch(candidates, ctx)
         for dropped, reason in report.reasons:
             self._trace.record_verifier_drop(builder="dossier", item=dropped, reason=reason)
 
@@ -658,7 +698,9 @@ class DossierBuilder:
             adapter_version=self._adapter.version, trace_tag=tag)
 ```
 
-Five SMEVerifier checks applied: the builder delegates the whole check suite to `verifier.verify(items, profile_ctx=ctx)` which per Phase 1 runs (1) evidence-presence on `item.evidence`, (2) evidence-validity against `ctx.iter_chunks` ids + text similarity, (3) inference-provenance (pass-through for Dossier — direct claims, no inferred items, check returns OK), (4) confidence calibration (`conf > 0.8` items rolled to 0.6 if `len(evidence) < 2`), and (5) contradiction-check across the three sections. Every drop lands in the trace; survivors alone go to storage. This is the load-bearing full-verifier flow the task description mandates.
+Five SMEVerifier checks applied: the builder delegates the whole check suite to `verifier.verify_batch(items, ctx)` which per Phase 1 runs (1) evidence-presence on `item.evidence`, (2) evidence-validity against `ctx.iter_chunks` ids + text similarity, (3) inference-provenance (pass-through for Dossier — direct claims, no inferred items, check returns OK), (4) confidence calibration (`conf > 0.8` items rolled to 0.6 if `len(evidence) < 2`), and (5) contradiction-check across the three sections. Every drop lands in the trace; survivors alone go to storage. This is the load-bearing full-verifier flow the task description mandates.
+
+Trace surface note per ERRATA §5: Phase 1 ships `SynthesisTraceWriter.append(entry: dict)` (plus a deprecated `.record(...)` alias for back-compat). Phase 2 builders use convenience wrappers named `record_llm_call`, `record_parse_failure`, `record_verifier_drop`, `record_kg_candidate`, and `record_builder_failure` — these MUST be implemented as thin adapters that build a structured dict (at minimum: `{"stage", "builder", ...payload}`) and call `SynthesisTraceWriter.append(dict)`. They are NOT direct methods on Phase 1's writer. Implementation lives in the synthesizer's trace wrapper composed in Task 9's DI; tests inject a `MagicMock` that records these method calls.
 
 - [ ] **Step 4: Verify tests pass**
 
@@ -666,14 +708,14 @@ Five SMEVerifier checks applied: the builder delegates the whole check suite to 
 pytest tests/intelligence/sme/test_dossier_builder.py -v
 ```
 
-- [ ] **Step 5: Commit** — `git add src/intelligence/sme/dossier_builder.py tests/intelligence/sme/test_dossier_builder.py && git commit -m "phase2(sme-dossier): LLM-driven per-section synthesis with verifier fail-closed"`
+- [ ] **Step 5: Commit** — `git add src/intelligence/sme/builders/dossier.py tests/intelligence/sme/test_dossier_builder.py && git commit -m "phase2(sme-dossier): LLM-driven per-section synthesis with verifier fail-closed"`
 
 ---
 
 ## Task 5: Insight Index builder (compact interface + stub body)
 
 **Files:**
-- Modify: `src/intelligence/sme/insight_index_builder.py`
+- Modify: `src/intelligence/sme/builders/insight_index.py` (subpackage per ERRATA §6)
 - Create: `tests/intelligence/sme/test_insight_index_builder.py`
 
 **Pattern (same shape as Dossier):**
@@ -690,8 +732,8 @@ Create `tests/intelligence/sme/test_insight_index_builder.py`:
 """Tests for the Insight Index builder (compact, interface-driven)."""
 from unittest.mock import MagicMock
 
-from src.intelligence.sme.artifact_schemas import InsightIndexArtifact, InsightItem, Evidence
-from src.intelligence.sme.insight_index_builder import InsightIndexBuilder
+from src.intelligence.sme.artifact_models import InsightIndexArtifact, InsightItem, Evidence
+from src.intelligence.sme.builders.insight_index import InsightIndexBuilder
 from src.intelligence.sme.llm_gateway import SynthesisLLMResponse
 
 
@@ -733,7 +775,7 @@ def test_build_pools_detectors_and_returns_artifact():
                 "domain_tags": ["finance", "churn"]}]),
     ]
     verifier = MagicMock()
-    verifier.verify.side_effect = lambda items, profile_ctx: MagicMock(
+    verifier.verify_batch.side_effect = lambda items, ctx: MagicMock(
         passed=items, dropped=[], reasons=[])
     storage = MagicMock(); trace = MagicMock()
 
@@ -754,14 +796,14 @@ def test_build_sends_single_pooled_batch_to_verifier():
                 "evidence": [{"doc_id": "d2", "chunk_id": "c2"}], "confidence": 0.6}]),
     ]
     verifier = MagicMock()
-    verifier.verify.return_value = MagicMock(passed=[], dropped=[], reasons=[])
+    verifier.verify_batch.return_value = MagicMock(passed=[], dropped=[], reasons=[])
     storage = MagicMock(); trace = MagicMock()
 
     InsightIndexBuilder(llm, _adapter(), verifier, storage, trace).build(_ctx())
 
     # ONE verify call seeing BOTH detectors' items — contradiction-check needs full pool
-    assert verifier.verify.call_count == 1
-    batch = verifier.verify.call_args[0][0]
+    assert verifier.verify_batch.call_count == 1
+    batch = verifier.verify_batch.call_args[0][0]
     assert len(batch) == 2
 ```
 
@@ -773,7 +815,7 @@ pytest tests/intelligence/sme/test_insight_index_builder.py -v
 
 - [ ] **Step 3: Implement the builder (under 50 lines)**
 
-Replace `src/intelligence/sme/insight_index_builder.py`:
+Replace `src/intelligence/sme/builders/insight_index.py`:
 
 ```python
 """Insight Index builder — per-detector LLM calls pooled into a single verifier batch."""
@@ -782,7 +824,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from src.intelligence.sme.artifact_schemas import (
+from src.intelligence.sme.artifact_models import (
     InsightIndexArtifact, InsightItem, Evidence,
 )
 
@@ -816,7 +858,7 @@ class InsightIndexBuilder:
                 self._trace.record_parse_failure(builder="insight_index",
                                                  section=detector["type"], error=str(e))
 
-        report = self._verifier.verify(candidates, profile_ctx=ctx)
+        report = self._verifier.verify_batch(candidates, ctx)
         for d, r in report.reasons:
             self._trace.record_verifier_drop(builder="insight_index", item=d, reason=r)
 
@@ -853,7 +895,7 @@ class InsightIndexBuilder:
 
 ```bash
 pytest tests/intelligence/sme/test_insight_index_builder.py -v
-git add src/intelligence/sme/insight_index_builder.py tests/intelligence/sme/test_insight_index_builder.py
+git add src/intelligence/sme/builders/insight_index.py tests/intelligence/sme/test_insight_index_builder.py
 git commit -m "phase2(sme-insight-index): per-detector LLM calls pooled into single verifier batch"
 ```
 
@@ -862,7 +904,7 @@ git commit -m "phase2(sme-insight-index): per-detector LLM calls pooled into sin
 ## Task 6: Comparative Register builder (compact)
 
 **Files:**
-- Modify: `src/intelligence/sme/comparative_register_builder.py`
+- Modify: `src/intelligence/sme/builders/comparative_register.py` (subpackage per ERRATA §6)
 - Create: `tests/intelligence/sme/test_comparative_register_builder.py`
 
 **Pattern (identical to Insight Index):**
@@ -876,8 +918,8 @@ git commit -m "phase2(sme-insight-index): per-detector LLM calls pooled into sin
 from unittest.mock import MagicMock
 import json
 
-from src.intelligence.sme.artifact_schemas import ComparativeRegisterArtifact
-from src.intelligence.sme.comparative_register_builder import ComparativeRegisterBuilder
+from src.intelligence.sme.artifact_models import ComparativeRegisterArtifact
+from src.intelligence.sme.builders.comparative_register import ComparativeRegisterBuilder
 from src.intelligence.sme.llm_gateway import SynthesisLLMResponse
 
 
@@ -912,7 +954,7 @@ def test_returns_comparative_artifact():
         }]}),
         latency_ms=40, model="m")
     verifier = MagicMock()
-    verifier.verify.side_effect = lambda items, profile_ctx: MagicMock(
+    verifier.verify_batch.side_effect = lambda items, ctx: MagicMock(
         passed=items, dropped=[], reasons=[])
     storage = MagicMock(); trace = MagicMock()
     art = ComparativeRegisterBuilder(llm, _adapter(), verifier, storage, trace).build(_ctx())
@@ -938,7 +980,7 @@ Keep under 50 lines of logic. Same five-check verifier pass applies.
 
 ```bash
 pytest tests/intelligence/sme/test_comparative_register_builder.py -v
-git add src/intelligence/sme/comparative_register_builder.py \
+git add src/intelligence/sme/builders/comparative_register.py \
         tests/intelligence/sme/test_comparative_register_builder.py
 git commit -m "phase2(sme-comparative): per-axis LLM comparisons with cross-doc evidence"
 ```
@@ -948,7 +990,7 @@ git commit -m "phase2(sme-comparative): per-axis LLM comparisons with cross-doc 
 ## Task 7: KG Multi-Hop Materializer — full INFERRED_RELATION writer
 
 **Files:**
-- Modify: `src/intelligence/sme/kg_materializer.py`
+- Modify: `src/intelligence/sme/builders/kg_materializer.py` (subpackage per ERRATA §6)
 - Create: `tests/intelligence/sme/test_kg_materializer.py`
 
 Load-bearing per spec §9. Generic `INFERRED_RELATION` edge with rich properties — schema stable; adapters define arbitrary inference types. Every edge carries `inference_path`, `confidence`, `evidence`, and the `(subscription_id, profile_id)` hard-filter pair.
@@ -964,8 +1006,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.intelligence.sme.artifact_schemas import InferredEdge, Evidence
-from src.intelligence.sme.kg_materializer import KGMultiHopMaterializer
+from src.intelligence.sme.artifact_models import InferredEdge, Evidence
+from src.intelligence.sme.builders.kg_materializer import KGMultiHopMaterializer
 
 
 def _ctx():
@@ -1007,7 +1049,7 @@ def test_materializer_queries_neo4j_for_patterns():
         [{"n1": "n1", "n2": "n2", "n3": "n3", "ev_doc": "d1", "ev_chunk": "c1"}],
         None]
     verifier = MagicMock()
-    verifier.verify.side_effect = lambda items, profile_ctx: MagicMock(
+    verifier.verify_batch.side_effect = lambda items, ctx: MagicMock(
         passed=items, dropped=[], reasons=[])
     trace = MagicMock()
     report = KGMultiHopMaterializer(neo4j, _adapter(), verifier, trace).build(_ctx())
@@ -1031,20 +1073,36 @@ def test_confidence_floor_drops_edges_via_verifier():
     session.run.side_effect = [
         [{"n1": "n1", "n2": "n2", "n3": "n3", "ev_doc": "d1", "ev_chunk": "c1"}]]
     verifier = MagicMock()
-    verifier.verify.side_effect = lambda items, profile_ctx: MagicMock(
+    verifier.verify_batch.side_effect = lambda items, ctx: MagicMock(
         passed=[], dropped=items,
         reasons=[("edge", "confidence_below_floor")])
     trace = MagicMock()
     report = KGMultiHopMaterializer(neo4j, _adapter(), verifier, trace).build(_ctx())
     assert report.edges_created == 0
     assert report.edges_skipped_verifier == 1
+
+
+def test_rejects_cypher_pattern_with_disallowed_chars():
+    """ERRATA §15: pattern must be validated before interpolation into Cypher.
+    An adapter that slipped past Phase 1's schema validation (or a fixture
+    that bypasses it) must still be rejected here as defense in depth."""
+    import pytest
+    adapter = _adapter()
+    adapter.kg_inference_rules = [{
+        "pattern": "(a)-[:PAYS]->(b) RETURN apoc.do.whenNotNull(x, y)",
+        "produces": "exfil_attempt",
+        "confidence_floor": 0.7, "max_hops": 3,
+    }]
+    neo4j = MagicMock(); verifier = MagicMock(); trace = MagicMock()
+    with pytest.raises(ValueError, match="disallowed characters"):
+        KGMultiHopMaterializer(neo4j, adapter, verifier, trace).build(_ctx())
 ```
 
 - [ ] **Step 2: Run the failing tests.**
 
 - [ ] **Step 3: Implement the materializer**
 
-Replace `src/intelligence/sme/kg_materializer.py`:
+Replace `src/intelligence/sme/builders/kg_materializer.py`:
 
 ```python
 """KG Multi-Hop Materializer — writes INFERRED_RELATION edges per adapter rules.
@@ -1057,7 +1115,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from src.intelligence.sme.artifact_schemas import (
+from src.intelligence.sme.artifact_models import (
     InferredEdge, Evidence, KGMaterializationReport,
 )
 
@@ -1114,7 +1172,7 @@ class KGMultiHopMaterializer:
                     profile_id=ctx.profile_id))
                 self._trace.record_kg_candidate(rule=rule["produces"], row=dict(row))
 
-        verify = self._verifier.verify(candidates, profile_ctx=ctx)
+        verify = self._verifier.verify_batch(candidates, ctx)
         for d, r in verify.reasons:
             self._trace.record_verifier_drop(builder="kg_materializer", item=d, reason=r)
 
@@ -1143,6 +1201,7 @@ class KGMultiHopMaterializer:
 
     def _pattern_cypher(self, rule: dict) -> str:
         # Adapter rule['pattern'] is parameterized Cypher; template hard-filters profile.
+        # Per ERRATA §15 the pattern is validated at adapter load time (see note below).
         return (f"MATCH {rule['pattern']} "
                 "WHERE a.subscription_id = $subscription_id "
                 "AND a.profile_id = $profile_id AND length(PATH) <= $max_hops "
@@ -1151,11 +1210,27 @@ class KGMultiHopMaterializer:
 
 All six Section 9 requirements present: (1) `INFERRED_RELATION` edge type, (2) `relation_type` property for adapter-defined labels, (3) `source: 'sme_synthesis'`, (4) `confidence`/`evidence`/`inference_path`, (5) `synthesis_version`/`adapter_version`/`generated_at` provenance, (6) `subscription_id`/`profile_id` hard filter. MERGE makes re-runs idempotent; profile-scoped MATCH prevents cross-sub leakage structurally.
 
+Cypher literal-injection guard (ERRATA §15): because the materializer interpolates `rule['pattern']` directly into Cypher via f-string, that string MUST be validated at adapter-load time — NOT here. Phase 1's `Adapter` pydantic model enforces a regex allowlist on every `kg_inference_rules[i].pattern`: characters outside `[A-Za-z0-9_, \->()]` and node/edge labels outside the permitted edge-type allowlist are rejected at schema validation. Runtime defense in depth: before `self._neo4j.session().run(pattern_cypher, ...)`, re-assert the same regex; raise if an adapter somehow reached runtime with a non-allowlisted pattern. Add to `__init__` of `KGMultiHopMaterializer`:
+
+```python
+import re
+_PATTERN_ALLOWED = re.compile(r"^[A-Za-z0-9_,\s\->()\[\]:]+$")
+
+# Inside KGMultiHopMaterializer.build(), before self._neo4j.session()... s.run(...):
+for rule in self._adapter.kg_inference_rules:
+    if not _PATTERN_ALLOWED.match(rule["pattern"]):
+        raise ValueError(
+            f"kg_inference_rules.pattern contains disallowed characters "
+            f"— validate adapter at load time. Got: {rule['pattern']!r}")
+```
+
+Add a unit test that builds a fake adapter with `rule['pattern'] = "(a)-[:PAYS]->(b) RETURN apoc.do.whenNotNull..."` and asserts `ValueError`. Phase 1 fixes the first-line defense in its `Adapter` model validator; this runtime guard makes the materializer robust even when the adapter bypasses the Pydantic path (e.g., tests, monkey-patched fixtures).
+
 - [ ] **Step 4: Verify tests pass + commit**
 
 ```bash
 pytest tests/intelligence/sme/test_kg_materializer.py -v
-git add src/intelligence/sme/kg_materializer.py tests/intelligence/sme/test_kg_materializer.py
+git add src/intelligence/sme/builders/kg_materializer.py tests/intelligence/sme/test_kg_materializer.py
 git commit -m "phase2(sme-kg): INFERRED_RELATION materializer with profile-hard-filter + MERGE idempotent"
 ```
 
@@ -1164,7 +1239,7 @@ git commit -m "phase2(sme-kg): INFERRED_RELATION materializer with profile-hard-
 ## Task 8: Recommendation Bank builder (compact)
 
 **Files:**
-- Modify: `src/intelligence/sme/recommendation_bank_builder.py`
+- Modify: `src/intelligence/sme/builders/recommendation_bank.py` (subpackage per ERRATA §6)
 - Create: `tests/intelligence/sme/test_recommendation_bank_builder.py`
 
 **Pattern:**
@@ -1185,7 +1260,7 @@ git commit -m "phase2(sme-kg): INFERRED_RELATION materializer with profile-hard-
 
 ```bash
 pytest tests/intelligence/sme/test_recommendation_bank_builder.py -v
-git add src/intelligence/sme/recommendation_bank_builder.py \
+git add src/intelligence/sme/builders/recommendation_bank.py \
         tests/intelligence/sme/test_recommendation_bank_builder.py
 git commit -m "phase2(sme-recbank): recommendations linked to verified insights, single-batch verify"
 ```
@@ -1306,8 +1381,9 @@ class SMESynthesizer:
 
     def synthesize_profile(self, *, profile_ctx) -> SynthesisReport:
         started_at = datetime.utcnow()
-        adapter = self._al.load(subscription_id=profile_ctx.subscription_id,
-                                 domain=profile_ctx.profile_domain)
+        # Phase 1 signature: AdapterLoader.load(sub_id, domain) — positional.
+        adapter = self._al.load(profile_ctx.subscription_id,
+                                 profile_ctx.profile_domain)
         self._trace.open(run_id=profile_ctx.run_id,
                           subscription_id=profile_ctx.subscription_id,
                           profile_id=profile_ctx.profile_id,
@@ -1363,6 +1439,128 @@ git commit -m "phase2(sme-synth): orchestrator wires five builders + trace + man
 
 ---
 
+## Task 9.5: Control-plane helpers in `src/api/document_status.py` (ERRATA §12)
+
+**Files:**
+- Modify: `src/api/document_status.py` (today only `append_audit_log` exists; add four helpers)
+- Create: `tests/api/test_document_status_helpers.py`
+
+Task 10 (`finalize_training_for_doc`) and Task 15 (`input_snapshot`) call four helpers that do not yet exist. Per ERRATA §12, ship them here before Task 10 executes. All four are control-plane reads/writes on Mongo only — no document content, per "MongoDB = control plane only" memory rule.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/api/test_document_status_helpers.py`:
+
+```python
+"""Unit tests for the four new control-plane helpers in document_status.py."""
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from src.api import document_status as ds
+
+
+def test_count_incomplete_docs_in_profile_excludes_the_current_doc():
+    coll = MagicMock()
+    coll.count_documents.return_value = 2
+    with patch.object(ds, "_documents_collection", return_value=coll):
+        n = ds.count_incomplete_docs_in_profile(
+            subscription_id="s", profile_id="p", exclude_document_id="d_last")
+    assert n == 2
+    filt = coll.count_documents.call_args[0][0]
+    assert filt["subscription_id"] == "s" and filt["profile_id"] == "p"
+    assert filt["document_id"]["$ne"] == "d_last"
+    assert filt["pipeline_status"]["$ne"] == "TRAINING_COMPLETED"
+
+
+def test_get_subscription_and_profile_records_return_dict_or_none():
+    subs = MagicMock(); subs.find_one.return_value = {"subscription_id": "s"}
+    profs = MagicMock(); profs.find_one.return_value = None
+    with patch.object(ds, "_subscriptions_collection", return_value=subs), \
+         patch.object(ds, "_profiles_collection", return_value=profs):
+        assert ds.get_subscription_record("s") == {"subscription_id": "s"}
+        assert ds.get_profile_record("s", "p") is None
+
+
+def test_update_profile_record_merges_updates_and_rejects_content_fields():
+    profs = MagicMock()
+    with patch.object(ds, "_profiles_collection", return_value=profs):
+        ds.update_profile_record("s", "p",
+                                 {"sme_synthesis_version": 3,
+                                  "sme_last_input_hash": "abc"})
+    args = profs.update_one.call_args
+    assert args[0][0] == {"subscription_id": "s", "profile_id": "p"}
+    assert args[0][1]["$set"]["sme_synthesis_version"] == 3
+
+    # Guard: refuse non-control-plane keys to uphold storage-separation rule
+    with patch.object(ds, "_profiles_collection", return_value=profs):
+        with pytest.raises(ValueError, match="control-plane"):
+            ds.update_profile_record("s", "p", {"narrative": "oops"})
+```
+
+- [ ] **Step 2: Run failing tests** — `pytest tests/api/test_document_status_helpers.py -v`
+
+- [ ] **Step 3: Implement the four helpers**
+
+Append to `src/api/document_status.py` (below `append_audit_log`):
+
+```python
+# ---- Control-plane helpers for SME Phase 2 ----
+_CP_ALLOWED_PROFILE_KEYS = frozenset({
+    "sme_synthesis_version", "sme_last_input_hash",
+    "sme_redesign_enabled", "sme_last_run_id",
+    "enable_sme_synthesis", "enable_sme_retrieval",
+    "enable_kg_synthesized_edges",
+})
+
+
+def count_incomplete_docs_in_profile(
+    *, subscription_id: str, profile_id: str, exclude_document_id: str
+) -> int:
+    """Count docs in (sub, prof) not yet at TRAINING_COMPLETED, excluding the
+    current doc. Used to gate last-doc-in-profile synthesis firing."""
+    return _documents_collection().count_documents({
+        "subscription_id": subscription_id,
+        "profile_id": profile_id,
+        "document_id": {"$ne": exclude_document_id},
+        "pipeline_status": {"$ne": "TRAINING_COMPLETED"},
+    })
+
+
+def get_subscription_record(subscription_id: str) -> dict | None:
+    return _subscriptions_collection().find_one({"subscription_id": subscription_id})
+
+
+def get_profile_record(subscription_id: str, profile_id: str) -> dict | None:
+    return _profiles_collection().find_one({
+        "subscription_id": subscription_id, "profile_id": profile_id})
+
+
+def update_profile_record(subscription_id: str, profile_id: str,
+                          updates: dict) -> None:
+    """Merge control-plane fields onto the profile record. Rejects any key
+    outside the allowlist to preserve "MongoDB = control plane only"."""
+    bad = set(updates) - _CP_ALLOWED_PROFILE_KEYS
+    if bad:
+        raise ValueError(
+            f"update_profile_record: only control-plane keys allowed; got {bad}")
+    _profiles_collection().update_one(
+        {"subscription_id": subscription_id, "profile_id": profile_id},
+        {"$set": updates}, upsert=True)
+```
+
+The `_documents_collection`, `_subscriptions_collection`, and `_profiles_collection` helpers already exist in the module (used by the current `append_audit_log`); if any is missing, add a thin accessor that returns the appropriate Mongo collection via the shared client.
+
+- [ ] **Step 4: Verify tests pass + commit**
+
+```bash
+pytest tests/api/test_document_status_helpers.py -v
+git add src/api/document_status.py tests/api/test_document_status_helpers.py
+git commit -m "phase2(sme-cp-helpers): document_status helpers for SME control-plane reads/writes"
+```
+
+---
+
 ## Task 10: Training-stage integration in `src/api/pipeline_api.py`
 
 **Files:**
@@ -1387,10 +1585,15 @@ def _doc(doc_id="d_last", sub="sub_a", prof="prof_x"):
     return {"document_id": doc_id, "subscription_id": sub, "profile_id": prof}
 
 
+def _flag_resolver(enabled: bool):
+    r = MagicMock(); r.is_enabled.return_value = enabled; return r
+
+
 def test_last_doc_triggers_synthesis_then_flips_status():
     from src.api import pipeline_api
     with patch.object(pipeline_api, "is_last_doc_in_profile", return_value=True), \
-         patch.object(pipeline_api, "flag_enabled", return_value=True), \
+         patch.object(pipeline_api, "get_flag_resolver",
+                      return_value=_flag_resolver(True)), \
          patch.object(pipeline_api, "build_profile_ctx") as ctx, \
          patch.object(pipeline_api, "input_hash_unchanged", return_value=False), \
          patch.object(pipeline_api, "SMESynthesizer") as Synth, \
@@ -1412,8 +1615,8 @@ def test_non_last_doc_and_flag_off_skip_synthesis():
                  {"is_last_doc_in_profile": True, "flag_enabled": False}):
         with patch.object(pipeline_api, "is_last_doc_in_profile",
                           return_value=gate["is_last_doc_in_profile"]), \
-             patch.object(pipeline_api, "flag_enabled",
-                          return_value=gate["flag_enabled"]), \
+             patch.object(pipeline_api, "get_flag_resolver",
+                          return_value=_flag_resolver(gate["flag_enabled"])), \
              patch.object(pipeline_api, "SMESynthesizer") as Synth, \
              patch.object(pipeline_api, "update_pipeline_status") as flip:
             pipeline_api.finalize_training_for_doc(_doc())
@@ -1424,7 +1627,8 @@ def test_non_last_doc_and_flag_off_skip_synthesis():
 def test_synthesis_failure_keeps_status_and_audits():
     from src.api import pipeline_api
     with patch.object(pipeline_api, "is_last_doc_in_profile", return_value=True), \
-         patch.object(pipeline_api, "flag_enabled", return_value=True), \
+         patch.object(pipeline_api, "get_flag_resolver",
+                      return_value=_flag_resolver(True)), \
          patch.object(pipeline_api, "build_profile_ctx") as ctx, \
          patch.object(pipeline_api, "input_hash_unchanged", return_value=False), \
          patch.object(pipeline_api, "SMESynthesizer") as Synth, \
@@ -1456,8 +1660,8 @@ import logging
 
 from src.api.document_status import append_audit_log, update_pipeline_status
 from src.api.statuses import PIPELINE_TRAINING_COMPLETED
+from src.config.feature_flags import ENABLE_SME_SYNTHESIS, get_flag_resolver
 from src.intelligence.sme.synthesizer import SMESynthesizer
-from src.intelligence.sme.flags import flag_enabled
 from src.intelligence.sme.input_snapshot import build_profile_ctx, input_hash_unchanged
 
 logger = logging.getLogger(__name__)
@@ -1480,11 +1684,16 @@ def finalize_training_for_doc(doc: dict) -> None:
 
     if not is_last_doc_in_profile(doc):
         update_pipeline_status(did, PIPELINE_TRAINING_COMPLETED); return
-    if not flag_enabled("enable_sme_synthesis", subscription_id=doc["subscription_id"]):
+    if not get_flag_resolver().is_enabled(doc["subscription_id"], ENABLE_SME_SYNTHESIS):
         update_pipeline_status(did, PIPELINE_TRAINING_COMPLETED); return
 
+    # profile_domain is resolved from the profile record (control plane).
+    from src.api.document_status import get_profile_record
+    prof = get_profile_record(doc["subscription_id"], doc["profile_id"]) or {}
+    profile_domain = prof.get("profile_domain", "generic")
     ctx = build_profile_ctx(subscription_id=doc["subscription_id"],
-                             profile_id=doc["profile_id"])
+                             profile_id=doc["profile_id"],
+                             profile_domain=profile_domain)
     if input_hash_unchanged(ctx):
         append_audit_log(did, "SME_SYNTHESIS_SKIPPED_INPUT_UNCHANGED",
                           input_hash=ctx.input_hash)
@@ -1568,14 +1777,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.intelligence.sme.storage import ArtifactStorage
+from src.intelligence.sme.storage import SMEArtifactStorage, StorageDeps
 
 
 @pytest.fixture
 def store():
     qc = MagicMock(); blob = MagicMock(); emb = MagicMock()
     emb.embed.return_value = [0.1] * 768
-    return ArtifactStorage(qdrant=qc, blob=blob, embedder=emb), qc, blob
+    return (SMEArtifactStorage(StorageDeps(qdrant=qc, blob=blob, embedder=emb)),
+            qc, blob)
 
 
 def test_snippet_canonical_and_manifest_paths(store):
@@ -1616,20 +1826,31 @@ def test_snippet_rejects_cross_sub_write(store):
 
 - [ ] **Step 3: Extend storage**
 
-Replace the body of `src/intelligence/sme/storage.py`:
+Per ERRATA §2, Phase 1 ships `SMEArtifactStorage(StorageDeps)` with `put_snippet`, `put_canonical`, `put_manifest`, and the `persist_items` convenience wrapper. Phase 2 fills the bodies (Phase 1 shipped signatures + the shim wiring + `persist_items`). Replace the body of `src/intelligence/sme/storage.py`:
 
 ```python
-"""Storage for SME artifacts: Qdrant snippets + Blob canonical + Blob manifest."""
+"""Storage for SME artifacts: Qdrant snippets + Blob canonical + Blob manifest.
+
+Phase 1 contract preserved:
+  - Class name `SMEArtifactStorage`, constructed via `StorageDeps(...)`
+  - Four facade methods: put_snippet, put_canonical, put_manifest, persist_items
+"""
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 
-class ArtifactStorage:
-    def __init__(self, qdrant, blob, embedder):
-        self._qdrant = qdrant
-        self._blob = blob
-        self._embedder = embedder
+@dataclass
+class StorageDeps:
+    qdrant: object
+    blob: object
+    embedder: object
+
+
+class SMEArtifactStorage:
+    def __init__(self, deps: StorageDeps) -> None:
+        self.deps = deps
 
     def put_snippet(self, *, artifact_type: str, subscription_id: str,
                     profile_id: str, snippet_id: str, text: str, payload: dict) -> None:
@@ -1638,7 +1859,7 @@ class ArtifactStorage:
         if not profile_id:
             raise ValueError("profile_id required for SME snippet write")
         collection = f"sme_artifacts_{subscription_id}"
-        vector = self._embedder.embed(text)
+        vector = self.deps.embedder.embed(text)
         # Qdrant PointStruct-style; use same shape the rest of the codebase uses
         from qdrant_client.http.models import PointStruct
         pt = PointStruct(
@@ -1653,18 +1874,34 @@ class ArtifactStorage:
                 "text": text,
             },
         )
-        self._qdrant.upsert(collection_name=collection, points=[pt])
+        self.deps.qdrant.upsert(collection_name=collection, points=[pt])
 
     def put_canonical(self, *, artifact_type: str, subscription_id: str,
                       profile_id: str, artifact) -> None:
         path = (f"sme_artifacts/{subscription_id}/{profile_id}/"
                 f"{artifact_type}/{artifact.synthesis_version}.json")
-        self._blob.upload_json(path, artifact.model_dump(mode="json"))
+        self.deps.blob.upload_json(path, artifact.model_dump(mode="json"))
 
     def put_manifest(self, *, subscription_id: str, profile_id: str,
                      manifest: dict) -> None:
         path = f"sme_artifacts/{subscription_id}/{profile_id}/manifest.json"
-        self._blob.upload_json(path, manifest)
+        self.deps.blob.upload_json(path, manifest)
+
+    def persist_items(self, subscription_id: str, profile_id: str,
+                      artifact_type: str, items: list, *, synthesis_version: int) -> None:
+        """Convenience wrapper preserved from Phase 1 — calls put_snippet per item +
+        put_canonical for the batch. Builders call this once per artifact type."""
+        for idx, item in enumerate(items):
+            self.put_snippet(
+                artifact_type=artifact_type,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                snippet_id=f"{artifact_type}:{idx}",
+                text=item.text,
+                payload={**item.model_dump(mode="json"),
+                         "synthesis_version": synthesis_version})
+        # put_canonical is invoked separately by the builder (it already has the
+        # wrapping Artifact, not just the items list).
 ```
 
 - [ ] **Step 4: Verify tests pass + commit**
@@ -1673,6 +1910,108 @@ class ArtifactStorage:
 pytest tests/intelligence/sme/test_storage_snippets.py -v
 git add src/intelligence/sme/storage.py tests/intelligence/sme/test_storage_snippets.py
 git commit -m "phase2(sme-storage): snippet+canonical+manifest write paths with hard profile filter"
+```
+
+---
+
+## Task 11.5: Q&A cache index emission + invalidation (ERRATA §13)
+
+**Files:**
+- Modify: `src/intelligence/qa_generator.py` (or the existing Q&A producer — audit in Step 1)
+- Modify: `src/api/pipeline_api.py` (add invalidation hook on `PIPELINE_TRAINING_COMPLETED`)
+- Create: `tests/intelligence/test_qa_cache_index.py`
+
+Per ERRATA §13, Phase 3's `QAFastPath.lookup` reads `qa_idx:{sub}:{prof}:{fingerprint}` from Redis, but no plan task creates this index today. Phase 2 must emit it when `qa_generator` produces Q&A pairs and invalidate it on `PIPELINE_TRAINING_COMPLETED` so stale indexes don't survive a re-synthesis. The fingerprint MUST match the one Phase 3's fast-path lookup computes (normalized question → SHA-256 hex, consistent with `ctx.input_hash` conventions).
+
+- [ ] **Step 1: Audit — locate the current Q&A producer**
+  - [ ] Find `qa_generator.py` (under `src/intelligence/`, `src/training/`, or similar).
+  - [ ] Note the function/method that emits a Q&A pair.
+  - [ ] Confirm the Redis client used by Phase 3 (`src/utils/redis_cache.py` per Phase 6 correction — verify during implementation).
+
+- [ ] **Step 2: Write the failing tests**
+
+Create `tests/intelligence/test_qa_cache_index.py`:
+
+```python
+"""qa_idx emission + invalidation on PIPELINE_TRAINING_COMPLETED transition."""
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+def test_qa_index_written_for_each_pair():
+    from src.intelligence import qa_generator as qg
+    redis = MagicMock()
+    pairs = [{"question": "Q1?", "answer": "A1"},
+             {"question": "Q2?", "answer": "A2"}]
+    with patch.object(qg, "_redis_client", return_value=redis):
+        qg.emit_qa_index(subscription_id="s", profile_id="p", pairs=pairs)
+    # Two SETEX (or SET + TTL) calls keyed qa_idx:s:p:{fingerprint}
+    assert redis.set.call_count == 2
+    keys = {c[0][0] for c in redis.set.call_args_list}
+    assert all(k.startswith("qa_idx:s:p:") for k in keys)
+
+
+def test_qa_index_invalidated_on_training_completed_transition():
+    """Integration: finalize_training_for_doc must clear qa_idx:{sub}:{prof}:* 
+    after successful synthesis so Phase 3 never serves stale answers."""
+    from src.api import pipeline_api
+    redis = MagicMock(); redis.scan_iter.return_value = iter(
+        ["qa_idx:s:p:f1", "qa_idx:s:p:f2"])
+    with patch.object(pipeline_api, "_redis_client", return_value=redis):
+        pipeline_api.invalidate_qa_index(subscription_id="s", profile_id="p")
+    redis.delete.assert_any_call("qa_idx:s:p:f1")
+    redis.delete.assert_any_call("qa_idx:s:p:f2")
+```
+
+- [ ] **Step 3: Run failing tests.**
+
+- [ ] **Step 4: Implement `emit_qa_index` in `qa_generator.py`**
+
+```python
+import hashlib, json
+from src.utils.redis_cache import get_redis_client as _redis_client
+
+_QA_INDEX_TTL_S = 86400  # 1 day; next synthesis refreshes
+
+
+def _fingerprint(question: str) -> str:
+    norm = " ".join(question.strip().lower().split())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+
+
+def emit_qa_index(*, subscription_id: str, profile_id: str,
+                  pairs: list[dict]) -> None:
+    """Write qa_idx:{sub}:{prof}:{fingerprint} -> json({question, answer}) for
+    each pair. Phase 3's QAFastPath.lookup reads these keys."""
+    r = _redis_client()
+    for p in pairs:
+        key = f"qa_idx:{subscription_id}:{profile_id}:{_fingerprint(p['question'])}"
+        r.set(key, json.dumps(p), ex=_QA_INDEX_TTL_S)
+```
+
+Wire `emit_qa_index(...)` at the end of the existing Q&A generation entrypoint (producers already have access to `subscription_id`, `profile_id`, and the pairs list).
+
+- [ ] **Step 5: Implement `invalidate_qa_index` in `pipeline_api.py`**
+
+```python
+def invalidate_qa_index(*, subscription_id: str, profile_id: str) -> None:
+    """Delete all qa_idx entries for a profile. Called from
+    finalize_training_for_doc after a successful synthesis commits."""
+    r = _redis_client()
+    for key in r.scan_iter(f"qa_idx:{subscription_id}:{profile_id}:*"):
+        r.delete(key)
+```
+
+Hook into `finalize_training_for_doc` immediately after `update_pipeline_status(did, PIPELINE_TRAINING_COMPLETED)` fires (best-effort; log-and-continue on Redis failure — do not block the status flip).
+
+- [ ] **Step 6: Verify tests pass + commit**
+
+```bash
+pytest tests/intelligence/test_qa_cache_index.py -v
+git add src/intelligence/qa_generator.py src/api/pipeline_api.py \
+        tests/intelligence/test_qa_cache_index.py
+git commit -m "phase2(sme-qa-idx): emit qa_idx keys + invalidate on training-completed (ERRATA §13)"
 ```
 
 ---
@@ -1697,7 +2036,15 @@ from unittest.mock import MagicMock, patch
 from src.retrieval.unified_retriever import UnifiedRetriever
 
 
+def _resolver_stub(enabled_set: set[str]):
+    resolver = MagicMock()
+    resolver.is_enabled.side_effect = lambda sub, flag: flag in enabled_set
+    return resolver
+
+
 def test_layer_b_includes_inferred_with_profile_filter_and_conf_floor():
+    from src.config.feature_flags import (ENABLE_SME_RETRIEVAL,
+                                          ENABLE_KG_SYNTHESIZED_EDGES)
     kg = MagicMock()
     kg.one_hop.return_value = [{"src": "n1", "dst": "n2", "type": "MENTIONS",
                                  "evidence": ["d1#c1"]}]
@@ -1706,7 +2053,9 @@ def test_layer_b_includes_inferred_with_profile_filter_and_conf_floor():
          "confidence": 0.78, "evidence": ["d1#c1", "d2#c3"],
          "inference_path": ["n1-[PAYS]->n4", "n4-[FUNDS]->n9"]}]
     r = UnifiedRetriever(kg_client=kg, qdrant=MagicMock(), sme=MagicMock())
-    with patch("src.retrieval.unified_retriever.flag_enabled", return_value=True), \
+    with patch("src.retrieval.unified_retriever.get_flag_resolver",
+               return_value=_resolver_stub({ENABLE_SME_RETRIEVAL,
+                                             ENABLE_KG_SYNTHESIZED_EDGES})), \
          patch("src.retrieval.unified_retriever.inferred_edge_confidence_floor",
                return_value=0.75):
         hits = r.retrieve_layer_b(query="funds?", subscription_id="s",
@@ -1719,12 +2068,14 @@ def test_layer_b_includes_inferred_with_profile_filter_and_conf_floor():
 
 
 def test_layer_b_excludes_inferred_when_flag_off():
+    from src.config.feature_flags import ENABLE_SME_RETRIEVAL
     kg = MagicMock()
     kg.one_hop.return_value = [{"src": "n1", "dst": "n2", "type": "MENTIONS",
                                  "evidence": []}]
     r = UnifiedRetriever(kg_client=kg, qdrant=MagicMock(), sme=MagicMock())
-    with patch("src.retrieval.unified_retriever.flag_enabled",
-               side_effect=lambda name, **_: name != "enable_kg_synthesized_edges"):
+    # sme_retrieval on, synthesized_edges off — inferred must NOT fire
+    with patch("src.retrieval.unified_retriever.get_flag_resolver",
+               return_value=_resolver_stub({ENABLE_SME_RETRIEVAL})):
         hits = r.retrieve_layer_b(query="q", subscription_id="s",
                                    profile_id="p", top_k=5)
     kg.inferred_relations.assert_not_called()
@@ -1739,7 +2090,8 @@ Extend `src/retrieval/unified_retriever.py`:
 
 ```python
 """Add Layer B: KG 1-hop + INFERRED_RELATION synthesized edges."""
-from src.intelligence.sme.flags import flag_enabled
+from src.config.feature_flags import (ENABLE_KG_SYNTHESIZED_EDGES,
+                                       ENABLE_SME_RETRIEVAL, get_flag_resolver)
 
 
 def inferred_edge_confidence_floor() -> float:
@@ -1757,8 +2109,9 @@ class UnifiedRetriever:
         for row in self._kg.one_hop(subscription_id=subscription_id,
                                     profile_id=profile_id, entities=None, top_k=top_k):
             hits.append({"kind": "kg_direct", **row})
-        if flag_enabled("enable_sme_retrieval", subscription_id=subscription_id) and \
-           flag_enabled("enable_kg_synthesized_edges", subscription_id=subscription_id):
+        flags = get_flag_resolver()
+        if flags.is_enabled(subscription_id, ENABLE_SME_RETRIEVAL) and \
+           flags.is_enabled(subscription_id, ENABLE_KG_SYNTHESIZED_EDGES):
             floor = inferred_edge_confidence_floor()
             for row in self._kg.inferred_relations(
                 subscription_id=subscription_id, profile_id=profile_id,
@@ -1817,6 +2170,10 @@ import pytest
 from src.retrieval.sme_retrieval import SMERetrieval
 
 
+def _resolver_stub(enabled: bool):
+    r = MagicMock(); r.is_enabled.return_value = enabled; return r
+
+
 def test_layer_c_hard_filter_and_artifact_type_constraint():
     qdrant = MagicMock(); embedder = MagicMock()
     embedder.embed.return_value = [0.1] * 768
@@ -1826,7 +2183,8 @@ def test_layer_c_hard_filter_and_artifact_type_constraint():
                  "confidence": 0.8,
                  "evidence": [{"doc_id": "d1", "chunk_id": "c1"}]}, score=0.92)]
     r = SMERetrieval(qdrant=qdrant, embedder=embedder)
-    with patch("src.retrieval.sme_retrieval.flag_enabled", return_value=True):
+    with patch("src.retrieval.sme_retrieval.get_flag_resolver",
+               return_value=_resolver_stub(True)):
         hits = r.retrieve(query="rev", subscription_id="sub_a", profile_id="prof_x",
                           artifact_types=["insight_index"], top_k=10)
     assert len(hits) == 1 and hits[0]["kind"] == "sme_artifact"
@@ -1839,7 +2197,8 @@ def test_layer_c_hard_filter_and_artifact_type_constraint():
 def test_layer_c_flag_off_and_cross_sub_guard():
     qdrant = MagicMock(); embedder = MagicMock()
     r = SMERetrieval(qdrant=qdrant, embedder=embedder)
-    with patch("src.retrieval.sme_retrieval.flag_enabled", return_value=False):
+    with patch("src.retrieval.sme_retrieval.get_flag_resolver",
+               return_value=_resolver_stub(False)):
         assert r.retrieve(query="q", subscription_id="s", profile_id="p",
                           artifact_types=None, top_k=10) == []
     qdrant.search.assert_not_called()
@@ -1858,7 +2217,7 @@ Create `src/retrieval/sme_retrieval.py`:
 """Layer C — retrieve SME artifact snippets from Qdrant with hard profile filter."""
 from __future__ import annotations
 
-from src.intelligence.sme.flags import flag_enabled
+from src.config.feature_flags import ENABLE_SME_RETRIEVAL, get_flag_resolver
 
 
 class SMERetrieval:
@@ -1872,7 +2231,7 @@ class SMERetrieval:
             raise ValueError("subscription_id required for SME retrieval")
         if not profile_id:
             raise ValueError("profile_id required for SME retrieval")
-        if not flag_enabled("enable_sme_retrieval", subscription_id=subscription_id):
+        if not get_flag_resolver().is_enabled(subscription_id, ENABLE_SME_RETRIEVAL):
             return []
         from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
         must = [
@@ -1912,109 +2271,23 @@ git commit -m "phase2(sme-retrieval-c): SME artifact retrieval with hard profile
 
 ---
 
-## Task 14: Flag resolver (`enable_sme_synthesis`, `enable_sme_retrieval`, `enable_kg_synthesized_edges`)
+## Task 14: Feature flag reuse — Phase 1 owns `src/config/feature_flags.py`
 
-**Files:**
-- Create: `src/intelligence/sme/flags.py`
-- Create: `tests/intelligence/sme/test_flags.py`
+**Files:** None (no-op — Phase 1 already ships the canonical flag module per ERRATA §4).
 
-Per-sub booleans in MongoDB. Master `sme_redesign_enabled` overrides individuals (spec §13.2). 60s TTL cache.
+Per ERRATA §4 the canonical feature flag module is `src/config/feature_flags.py` (shipped by Phase 1), class `SMEFeatureFlags`, method `is_enabled(subscription_id, flag) -> bool`, with module-level singleton `get_flag_resolver()` and string constants (`SME_REDESIGN_ENABLED`, `ENABLE_SME_SYNTHESIS`, `ENABLE_SME_RETRIEVAL`, `ENABLE_KG_SYNTHESIZED_EDGES`, `ENABLE_RICH_MODE`, `ENABLE_URL_AS_PROMPT`, `ENABLE_HYBRID_RETRIEVAL`, `ENABLE_CROSS_ENCODER_RERANK`). Master-gate precedence (`sme_redesign_enabled`) is enforced in Phase 1.
 
-- [ ] **Step 1: Write the failing tests**
+Phase 2 does NOT create a parallel `src/intelligence/sme/flags.py`. All Phase 2 consumers (Task 10 `pipeline_api.py`, Task 12 `unified_retriever.py`, Task 13 `sme_retrieval.py`, Task 16 integration test) import from `src.config.feature_flags` directly.
 
-Create `tests/intelligence/sme/test_flags.py`:
+- [ ] **Step 1: Audit — confirm Phase 1 shipped:**
+  - [ ] `src/config/feature_flags.py` exists with `SMEFeatureFlags`, `FlagStore`, `get_flag_resolver()`, `init_flag_resolver()`.
+  - [ ] All 8 flag-name constants are module-level `Final[str]` exports.
+  - [ ] `SMEFeatureFlags.is_enabled(subscription_id, flag)` honors `sme_redesign_enabled` master gate.
+  - [ ] Unit tests at `tests/config/test_feature_flags.py` are passing on the branch you start from.
 
-```python
-"""Tests for per-subscription SME capability flags."""
-from unittest.mock import MagicMock, patch
+- [ ] **Step 2: If any audit item fails, STOP.** File a Phase 1.1 patch before continuing Phase 2 — do not introduce a shadow `flags.py`.
 
-from src.intelligence.sme import flags
-
-
-def _doc(**overrides):
-    base = {"subscription_id": "sub_a", "sme_redesign_enabled": True,
-            "enable_sme_synthesis": True, "enable_sme_retrieval": False}
-    base.update(overrides); return base
-
-
-def test_per_flag_gating_and_master_kill_switch():
-    flags._cache.clear()
-    with patch.object(flags, "_load_subscription_record", return_value=_doc()):
-        assert flags.flag_enabled("enable_sme_synthesis", subscription_id="sub_a") is True
-        assert flags.flag_enabled("enable_sme_retrieval", subscription_id="sub_a") is False
-    flags._cache.clear()
-    with patch.object(flags, "_load_subscription_record",
-                       return_value=_doc(sme_redesign_enabled=False)):
-        assert flags.flag_enabled("enable_sme_synthesis", subscription_id="sub_a") is False
-
-
-def test_missing_record_defaults_to_false():
-    flags._cache.clear()
-    with patch.object(flags, "_load_subscription_record", return_value=None):
-        assert flags.flag_enabled("enable_sme_synthesis", subscription_id="nope") is False
-
-
-def test_cache_ttl_refresh(monkeypatch):
-    flags._cache.clear()
-    load = MagicMock(side_effect=[_doc(enable_sme_synthesis=True),
-                                   _doc(enable_sme_synthesis=False)])
-    monkeypatch.setattr(flags, "_load_subscription_record", load)
-    monkeypatch.setattr(flags, "_TTL_SECONDS", 0)
-    assert flags.flag_enabled("enable_sme_synthesis", subscription_id="sub_a") is True
-    assert flags.flag_enabled("enable_sme_synthesis", subscription_id="sub_a") is False
-    assert load.call_count == 2
-```
-
-- [ ] **Step 2: Run failing tests.**
-
-- [ ] **Step 3: Implement `flags.py`**
-
-```python
-"""SME capability flag resolver — per-subscription, MongoDB-backed, cached."""
-from __future__ import annotations
-
-import time
-from typing import Any
-
-
-_TTL_SECONDS = 60.0
-_cache: dict[str, tuple[float, dict]] = {}
-
-_KNOWN_FLAGS = {
-    "enable_sme_synthesis", "enable_sme_retrieval",
-    "enable_kg_synthesized_edges", "enable_rich_mode",
-    "enable_url_as_prompt", "enable_hybrid_retrieval",
-    "enable_cross_encoder_rerank",
-}
-
-
-def _load_subscription_record(subscription_id: str) -> dict[str, Any] | None:
-    from src.api.document_status import get_subscription_record
-    return get_subscription_record(subscription_id)
-
-
-def flag_enabled(flag_name: str, *, subscription_id: str) -> bool:
-    if flag_name not in _KNOWN_FLAGS:
-        raise ValueError(f"Unknown SME flag: {flag_name}")
-    now = time.time()
-    cached = _cache.get(subscription_id)
-    if cached is not None and (now - cached[0]) < _TTL_SECONDS:
-        rec = cached[1]
-    else:
-        rec = _load_subscription_record(subscription_id) or {}
-        _cache[subscription_id] = (now, rec)
-    if not rec.get("sme_redesign_enabled", False):
-        return False
-    return bool(rec.get(flag_name, False))
-```
-
-- [ ] **Step 4: Verify + commit**
-
-```bash
-pytest tests/intelligence/sme/test_flags.py -v
-git add src/intelligence/sme/flags.py tests/intelligence/sme/test_flags.py
-git commit -m "phase2(sme-flags): per-subscription capability gate with master kill switch + TTL"
-```
+- [ ] **Step 3: No commit needed — this task is a cross-plan contract audit only.**
 
 ---
 
@@ -2106,17 +2379,29 @@ def _compute_input_hash(chunks, adapter_version, adapter_content_hash) -> str:
     return h.hexdigest()
 
 
-def build_profile_ctx(subscription_id: str, profile_id: str) -> ProfileSynthesisContext:
-    """Production path — chunks from Qdrant + adapter meta from Phase 1 loader."""
-    from src.intelligence.sme.adapter_loader import load_profile_chunks, load_adapter_meta
-    chunks = load_profile_chunks(subscription_id=subscription_id, profile_id=profile_id)
-    am = load_adapter_meta(subscription_id=subscription_id)
+def build_profile_ctx(subscription_id: str, profile_id: str,
+                      profile_domain: str) -> ProfileSynthesisContext:
+    """Production path — chunks from Qdrant + adapter via Phase 1 loader.
+
+    Per ERRATA §1 we prefer `adapter.version` and `adapter.content_hash`
+    directly on the loaded `Adapter` model; no separate `load_adapter_meta`
+    helper is needed. The caller passes `profile_domain` explicitly (resolved
+    from the profile record), matching `AdapterLoader.load(sub, domain)`'s
+    Phase 1 signature.
+    """
+    from src.intelligence.sme.adapter_loader import get_adapter_loader
+    from src.retrieval.qdrant_chunk_reader import load_profile_chunks
+    chunks = load_profile_chunks(subscription_id=subscription_id,
+                                  profile_id=profile_id)
+    adapter = get_adapter_loader().load(subscription_id, profile_domain)
     return ProfileSynthesisContext(
         subscription_id=subscription_id, profile_id=profile_id,
-        profile_domain=am.domain, chunks=chunks,
+        profile_domain=profile_domain, chunks=chunks,
         synthesis_version=_next_synthesis_version(subscription_id, profile_id),
-        adapter_version=am.version, adapter_content_hash=am.content_hash,
-        input_hash=_compute_input_hash(chunks, am.version, am.content_hash),
+        adapter_version=adapter.version,
+        adapter_content_hash=adapter.content_hash,
+        input_hash=_compute_input_hash(chunks, adapter.version,
+                                        adapter.content_hash),
         run_id=str(uuid.uuid4()))
 
 
@@ -2193,10 +2478,11 @@ def test_synthesis_persists_and_status_flips_and_artifacts_retrievable(sandbox):
     from src.api.document_status import get_document_record
     from src.retrieval.sme_retrieval import SMERetrieval
     from src.embeddings import default_embedder
-    from src.intelligence.sme.flags import _cache
+    from src.config.feature_flags import get_flag_resolver  # noqa: F401
     from qdrant_client import QdrantClient
 
-    _cache.clear()
+    # Phase 1 SMEFeatureFlags is a thin wrapper over FlagStore with no process
+    # cache, so no setup needed here. Integration test reads live Mongo state.
     doc = {"document_id": sandbox["last_doc"],
            "subscription_id": sandbox["subscription_id"],
            "profile_id": sandbox["profile_id"]}
@@ -2234,9 +2520,10 @@ def test_cross_subscription_isolation_plus_inferred_edges(sandbox):
         artifact_types=None, top_k=10) == []
 
     # Inferred edges visible in Layer B for sandbox
+    resolver = MagicMock(); resolver.is_enabled.return_value = True
     r = UnifiedRetriever(kg_client=KGRetrievalClient(),
                          qdrant=MagicMock(), sme=MagicMock())
-    with patch("src.retrieval.unified_retriever.flag_enabled", return_value=True):
+    with patch("src.retrieval.unified_retriever.get_flag_resolver", return_value=resolver):
         hits = r.retrieve_layer_b(query="funding", subscription_id=sandbox["subscription_id"],
                                    profile_id=sandbox["profile_id"], top_k=20)
     inferred = [h for h in hits if h["kind"] == "kg_inferred"]
@@ -2293,7 +2580,7 @@ Phase 2 ships with `enable_sme_retrieval=false` everywhere. Phase 3 flips it on 
 - Modify: `src/intelligence/sme/__init__.py` (export public API)
 - Create: exit-check runbook in commit body only (no new doc file)
 
-- [ ] **Step 1: Finalize `src/intelligence/sme/__init__.py`** — re-export: `SMESynthesizer`, `SynthesisReport`, `flag_enabled`, all five artifact types + `InferredEdge` + `Evidence`, and `ProfileSynthesisContext` / `build_profile_ctx` / `input_hash_unchanged`.
+- [ ] **Step 1: Finalize `src/intelligence/sme/__init__.py`** — re-export: `SMESynthesizer`, `SynthesisReport`, all five artifact types + `InferredEdge` + `Evidence`, and `ProfileSynthesisContext` / `build_profile_ctx` / `input_hash_unchanged`. (Feature-flag surface stays in `src.config.feature_flags` per ERRATA §4 — do NOT re-export flag helpers from `src.intelligence.sme`.)
 
 - [ ] **Step 2: Full Phase 2 test suite**
 
@@ -2359,7 +2646,7 @@ Every required spec section is ticked below. A missing tick means the plan is un
 2. **`is_last_doc_in_profile` contract** — spec implicit; Task 10 introduces helper. If ingest uses Celery group-callback, swap the helper body — `finalize_training_for_doc` unchanged.
 3. **`ProfileSynthesisContext` shape** — Phase 1 should own canonical; Task 15 dataclass is reconciliation target if Phase 1 differs.
 4. **Neo4j `node_id` convention** — Task 7 assumes property; confirm vs. `src/kg/` schemas, swap to `id(a) = $src` if internal id is convention.
-5. **`AdapterLoader.load_adapter_meta`** — referenced by Task 15; if Phase 1 didn't ship, add as 1.1 patch.
+5. **~~`AdapterLoader.load_adapter_meta`~~** — resolved per ERRATA §1: Phase 2 now reads `adapter.version` / `adapter.content_hash` directly from the `Adapter` model returned by `AdapterLoader.load(sub, domain)`; no separate meta helper is needed. `build_profile_ctx` takes `profile_domain` explicitly (resolved from the profile record by `pipeline_api.finalize_training_for_doc`).
 
 ### Open questions (for Phase 3 owner)
 
@@ -2372,7 +2659,7 @@ Every required spec section is ticked below. A missing tick means the plan is un
 ### Type and contract consistency
 - `ProfileSynthesisContext` (Task 15) → builders + orchestrator.
 - `SynthesisReport` (Task 9) → `finalize_training_for_doc` (Task 10).
-- `ArtifactStorage.put_snippet/put_canonical/put_manifest` — one signature across Tasks 4–11, 16.
+- `SMEArtifactStorage.put_snippet/put_canonical/put_manifest/persist_items` — one signature across Tasks 4–11, 16 (constructed via `StorageDeps(...)` per ERRATA §2).
 - `Evidence` shared across artifact types; retrieval payloads reuse dict shape.
 
 ### Placeholder scan
@@ -2390,6 +2677,20 @@ Every required spec section is ticked below. A missing tick means the plan is un
 - **Profile isolation hard** → `(subscription_id, profile_id)` in every write, every filter, every MATCH; integration test (Task 16) verifies cross-sub rejection.
 - **Engineering-first** → zero model training; existing V2 via existing gateway.
 - **No Claude/Anthropic attribution** → grep branch diff empty.
+
+### ERRATA reconciliation (applied 2026-04-21)
+
+Applied ERRATA §§1, 2, 3, 4, 5, 6, 12, 13, 15 on 2026-04-21. Cross-ref:
+
+- **§1 AdapterLoader.load** — Phase 2 already uses `.load(sub, domain)` (no `.get(` remained). `build_profile_ctx` now reads `adapter.version` / `adapter.content_hash` directly off the Phase 1 `Adapter` model (the hypothetical `load_adapter_meta` helper was removed) and takes `profile_domain` explicitly.
+- **§2 SMEArtifactStorage** — Task 11 constructor call renamed from `ArtifactStorage(qdrant=..., blob=..., embedder=...)` to `SMEArtifactStorage(StorageDeps(...))`; test fixtures updated; `persist_items` convenience wrapper preserved from Phase 1.
+- **§3 SMEVerifier.verify_batch(items, ctx)** — all Phase 2 call sites (Tasks 4–7) migrated from `verify(items, profile_ctx=ctx)`; every artifact type got a `.text` property (`DossierSection.text = narrative`, `InsightItem.text = narrative`, `ComparativeItem.text = analysis`, `RecommendationItem.text = recommendation`, `InferredEdge.text = "{src} -[{relation_type}]-> {dst}"`).
+- **§4 Feature flags** — deleted Task 14's creation of `src/intelligence/sme/flags.py`; Task 14 is now a Phase 1 audit. All Phase 2 consumers import `SMEFeatureFlags`/`get_flag_resolver`/flag constants from `src.config.feature_flags`. `get_flag_resolver().is_enabled(sub, FLAG_CONST)` replaces `flag_enabled(name, subscription_id=...)`.
+- **§5 Trace .append** — Phase 2 never called `trace_writer.record(...)` bare (it uses custom `record_llm_call`, `record_verifier_drop`, etc.); an explicit note in Task 4 documents that these are thin adapters emitting structured dicts via `SynthesisTraceWriter.append(dict)`.
+- **§6 Builder subpackage** — all five builder module paths moved from `src/intelligence/sme/{name}_builder.py` to `src/intelligence/sme/builders/{name}.py`; imports and commit commands updated. `artifact_schemas.py` merged into `artifact_models.py` (consolidation option (a) from the task brief).
+- **§12 document_status helpers** — new Task 9.5 creates `count_incomplete_docs_in_profile`, `get_subscription_record`, `get_profile_record`, `update_profile_record` with unit tests before Task 10 consumes them; allowlist on `update_profile_record` preserves "MongoDB = control plane only".
+- **§13 QA cache index** — new Task 11.5 emits `qa_idx:{sub}:{prof}:{fingerprint}` via `emit_qa_index` in `qa_generator.py`, and invalidates via `invalidate_qa_index` hooked into `finalize_training_for_doc` after the `PIPELINE_TRAINING_COMPLETED` flip; test covers both emission and invalidation.
+- **§15 Cypher literal injection** — Task 7 materializer now validates `rule['pattern']` at runtime (regex allowlist `[A-Za-z0-9_,\s\->()\[\]:]`), raising `ValueError` before any Cypher interpolation; a dedicated unit test asserts rejection of a pattern containing `apoc.do.whenNotNull`. First-line defense remains Phase 1's `Adapter` schema validator; Phase 2's runtime check is defense-in-depth.
 
 ---
 
