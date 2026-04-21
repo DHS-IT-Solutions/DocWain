@@ -163,6 +163,8 @@ class UnifiedRetriever:
         layer_b_fn=None,
         layer_c_fn=None,
         layer_d_fn=None,
+        gate: Any = None,
+        user_requested_compact: bool = False,
     ) -> RetrievalBundle:
         """Parallel-dispatch the four Phase 3 retrieval layers.
 
@@ -185,6 +187,14 @@ class UnifiedRetriever:
         :attr:`RetrievalBundle.degraded_layers` with its full name
         (``"layer_a"``, ``"layer_b"``, ``"layer_c"``, ``"layer_d"``) — no
         short-name append.
+
+        Phase 3 Task 9: intent-aware gating. ``gate`` is an optional
+        :class:`src.retrieval.intent_gating.IntentGate` — when provided,
+        the orchestrator calls ``gate.decide(intent, user_requested_compact)``
+        and skips the submit for any layer whose decision is ``False``.
+        Gated layers return empty lists without ever hitting the backing
+        store (that's the whole latency win). Callers that don't want
+        gating simply omit ``gate`` and every wired layer dispatches.
         """
         if not subscription_id:
             raise ValueError("subscription_id required for retrieve_four_layers")
@@ -202,6 +212,20 @@ class UnifiedRetriever:
                 layer_c_on = False
 
         qu = query_understanding or {}
+        intent = (qu.get("intent") or qu.get("task_type") or "lookup")
+
+        # Intent gate — skip layers the gate decides are not needed.
+        if gate is None:
+            run_a = True
+            run_b = True
+            run_c = True
+        else:
+            decision = gate.decide(
+                intent, user_requested_compact=user_requested_compact
+            )
+            run_a = bool(decision.run_a)
+            run_b = bool(decision.run_b)
+            run_c = bool(decision.run_c)
 
         if layer_a_fn is None:
             def layer_a_fn() -> list[dict]:
@@ -246,9 +270,11 @@ class UnifiedRetriever:
         # Single ThreadPoolExecutor, max_workers=4, parallel dispatch, no timeout
         # on as_completed per memory rule (no internal wall-clock aborts).
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="dw-retrieve") as ex:
-            jobs[ex.submit(layer_a_fn)] = ("layer_a", time.perf_counter())
-            jobs[ex.submit(layer_b_fn)] = ("layer_b", time.perf_counter())
-            if layer_c_on:
+            if run_a:
+                jobs[ex.submit(layer_a_fn)] = ("layer_a", time.perf_counter())
+            if run_b:
+                jobs[ex.submit(layer_b_fn)] = ("layer_b", time.perf_counter())
+            if run_c and layer_c_on:
                 jobs[ex.submit(layer_c_fn)] = ("layer_c", time.perf_counter())
             jobs[ex.submit(layer_d_fn)] = ("layer_d", time.perf_counter())
 
