@@ -2,7 +2,7 @@
 
 Single entry point for all intent categories. Uses the unified DocWain
 vLLM instance and the generation-layer prompts (src/generation/prompts.py).
-Replaces the former FastPathHandler module — no fast/smart split.
+Replaces the prior split handler — one entry point for all intents.
 """
 from __future__ import annotations
 
