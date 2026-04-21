@@ -380,6 +380,86 @@ def _safe_invalidate_qa_index(*, subscription_id: str, profile_id: str) -> None:
         )
     except Exception:  # noqa: BLE001
         logger.debug("qa_idx invalidation failed; ignoring", exc_info=True)
+    # Phase 3 Task 8.5 — retrieval-cache invalidation (best-effort).
+    _safe_invalidate_retrieval_cache(
+        subscription_id=subscription_id, profile_id=profile_id
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Task 8.5 — retrieval-cache invalidation on training completion.
+# ---------------------------------------------------------------------------
+_retrieval_cache_singleton: Any = None
+
+
+def get_retrieval_cache():
+    """Return the process-wide :class:`RetrievalCache` instance.
+
+    Lazy-wired — the first call constructs the cache with the shared
+    Redis client from :mod:`src.api.dw_newron`. Tests that want to stub
+    the cache call :func:`set_retrieval_cache_for_tests` to install a
+    pre-built one and :func:`reset_retrieval_cache_for_tests` to clear it.
+    """
+    global _retrieval_cache_singleton
+    if _retrieval_cache_singleton is None:
+        from src.retrieval.retrieval_cache import RetrievalCache
+        try:
+            from src.api.dw_newron import get_redis_client
+            client = get_redis_client()
+        except Exception:  # noqa: BLE001
+            client = None
+        _retrieval_cache_singleton = RetrievalCache(redis_client=client)
+    return _retrieval_cache_singleton
+
+
+def set_retrieval_cache_for_tests(cache) -> None:
+    """Install a pre-built :class:`RetrievalCache` for tests."""
+    global _retrieval_cache_singleton
+    _retrieval_cache_singleton = cache
+
+
+def reset_retrieval_cache_for_tests() -> None:
+    """Clear the retrieval-cache singleton so the next call rebuilds."""
+    global _retrieval_cache_singleton
+    _retrieval_cache_singleton = None
+
+
+def _on_pipeline_training_completed(
+    *, subscription_id: str, profile_id: str
+) -> None:
+    """Invoked when ``pipeline_status`` transitions to
+    ``PIPELINE_TRAINING_COMPLETED``.
+
+    New SME artifacts become visible for the profile so any cached
+    retrieval pack is now stale and MUST be evicted before the next
+    query. Best-effort: a cache failure must never block the pipeline
+    advance, which has already been persisted.
+    """
+    try:
+        get_retrieval_cache().invalidate_profile(
+            subscription_id=subscription_id, profile_id=profile_id
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "retrieval_cache.invalidate_profile failed for %s/%s",
+            subscription_id,
+            profile_id,
+            exc_info=True,
+        )
+
+
+def _safe_invalidate_retrieval_cache(
+    *, subscription_id: str, profile_id: str
+) -> None:
+    try:
+        _on_pipeline_training_completed(
+            subscription_id=subscription_id, profile_id=profile_id
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "retrieval_cache invalidation failed; ignoring", exc_info=True
+        )
+
 
 pipeline_router = APIRouter(prefix="/documents", tags=["pipeline"])
 
