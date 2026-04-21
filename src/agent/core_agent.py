@@ -20,6 +20,7 @@ from src.generation.reasoner import Reasoner, ReasonerResult
 from src.retrieval.context_builder import build_context
 from src.retrieval.reranker import rerank_chunks
 from src.retrieval.retriever import UnifiedRetriever
+from src.retrieval.types import RetrievalBundle
 from src.agent.domain_dispatch import DomainDispatcher
 
 logger = logging.getLogger(__name__)
@@ -140,9 +141,15 @@ class CoreAgent:
         mongodb: Any,
         kg_query_service: Any = None,
         cross_encoder: Any = None,
+        *,
+        sme_retriever: Any = None,
+        sme_kg_client: Any = None,
+        hybrid_searcher: Any = None,
+        redis_client: Any = None,
     ) -> None:
         self._llm = llm_gateway
         self._qdrant = qdrant_client
+        self._embedder = embedder
         self._mongodb = mongodb
         self._intent_analyzer = IntentAnalyzer(llm_gateway=llm_gateway)
         self._retriever = UnifiedRetriever(qdrant_client=qdrant_client, embedder=embedder)
@@ -150,6 +157,108 @@ class CoreAgent:
         self.kg_query_service = kg_query_service
         self._cross_encoder = cross_encoder
         self._domain_dispatcher = DomainDispatcher(llm_gateway=llm_gateway)
+        # ------------------------------------------------------------------
+        # Phase 3 additions — SME 4-layer retrieval inputs. All optional so
+        # pre-Phase-3 callers keep working unchanged; the orchestrator
+        # returns Layer A only when these are not wired.
+        # ------------------------------------------------------------------
+        self._sme_retriever = sme_retriever  # src.retrieval.sme_retrieval.SMERetrieval
+        self._sme_kg_client = sme_kg_client  # src.retrieval.unified_retriever.UnifiedRetrieverKGClient
+        self._hybrid_searcher = hybrid_searcher  # Phase 1 HybridSearcher (optional)
+        self._redis_client_injected = redis_client  # Phase 3 QA fast-path
+
+    # ------------------------------------------------------------------
+    # Phase 3 — four-layer SME retrieval orchestration
+    # ------------------------------------------------------------------
+
+    def _retrieve_four_layers(
+        self,
+        *,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        query_understanding: Dict[str, Any],
+    ) -> "RetrievalBundle":
+        """Dispatch the Phase 3 four-layer parallel retrieval and return
+        a :class:`RetrievalBundle`.
+
+        Layer A is the existing dense-or-hybrid chunk retrieval. Layer B
+        uses :class:`src.retrieval.unified_retriever.UnifiedRetriever`'s
+        :meth:`retrieve_layer_b` helper. Layer C calls the injected
+        :class:`SMERetrieval` (gated on ``ENABLE_SME_RETRIEVAL``). Layer D
+        is a no-op placeholder until Phase 5.
+
+        Layers B and C only run when the caller has wired them in via the
+        constructor — pre-Phase-3 deployments keep receiving an empty
+        bundle for those slots without error. Per ERRATA §11 a layer
+        failure degrades into ``bundle.degraded_layers`` (full name only,
+        single append); the remaining layers always return.
+        """
+        from src.retrieval.types import RetrievalBundle as _RB
+        from src.retrieval.unified_retriever import UnifiedRetriever as _SMEUnified
+        # Pluggable top-K defaults — Task 6 will tune these.
+        intent = (query_understanding or {}).get("intent") or (
+            query_understanding or {}
+        ).get("task_type", "lookup")
+
+        # Build the SME-side UnifiedRetriever lazily; it is cheap.
+        sme_unified = _SMEUnified(
+            qdrant_client=self._qdrant,
+            kg_client=self._sme_kg_client,
+            sme=self._sme_retriever,
+        )
+
+        # Default layer callables — fall through to empty when the
+        # dependency isn't wired so tests and pre-Phase-3 callers succeed.
+        def _layer_a_fn() -> List[Dict[str, Any]]:
+            try:
+                return sme_unified.retrieve_layer_a(
+                    query=query,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    query_understanding=query_understanding,
+                    top_k=10,
+                )
+            except Exception:  # noqa: BLE001
+                raise
+
+        def _layer_b_fn() -> List[Dict[str, Any]]:
+            if self._sme_kg_client is None:
+                return []
+            return sme_unified.retrieve_layer_b(
+                query=query,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                top_k=5,
+                entities=(query_understanding or {}).get("entities") or None,
+            )
+
+        def _layer_c_fn() -> List[Dict[str, Any]]:
+            if self._sme_retriever is None:
+                return []
+            from src.retrieval.unified_retriever import _sme_hit_to_dict
+            hits = self._sme_retriever.retrieve(
+                query=query,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                top_k=5,
+            )
+            return [_sme_hit_to_dict(h) for h in hits]
+
+        def _layer_d_fn() -> List[Dict[str, Any]]:
+            return []
+
+        bundle = sme_unified.retrieve_four_layers(
+            query=query,
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+            query_understanding=query_understanding,
+            layer_a_fn=_layer_a_fn,
+            layer_b_fn=_layer_b_fn,
+            layer_c_fn=_layer_c_fn,
+            layer_d_fn=_layer_d_fn,
+        )
+        return bundle
 
     # ------------------------------------------------------------------
     # Public API

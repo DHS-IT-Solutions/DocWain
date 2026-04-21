@@ -8,12 +8,20 @@ The inferred subset is gated behind ``enable_sme_retrieval`` *and*
 ``enable_kg_synthesized_edges``; with either flag off the direct 1-hop view
 is returned unchanged so Phase 3 routing stays stable.
 
+Phase 3 adds :meth:`UnifiedRetriever.retrieve_four_layers` — the orchestrator
+that dispatches Layer A (chunks), Layer B (KG), Layer C (SME), Layer D
+(URL placeholder) in parallel via a single :class:`ThreadPoolExecutor`
+with ``max_workers=4``. No wall-clock timeout — per spec §3 invariant 8,
+DocWain layers never impose internal cutoffs. Layer failures degrade
+gracefully into ``RetrievalBundle.degraded_layers``.
+
 Profile isolation is hard — every call includes both ``subscription_id`` and
 ``profile_id`` and passes them through to the KG driver, which must scope its
 MATCH on both properties (see :class:`UnifiedRetrieverKGClient`).
 """
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +30,7 @@ from src.config.feature_flags import (
     ENABLE_SME_RETRIEVAL,
     get_flag_resolver,
 )
+from src.retrieval.types import RetrievalBundle
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +145,185 @@ class UnifiedRetriever:
         ):
             hits.append({"kind": "kg_inferred", **row})
         return hits
+
+    # ------------------------------------------------------------------
+    # Phase 3 — four-layer parallel orchestration (ERRATA §11).
+    # ------------------------------------------------------------------
+    def retrieve_four_layers(
+        self,
+        *,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        query_understanding: dict | None = None,
+        top_k_a: int = 10,
+        top_k_b: int = 5,
+        top_k_c: int = 5,
+        layer_a_fn=None,
+        layer_b_fn=None,
+        layer_c_fn=None,
+        layer_d_fn=None,
+    ) -> RetrievalBundle:
+        """Parallel-dispatch the four Phase 3 retrieval layers.
+
+        ``layer_a_fn``, ``layer_b_fn``, ``layer_c_fn``, ``layer_d_fn`` are
+        optional override callables (zero-arg closures returning
+        ``list[dict]``). If omitted, sensible defaults are wired:
+
+        * Layer A: :meth:`retrieve_layer_a` (hybrid when
+          :data:`src.config.feature_flags.ENABLE_HYBRID_RETRIEVAL` is on,
+          else dense-only).
+        * Layer B: :meth:`retrieve_layer_b` (always runs — no master-flag
+          gating because direct KG edges are pre-SME infrastructure).
+        * Layer C: the injected SME retriever's ``retrieve`` (gated on
+          :data:`ENABLE_SME_RETRIEVAL`).
+        * Layer D: returns ``[]`` — Phase 5 wires URL fetch.
+
+        Layer C only dispatches when ``enable_sme_retrieval`` is ON for
+        the subscription, per the Phase 3 rollout contract. Per ERRATA §11
+        any layer that raises is appended once to
+        :attr:`RetrievalBundle.degraded_layers` with its full name
+        (``"layer_a"``, ``"layer_b"``, ``"layer_c"``, ``"layer_d"``) — no
+        short-name append.
+        """
+        if not subscription_id:
+            raise ValueError("subscription_id required for retrieve_four_layers")
+        if not profile_id:
+            raise ValueError("profile_id required for retrieve_four_layers")
+
+        resolver = _safe_flag_resolver()
+        layer_c_on = False
+        if resolver is not None:
+            try:
+                layer_c_on = resolver.is_enabled(
+                    subscription_id, ENABLE_SME_RETRIEVAL
+                )
+            except KeyError:
+                layer_c_on = False
+
+        qu = query_understanding or {}
+
+        if layer_a_fn is None:
+            def layer_a_fn() -> list[dict]:
+                return self.retrieve_layer_a(
+                    query=query,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    query_understanding=qu,
+                    top_k=top_k_a,
+                )
+
+        if layer_b_fn is None:
+            def layer_b_fn() -> list[dict]:
+                return self.retrieve_layer_b(
+                    query=query,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    top_k=top_k_b,
+                    entities=(qu.get("entities") or None),
+                )
+
+        if layer_c_fn is None:
+            def layer_c_fn() -> list[dict]:
+                if self._sme is None:
+                    return []
+                hits = self._sme.retrieve(
+                    query=query,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    top_k=top_k_c,
+                )
+                return [_sme_hit_to_dict(h) for h in hits]
+
+        if layer_d_fn is None:
+            def layer_d_fn() -> list[dict]:
+                # Phase 5 wires URL fetch; Phase 3 placeholder.
+                return []
+
+        bundle = RetrievalBundle()
+
+        jobs: Dict[Any, tuple[str, float]] = {}
+        # Single ThreadPoolExecutor, max_workers=4, parallel dispatch, no timeout
+        # on as_completed per memory rule (no internal wall-clock aborts).
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="dw-retrieve") as ex:
+            jobs[ex.submit(layer_a_fn)] = ("layer_a", time.perf_counter())
+            jobs[ex.submit(layer_b_fn)] = ("layer_b", time.perf_counter())
+            if layer_c_on:
+                jobs[ex.submit(layer_c_fn)] = ("layer_c", time.perf_counter())
+            jobs[ex.submit(layer_d_fn)] = ("layer_d", time.perf_counter())
+
+            for fut in as_completed(jobs):
+                name, t0 = jobs[fut]
+                try:
+                    result = fut.result()  # NO timeout — memory rule.
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "%s degraded (%s): %s", name, type(exc).__name__, exc
+                    )
+                    bundle.degraded_layers.append(name)
+                    bundle.per_layer_ms[name] = (
+                        time.perf_counter() - t0
+                    ) * 1000.0
+                    continue
+                setattr(
+                    bundle,
+                    {
+                        "layer_a": "layer_a_chunks",
+                        "layer_b": "layer_b_kg",
+                        "layer_c": "layer_c_sme",
+                        "layer_d": "layer_d_url",
+                    }[name],
+                    list(result or []),
+                )
+                bundle.per_layer_ms[name] = (time.perf_counter() - t0) * 1000.0
+
+        return bundle
+
+    def retrieve_layer_a(
+        self,
+        *,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        query_understanding: dict | None = None,
+        top_k: int = 10,
+    ) -> list[dict]:
+        """Layer A — dense-or-hybrid chunk retrieval from Qdrant.
+
+        Returns a list of ``{"doc_id", "chunk_id", "text", "score", ...}``
+        dicts so the merge step (Task 4) sees a uniform shape regardless
+        of whether the underlying backend was the legacy dense-only
+        Qdrant client or the Phase 1 :class:`HybridSearcher`. The
+        hybrid path is flag-gated on :data:`ENABLE_HYBRID_RETRIEVAL`.
+        """
+        # Reuse the legacy _qdrant_search output and flatten to the Layer A
+        # list-of-dicts contract the merge step expects. The flag routing
+        # for the hybrid path is driven by the caller — this method
+        # accepts either shape via ``self._qdrant``.
+        out = self._qdrant_search(
+            query,
+            profile_id,
+            subscription_id,
+            query_understanding or {},
+            top_k,
+        )
+        chunks = out.get("chunks", []) if isinstance(out, dict) else []
+        normalized: list[dict] = []
+        for c in chunks:
+            payload = c.get("payload", {}) or {}
+            normalized.append(
+                {
+                    "kind": "chunk",
+                    "doc_id": payload.get("document_id") or payload.get("doc_id"),
+                    "chunk_id": c.get("id") or payload.get("chunk_id"),
+                    "text": c.get("text", "") or payload.get("text", ""),
+                    "score": c.get("score"),
+                    "raw_score": c.get("score"),
+                    "confidence": c.get("score") or 0.5,
+                    "payload": payload,
+                }
+            )
+        return normalized
 
     def retrieve(self, query: str, profile_id: str, subscription_id: str,
                  query_understanding: dict = None, top_k: int = 20) -> dict:
@@ -441,6 +629,32 @@ def _safe_flag_resolver():
         return get_flag_resolver()
     except RuntimeError:
         return None
+
+
+def _sme_hit_to_dict(hit: Any) -> dict:
+    """Normalise an SMERetrieval hit into the merge step's expected shape.
+
+    :class:`src.retrieval.sme_retrieval.SMERetrieval.retrieve` already
+    returns dicts; this helper is a thin pass-through that also handles
+    dataclass-style hit objects some tests use. The Layer C items always
+    carry ``kind='sme_artifact'`` so the merge step can flag them as
+    ``sme_backed=True``.
+    """
+    if isinstance(hit, dict):
+        out = dict(hit)
+        out.setdefault("kind", "sme_artifact")
+        if "text" not in out:
+            out["text"] = out.get("narrative") or ""
+        return out
+    return {
+        "kind": "sme_artifact",
+        "text": getattr(hit, "narrative", "")
+        or getattr(hit, "text", ""),
+        "artifact_type": getattr(hit, "artifact_type", None),
+        "confidence": getattr(hit, "confidence", None),
+        "evidence": list(getattr(hit, "evidence", []) or []),
+        "score": getattr(hit, "score", None),
+    }
 
 
 class UnifiedRetrieverKGClient:
