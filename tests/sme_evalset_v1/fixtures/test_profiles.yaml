@@ -1,0 +1,57 @@
+# DocWain SME eval — test subscription/profile fixtures.
+#
+# These profiles MUST exist in production DocWain before running the baseline.
+# Each profile contains >=10 synthetic documents of the corresponding domain.
+# NO customer documents in test profiles. See memory rule: No Customer Data in Training.
+#
+# Operator setup (one-time, out of scope for this plan):
+#   1. Create test subscription via existing profiles API
+#   2. Create 6 test profiles under the subscription (one per domain)
+#   3. Upload 10+ synthetic documents per profile
+#   4. Run full ingest: screening + embedding + KG build
+#   5. Verify PIPELINE_TRAINING_COMPLETED on every document
+#   6. Record the subscription_id and profile_id values below
+
+version: 1
+
+# Single test subscription hosting all six test profiles
+test_subscription:
+  subscription_id: "REPLACE_WITH_REAL_TEST_SUBSCRIPTION_ID"
+  description: "DocWain SME eval v1 — synthetic documents only"
+
+profiles:
+  finance:
+    profile_id: "REPLACE_WITH_REAL_FINANCE_PROFILE_ID"
+    description: "10+ synthetic quarterly reports, invoices, P&L statements"
+    min_document_count: 10
+
+  legal:
+    profile_id: "REPLACE_WITH_REAL_LEGAL_PROFILE_ID"
+    description: "10+ synthetic contracts, NDAs, employment agreements"
+    min_document_count: 10
+
+  hr:
+    profile_id: "REPLACE_WITH_REAL_HR_PROFILE_ID"
+    description: "10+ synthetic resumes, employee handbooks, benefits docs"
+    min_document_count: 10
+
+  medical:
+    profile_id: "REPLACE_WITH_REAL_MEDICAL_PROFILE_ID"
+    description: "10+ synthetic patient records, discharge notes, prescriptions"
+    min_document_count: 10
+
+  it_support:
+    profile_id: "REPLACE_WITH_REAL_ITSUPPORT_PROFILE_ID"
+    description: "10+ synthetic troubleshooting guides, incident reports, KB articles"
+    min_document_count: 10
+
+  generic:
+    profile_id: "REPLACE_WITH_REAL_GENERIC_PROFILE_ID"
+    description: "10+ synthetic mixed-domain documents"
+    min_document_count: 10
+
+# API endpoint under test
+api:
+  base_url: "http://localhost:8000"  # override via DOCWAIN_API_URL env
+  path: "/api/ask"
+  user_id: "sme_eval_baseline@docwain.internal"
