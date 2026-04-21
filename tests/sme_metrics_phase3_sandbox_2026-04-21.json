@@ -1,0 +1,47 @@
+{
+  "status": "skipped",
+  "reason": "dry-run — dev env has no live DocWain API, sandbox subscription not seeded with Phase 2 synthesis output; Phase 3 surface verified by unit + integration tests (tests/retrieval, tests/agent/test_core_agent_sme_pack.py, tests/agent/test_phase3_end_to_end.py)",
+  "phase": "phase_3",
+  "generated_at": "2026-04-21T10:16:00+00:00",
+  "flags": {
+    "ENABLE_SME_RETRIEVAL": true,
+    "ENABLE_HYBRID_RETRIEVAL": true,
+    "ENABLE_CROSS_ENCODER_RERANK": true
+  },
+  "metrics": {
+    "sme_artifact_hit_rate": {
+      "value": null,
+      "status": "skipped",
+      "threshold": "> 0 on analytical intents"
+    },
+    "hallucination_rate": {
+      "value": null,
+      "status": "skipped",
+      "threshold": "<= 0.02 (no rise from Phase 0 baseline 0.0)"
+    },
+    "answer_faithfulness": {
+      "value": null,
+      "status": "skipped",
+      "threshold": ">= 0.80"
+    },
+    "context_recall": {
+      "value": null,
+      "status": "skipped",
+      "threshold": ">= 0.80 (no regression from Phase 0 baseline 0.802)"
+    }
+  },
+  "surface_verification": {
+    "four_layer_orchestration": "tested",
+    "intent_gating": "tested (simple intents skip Layers B+C)",
+    "retrieval_cache_hit_miss": "tested",
+    "flag_set_version_invalidation": "tested",
+    "training_complete_invalidation": "tested",
+    "cross_encoder_flag_gating": "tested",
+    "sme_pack_doc_context_splice": "tested"
+  },
+  "notes": [
+    "Phase 3 eval harness requires a live DocWain API + Phase 2 synthesis output on a sandbox subscription; both absent in dev env.",
+    "Task 12 accepts this deferral per plan: 'In dev env without live DocWain API, use a mocked response server OR skip with a gated test marker'.",
+    "Next step before Phase 4: run this harness against a seeded sandbox to freeze a real measurement snapshot."
+  ]
+}
