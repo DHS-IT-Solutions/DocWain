@@ -261,6 +261,86 @@ class CoreAgent:
         return bundle
 
     # ------------------------------------------------------------------
+    # Phase 3 Task 7 — QA-cache fast path
+    # ------------------------------------------------------------------
+
+    def _qa_fast_path_lookup(
+        self,
+        *,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        min_confidence: float = 0.85,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up ``qa_idx:{sub}:{prof}:{fingerprint}`` in Redis.
+
+        Returns an AnswerPayload-shaped dict when a hit exists at or above
+        ``min_confidence``; otherwise ``None`` so the caller falls through
+        to the full retrieve+reason flow. All Redis errors degrade to a
+        miss — the fast path must never raise into the hot path.
+
+        The fingerprint is computed via
+        :func:`src.intelligence.qa_generator.qa_index_fingerprint` so the
+        Phase 2 emission side (``emit_qa_index``) and this read side stay
+        in lock-step.
+        """
+        try:
+            from src.intelligence.qa_generator import qa_index_fingerprint
+        except Exception:  # noqa: BLE001
+            return None
+        redis_client = self._redis_client_injected or self._get_redis_client()
+        if redis_client is None:
+            return None
+        fingerprint = qa_index_fingerprint(query)
+        key = f"qa_idx:{subscription_id}:{profile_id}:{fingerprint}"
+        try:
+            raw = redis_client.get(key)
+        except Exception:  # noqa: BLE001
+            logger.debug("qa_fast_path redis.get failed", exc_info=True)
+            return None
+        if raw is None:
+            return None
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                raw = raw.decode("utf-8")
+            except Exception:  # noqa: BLE001
+                return None
+        try:
+            import json
+            data = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            logger.debug("qa_fast_path json decode failed", exc_info=True)
+            return None
+
+        answer = data.get("answer")
+        if not answer:
+            return None
+        metadata_block = data.get("metadata") or {}
+        confidence = metadata_block.get("confidence")
+        if confidence is None:
+            confidence = data.get("confidence")
+        if confidence is not None and float(confidence) < float(min_confidence):
+            return None
+
+        # Shape the payload to match the existing AnswerPayload dict so
+        # the caller treats the fast-path and the full pipeline
+        # identically. No Reasoner invocation happens on this path.
+        return {
+            "response": str(answer),
+            "sources": list(metadata_block.get("sources") or []),
+            "grounded": True,
+            "context_found": True,
+            "metadata": {
+                "task_type": metadata_block.get("task_type", "lookup"),
+                "engine": "docwain_core_agent_qa_fast_path",
+                "qa_id": data.get("qa_id") or metadata_block.get("qa_id", ""),
+                "qa_fast_path_hit": True,
+                "qa_confidence": confidence,
+                "qa_index_fingerprint": fingerprint,
+            },
+        }
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -282,6 +362,30 @@ class CoreAgent:
             raise ValueError("subscription_id is required")
         if not profile_id or not str(profile_id).strip():
             raise ValueError("profile_id is required")
+
+        # --- Phase 3 Task 7 — QA fast path ---
+        # Before spending UNDERSTAND+RETRIEVE+REASON budget, probe Redis
+        # for a pre-grounded Q&A pair at the query fingerprint. Hit →
+        # short-circuit to the cached answer immediately (Reasoner skipped).
+        _qa_t0 = time.monotonic()
+        _qa_hit = self._qa_fast_path_lookup(
+            query=query,
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+        )
+        if _qa_hit is not None:
+            _qa_hit.setdefault("metadata", {})["timing"] = {
+                "qa_fast_path_ms": round(
+                    (time.monotonic() - _qa_t0) * 1000, 1
+                ),
+            }
+            logger.info(
+                "[QA_FAST_PATH] hit profile=%s sub=%s fingerprint=%s",
+                profile_id,
+                subscription_id,
+                _qa_hit["metadata"].get("qa_index_fingerprint"),
+            )
+            return _qa_hit
 
         timing: Dict[str, float] = {}
 
