@@ -1,16 +1,26 @@
 """Blob-backed JSONL trace writers (spec §11).
 
-Task 7 ships :class:`SynthesisTraceWriter` — paths
-``sme_traces/synthesis/{sub}/{prof}/{synthesis_id}.jsonl``. Task 8 adds
-:class:`QueryTraceWriter` for per-query traces.
+* :class:`SynthesisTraceWriter` — ingestion-time synthesis runs;
+  path ``sme_traces/synthesis/{sub}/{prof}/{synthesis_id}.jsonl``.
+* :class:`QueryTraceWriter` — per-query retrieval/generation traces;
+  path ``sme_traces/queries/{sub}/{prof}/{YYYY-MM-DD}/{query_id}.jsonl``.
 
 Canonical method (ERRATA §5): ``.append(event)``. ``.record`` is retained as a
 back-compat alias to ease migration; new code should use ``.append``.
+
+Both writers capture their path template at ``open(...)`` time. For the query
+writer the date partition is set at open — long-running queries that cross
+midnight still write to the opening day's directory, so Phase 3 retrieval
+tooling can locate every event for a given query by listing one directory.
+
+Per project constraints we never call ``datetime.utcnow()``; the default
+``now`` callable returns ``datetime.now(timezone.utc)``.
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Protocol
+from datetime import datetime, timezone
+from typing import Any, Callable, Protocol
 
 
 class TraceBlobAppender(Protocol):
@@ -69,4 +79,43 @@ class SynthesisTraceWriter(_Base):
         self._path = (
             f"sme_traces/synthesis/"
             f"{subscription_id}/{profile_id}/{synthesis_id}.jsonl"
+        )
+
+
+def _utc_now() -> datetime:
+    """Default ``now`` callable for :class:`QueryTraceWriter`. Returns a
+    UTC-aware ``datetime``; never uses the deprecated ``datetime.utcnow()``
+    (project constraint)."""
+    return datetime.now(timezone.utc)
+
+
+class QueryTraceWriter(_Base):
+    """Trace writer for per-query retrieval + generation events.
+
+    Path: ``sme_traces/queries/{sub}/{prof}/{YYYY-MM-DD}/{query_id}.jsonl``.
+
+    The date partition is captured at ``open(...)`` time (not per append) so a
+    query that crosses midnight keeps all its events in a single directory.
+    """
+
+    def __init__(
+        self,
+        appender: TraceBlobAppender,
+        *,
+        now: Callable[[], datetime] = _utc_now,
+    ) -> None:
+        super().__init__(appender)
+        self._now = now
+
+    def open(
+        self,
+        *,
+        subscription_id: str,
+        profile_id: str,
+        query_id: str,
+    ) -> None:
+        day = self._now().strftime("%Y-%m-%d")
+        self._path = (
+            f"sme_traces/queries/"
+            f"{subscription_id}/{profile_id}/{day}/{query_id}.jsonl"
         )
