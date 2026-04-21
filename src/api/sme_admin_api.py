@@ -15,19 +15,35 @@ auth stack:
 An empty ``POST /invalidate`` body invalidates the entire cache; specifying
 ``{subscription_id, domain}`` drops just that entry.
 
+Phase 3 adds the per-subscription feature-flag flip endpoints used by the
+retrieval-layer rollout:
+
+* ``PATCH  /admin/sme-flags/{subscription_id}``         — body ``{flag, enabled}``
+* ``GET    /admin/sme-flags/{subscription_id}``         — current overrides
+
 Per Phase 1 scope: no production path consumes the loader yet — the router is
 registered in app lifespan but dormant until Phase 2 wires synthesis.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import datetime, timezone
+from typing import Any, Protocol
 
 import yaml
 from fastapi import APIRouter, Body, HTTPException, Request
+from pydantic import BaseModel, Field
 
+from src.config.feature_flags import (
+    all_flag_names,
+    bump_flag_set_version,
+    get_flag_resolver,
+)
 from src.intelligence.sme.adapter_loader import AdapterLoader
 from src.intelligence.sme.adapter_schema import Adapter
+
+logger = logging.getLogger(__name__)
 
 
 class BlobWriter(Protocol):
@@ -175,3 +191,153 @@ def build_router(deps: AdapterAdminDeps) -> APIRouter:
         raise HTTPException(400, f"Invalid scope {scope!r}")
 
     return r
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — per-subscription feature-flag flip endpoints
+# ---------------------------------------------------------------------------
+
+
+class FlagFlipBody(BaseModel):
+    """Request body for ``PATCH /admin/sme-flags/{subscription_id}``.
+
+    ``flag`` must be one of the 8 canonical flag names (validated at the
+    endpoint against :func:`src.config.feature_flags.all_flag_names`). Any
+    unknown name returns HTTP 400 rather than silently persisting.
+    """
+
+    flag: str = Field(..., min_length=1)
+    enabled: bool
+    reason: str | None = Field(default=None, max_length=512)
+
+
+@dataclass
+class FlagAdminDeps:
+    """Router dependencies for the flag-flip admin surface.
+
+    ``store`` must implement :class:`src.config.feature_flags.MutableFlagStore`
+    (``get_subscription_overrides`` + ``set_subscription_override``). Tests
+    pass an in-memory stub; production wires MongoDB.
+
+    ``audit_writer`` receives a dict per mutation so the control plane can
+    persist an audit log (operator, flag, prior value, new value, timestamp).
+    Leaving it ``None`` is allowed — the endpoint then only logs via the
+    module logger and still applies the mutation.
+    """
+
+    store: Any  # MutableFlagStore — Protocol check at call time
+    audit_writer: Any | None = None
+
+
+def build_flag_router(deps: FlagAdminDeps) -> APIRouter:
+    """Construct the Phase 3 admin router for per-subscription flag flips.
+
+    Endpoints:
+
+    * ``PATCH /admin/sme-flags/{subscription_id}`` — body ``{flag, enabled,
+      reason?}``. Validates ``flag`` against the 8-name canonical set,
+      persists the override via ``deps.store.set_subscription_override``,
+      bumps the monotonic ``flag_set_version`` counter so any downstream
+      cache keyed on it invalidates, and records an audit entry.
+    * ``GET /admin/sme-flags/{subscription_id}`` — returns the current
+      override dict for the subscription (empty ``{}`` if none set).
+
+    Admin auth is attached at mount-level by the caller (same convention as
+    :func:`build_router` above) — the factory stays auth-agnostic so unit
+    tests can exercise the handler without a live auth stack.
+    """
+
+    r = APIRouter(prefix="/admin/sme-flags", tags=["sme-admin"])
+    known_flags = all_flag_names()
+
+    @r.patch("/{subscription_id}")
+    async def patch_flag(subscription_id: str, body: FlagFlipBody) -> dict:
+        if not subscription_id or not subscription_id.strip():
+            raise HTTPException(400, "subscription_id required")
+        if body.flag not in known_flags:
+            raise HTTPException(400, f"unknown flag: {body.flag!r}")
+
+        store = deps.store
+        setter = getattr(store, "set_subscription_override", None)
+        if not callable(setter):
+            raise HTTPException(
+                500,
+                "backing flag store does not support override writes",
+            )
+        prior_overrides = store.get_subscription_overrides(subscription_id)
+        prior_value = bool(prior_overrides.get(body.flag, False))
+
+        setter(subscription_id, body.flag, bool(body.enabled))
+        new_version = bump_flag_set_version()
+
+        entry = {
+            "kind": "sme_flag_flip",
+            "subscription_id": subscription_id,
+            "flag": body.flag,
+            "prior_value": prior_value,
+            "new_value": bool(body.enabled),
+            "reason": body.reason,
+            "flag_set_version": new_version,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        if deps.audit_writer is not None:
+            try:
+                deps.audit_writer(entry)
+            except Exception:  # noqa: BLE001 — audit failure must not mask success
+                logger.warning("audit_writer failed", exc_info=True)
+        logger.info(
+            "sme_flag_flip sub=%s flag=%s prior=%s new=%s version=%d",
+            subscription_id,
+            body.flag,
+            prior_value,
+            bool(body.enabled),
+            new_version,
+        )
+
+        # Re-resolve with master gating so the response reflects what
+        # ``SMEFeatureFlags.is_enabled`` will actually return going forward.
+        try:
+            effective = get_flag_resolver().is_enabled(
+                subscription_id, body.flag
+            )
+        except (RuntimeError, KeyError):
+            effective = bool(body.enabled)
+
+        return {
+            "subscription_id": subscription_id,
+            "flag": body.flag,
+            "prior_value": prior_value,
+            "new_value": bool(body.enabled),
+            "effective": effective,
+            "flag_set_version": new_version,
+        }
+
+    @r.get("/{subscription_id}")
+    async def get_overrides(subscription_id: str) -> dict:
+        if not subscription_id or not subscription_id.strip():
+            raise HTTPException(400, "subscription_id required")
+        overrides = deps.store.get_subscription_overrides(subscription_id)
+        # Normalize to a plain ``dict[str, bool]`` so callers can assume
+        # a JSON-serialisable shape regardless of the underlying backing store.
+        return {
+            "subscription_id": subscription_id,
+            "overrides": {k: bool(v) for k, v in (overrides or {}).items()},
+        }
+
+    return r
+
+
+def build_sme_admin_router(
+    adapter_deps: AdapterAdminDeps, flag_deps: FlagAdminDeps
+) -> APIRouter:
+    """Combined admin router — mounts the adapter + flag surfaces under one.
+
+    Apps that want both the Phase 1 adapter endpoints and the Phase 3 flag
+    endpoints call this factory once in :mod:`src.main` / ``app_lifespan``
+    to get a single router to ``include_router`` into the FastAPI app.
+    """
+
+    root = APIRouter()
+    root.include_router(build_router(adapter_deps))
+    root.include_router(build_flag_router(flag_deps))
+    return root

@@ -16,8 +16,14 @@ from src.config.feature_flags import (
     SME_REDESIGN_ENABLED,
     FlagStore,
     SMEFeatureFlags,
+    all_flag_names,
+    bump_flag_set_version,
     get_flag_resolver,
+    get_flag_set_version,
+    get_flag_store,
     init_flag_resolver,
+    reset_flag_set_version,
+    set_subscription_override,
 )
 
 
@@ -140,3 +146,66 @@ def test_init_flag_resolver_replaces_singleton(store: MagicMock) -> None:
     second = init_flag_resolver(store=second_store)
     assert first is not second
     assert get_flag_resolver() is second
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 additions: mutable store + flag-set version counter
+# ---------------------------------------------------------------------------
+
+
+class _InMemoryMutable:
+    def __init__(self) -> None:
+        self._by = {}
+
+    def get_subscription_overrides(self, sid):
+        return dict(self._by.get(sid, {}))
+
+    def set_subscription_override(self, sid, flag, value):
+        self._by.setdefault(sid, {})[flag] = bool(value)
+
+
+def test_all_flag_names_returns_canonical_set() -> None:
+    names = all_flag_names()
+    assert set(names) == set(ALL_FLAGS)
+
+
+def test_set_subscription_override_persists_and_bumps_version(store: MagicMock) -> None:
+    mutable = _InMemoryMutable()
+    init_flag_resolver(store=mutable)
+    reset_flag_set_version()
+    assert get_flag_set_version() == 0
+    set_subscription_override("sub_a", SME_REDESIGN_ENABLED, True)
+    assert get_flag_set_version() == 1
+    set_subscription_override("sub_a", ENABLE_SME_RETRIEVAL, True)
+    assert get_flag_set_version() == 2
+    # Now the resolver sees the override.
+    assert get_flag_resolver().is_enabled("sub_a", ENABLE_SME_RETRIEVAL) is True
+
+
+def test_set_subscription_override_rejects_unknown_flag() -> None:
+    init_flag_resolver(store=_InMemoryMutable())
+    with pytest.raises(KeyError, match="unknown feature flag"):
+        set_subscription_override("sub_a", "bogus_flag", True)
+
+
+def test_set_subscription_override_requires_mutable_store(store: MagicMock) -> None:
+    # Bare FlagStore Protocol (no setter) → TypeError.
+    init_flag_resolver(store=store)
+    with pytest.raises(TypeError, match="MutableFlagStore"):
+        set_subscription_override("sub_a", SME_REDESIGN_ENABLED, True)
+
+
+def test_get_flag_store_returns_underlying_store() -> None:
+    mutable = _InMemoryMutable()
+    init_flag_resolver(store=mutable)
+    assert get_flag_store() is mutable
+
+
+def test_bump_and_reset_flag_set_version() -> None:
+    reset_flag_set_version()
+    v = bump_flag_set_version()
+    assert v == 1
+    v2 = bump_flag_set_version()
+    assert v2 == 2
+    reset_flag_set_version()
+    assert get_flag_set_version() == 0

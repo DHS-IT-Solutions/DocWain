@@ -59,6 +59,22 @@ class FlagStore(Protocol):
     ) -> dict[str, bool]: ...
 
 
+class MutableFlagStore(FlagStore, Protocol):
+    """Extended ``FlagStore`` that supports per-subscription override writes.
+
+    Phase 3 admin endpoints flip ``enable_sme_retrieval`` per opt-in
+    subscription; the store must persist the write to MongoDB
+    (control plane) so the next :meth:`SMEFeatureFlags.is_enabled` call
+    sees the new override. Missing keys are still allowed — callers SHOULD
+    pass through only the canonical 8 flag names (validation lives in the
+    admin endpoint, not in the store).
+    """
+
+    def set_subscription_override(
+        self, subscription_id: str, flag: str, value: bool
+    ) -> None: ...
+
+
 class SMEFeatureFlags:
     """Flag resolver with master-gate precedence.
 
@@ -120,3 +136,82 @@ def init_flag_resolver(*, store: FlagStore) -> SMEFeatureFlags:
     global _flag_resolver_singleton
     _flag_resolver_singleton = SMEFeatureFlags(store=store)
     return _flag_resolver_singleton
+
+
+def get_flag_store() -> FlagStore:
+    """Return the underlying :class:`FlagStore` the resolver is reading.
+
+    Admin write helpers use this to get a handle on the process-wide store
+    without threading it through every call site.
+    """
+    return get_flag_resolver()._store
+
+
+def all_flag_names() -> frozenset[str]:
+    """Return the full set of canonical flag names recognised by the resolver.
+
+    Admin endpoints validate input flag names against this set so a typo
+    never silently persists a non-resolvable override.
+    """
+    return _ALL
+
+
+def set_subscription_override(
+    subscription_id: str, flag: str, value: bool
+) -> None:
+    """Persist a per-subscription flag override via the shared store.
+
+    Validates ``flag`` against the canonical 8-flag set and requires the
+    backing store to implement :class:`MutableFlagStore`. Also bumps the
+    monotonic flag-set version counter so any downstream cache keyed on
+    ``flag_set_version`` (Phase 3 retrieval cache — Task 8) invalidates.
+
+    Raises:
+        KeyError: if ``flag`` is not one of the 8 canonical flag names.
+        TypeError: if the backing store does not support override writes.
+    """
+    if flag not in _ALL:
+        raise KeyError(f"unknown feature flag {flag!r}")
+    store = get_flag_store()
+    setter = getattr(store, "set_subscription_override", None)
+    if not callable(setter):
+        raise TypeError(
+            "backing FlagStore does not implement MutableFlagStore — "
+            "per-subscription override writes are not supported"
+        )
+    setter(subscription_id, flag, bool(value))
+    bump_flag_set_version()
+
+
+# ---------------------------------------------------------------------------
+# Monotonic flag-set version counter (Phase 3 retrieval-cache invalidation)
+# ---------------------------------------------------------------------------
+#
+# The Redis retrieval cache (Task 8) keys entries on
+# ``(sub, prof, query_fp, flag_set_version)``. Any flag flip bumps this
+# counter so cached packs rendered under the previous flag configuration
+# are implicitly invalidated — no explicit scan-and-delete needed on the
+# hot path.
+_flag_set_version: int = 0
+
+
+def bump_flag_set_version() -> int:
+    """Atomically increment the monotonic flag-set version and return the
+    new value. Admin write paths call this immediately after persisting a
+    flag mutation so downstream caches that key on the version invalidate
+    naturally."""
+    global _flag_set_version
+    _flag_set_version += 1
+    return _flag_set_version
+
+
+def get_flag_set_version() -> int:
+    """Return the current monotonic flag-set version. Cache writers use
+    this to tag entries with the active flag configuration."""
+    return _flag_set_version
+
+
+def reset_flag_set_version() -> None:
+    """Reset the counter to zero. Tests exploit this for isolation."""
+    global _flag_set_version
+    _flag_set_version = 0

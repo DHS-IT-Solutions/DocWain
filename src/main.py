@@ -1287,7 +1287,7 @@ def get_extraction_progress(profile_id: str = Query(..., description="Profile ID
     """
     from src.api.document_status import get_profile_extraction_status
     result = get_profile_extraction_status(profile_id)
-    if not result.get("documents"):
+    if result["common_data"]["total_documents"] == 0:
         return {"status": "idle", "profile_id": profile_id,
                 "message": "No documents found for this profile",
                 "data": result}
@@ -1362,7 +1362,7 @@ def get_training_progress_endpoint(profile_id: str = Query(..., description="Pro
     """
     from src.api.document_status import get_profile_training_status
     result = get_profile_training_status(profile_id)
-    if not result.get("documents"):
+    if result["common_data"]["total_documents"] == 0:
         return {"status": "idle", "profile_id": profile_id,
                 "message": "No training documents found for this profile",
                 "data": result}
@@ -2180,6 +2180,27 @@ app.include_router(api_router)
 app.include_router(knowledge_graph_router)
 app.add_api_route("/ask", ask_question_api, methods=["POST"], include_in_schema=False)
 app.add_api_route("/teams/messages", handle_teams_messages, methods=["POST"], include_in_schema=False)
+
+# ---------------------------------------------------------------------------
+# SME admin router (Phase 3 Task 2) — per-subscription feature-flag flips.
+# Dormant when the flag resolver has not been initialised (typical during
+# test imports of ``src.main``); the import failure is swallowed so a stale
+# env never breaks the rest of the app.
+# ---------------------------------------------------------------------------
+try:
+    from src.api.sme_admin_api import (
+        FlagAdminDeps as _SMEFlagAdminDeps,
+        build_flag_router as _build_sme_flag_router,
+    )
+    from src.config.feature_flags import get_flag_store as _get_flag_store
+
+    _sme_flag_deps = _SMEFlagAdminDeps(store=_get_flag_store(), audit_writer=None)
+    app.include_router(_build_sme_flag_router(_sme_flag_deps))
+except Exception:  # noqa: BLE001 — router is dormant when resolver isn't wired
+    logging.getLogger(__name__).debug(
+        "SME flag admin router not mounted — flag resolver uninitialised",
+        exc_info=True,
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
