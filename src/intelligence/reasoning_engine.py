@@ -22,6 +22,71 @@ from src.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Private adapter: maps the old IntelligentGenerator.generate() call surface
+# to the Reasoner.reason() API so that reasoning_engine.py call sites need
+# no changes.
+# ---------------------------------------------------------------------------
+
+class _GeneratorAdapter:
+    """Thin adapter that exposes a .generate() method backed by Reasoner."""
+
+    def __init__(self, llm_gateway):
+        from src.generation.reasoner import Reasoner
+        self._reasoner = Reasoner(llm_gateway)
+
+    def generate(self, query, evidence, understanding, conversation_history=""):
+        """Map IntelligentGenerator.generate() args to Reasoner.reason()."""
+        from dataclasses import fields as dc_fields
+        # Extract fields from UnderstandResult (or dict-like) safely.
+        def _get(obj, attr, default=None):
+            if isinstance(obj, dict):
+                return obj.get(attr, default)
+            return getattr(obj, attr, default)
+
+        task_type = _get(understanding, "primary_intent", "extract")
+        output_format = _get(understanding, "output_format", "prose")
+        use_thinking = bool(_get(understanding, "thinking_required", False))
+
+        # Normalise conversation_history: Reasoner expects List[Dict] or None.
+        if isinstance(conversation_history, str):
+            conv = [{"role": "user", "content": conversation_history}] if conversation_history else None
+        else:
+            conv = conversation_history or None
+
+        result = self._reasoner.reason(
+            query=query,
+            task_type=task_type,
+            output_format=output_format,
+            evidence=evidence,
+            doc_context=None,
+            conversation_history=conv,
+            use_thinking=use_thinking,
+        )
+
+        # Return a GeneratedResponse-compatible object so callers can do
+        # result.text and result.thinking unchanged.
+        from dataclasses import dataclass as _dc, field as _field
+        from typing import Optional as _Opt, Dict as _Dict
+
+        @_dc
+        class _AdaptedResult:
+            text: str
+            thinking: _Opt[str] = None
+            citations_found: int = 0
+            token_usage: _Dict = _field(default_factory=dict)
+
+        import re as _re
+        citations = len(set(_re.findall(r"\[SOURCE-\d+\]", result.text)))
+        return _AdaptedResult(
+            text=result.text,
+            thinking=result.thinking,
+            citations_found=citations,
+            token_usage=result.usage,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Data structures (kept for backward compat with tests)
 # ---------------------------------------------------------------------------
@@ -93,8 +158,7 @@ class ReasoningEngine:
 
     def _get_generator(self):
         if self._generator is None:
-            from src.intelligence.generator import IntelligentGenerator
-            self._generator = IntelligentGenerator(self._llm)
+            self._generator = _GeneratorAdapter(self._llm)
         return self._generator
 
     def _get_verifier(self):
