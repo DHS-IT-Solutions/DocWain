@@ -15,13 +15,25 @@ from typing import Any, Dict, Generator, List, Optional, Set
 
 from src.agent.intent import IntentAnalyzer, QueryUnderstanding
 from src.agent.subagent import DynamicSubAgent
+from src.agent.url_case_selector import (
+    CaseSelection,
+    RetrievalSignal,
+    select_case,
+)
 from src.generation.composer import compose_response
 from src.generation.reasoner import Reasoner, ReasonerResult
 from src.retrieval.context_builder import build_context
+from src.retrieval.ephemeral_merge import merge_ephemeral
 from src.retrieval.reranker import rerank_chunks
 from src.retrieval.retriever import UnifiedRetriever
 from src.retrieval.types import RetrievalBundle
 from src.agent.domain_dispatch import DomainDispatcher
+from src.tools.url_ephemeral_source import (
+    EphemeralResult,
+    UrlEphemeralSource,
+)
+from src.tools.url_fetcher import DomainPolicy, FetcherConfig
+from src.tools.web_search import detect_urls_in_query
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +218,111 @@ class CoreAgent:
         self._retrieval_cache_obj = None  # type: Any
         # Phase 3 Task 9/10 — intent gate. Stateless; shared across calls.
         self._intent_gate_obj = None  # type: Any
+        # Phase 5 — dedicated executor for URL fetch. Separate from the
+        # UNDERSTAND+RETRIEVE ThreadPoolExecutor because URL fetch must
+        # outlive that block (it may resolve during rerank or later) and
+        # must not block its `with`-exit. The executor is shared across
+        # calls; threads are daemons and the pool auto-shrinks on idle.
+        self._url_executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="docwain-url-fetch",
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 5 — URL-as-prompt helpers
+    # ------------------------------------------------------------------
+    def _build_fetcher_config(self, subscription_id: str) -> FetcherConfig:
+        """Construct a :class:`FetcherConfig` for a subscription.
+
+        Pulls optional allow/block domain lists from Config when present
+        (``Config.UrlFetcher.ALLOWED_DOMAINS``, ``BLOCKED_DOMAINS``). Safe
+        defaults otherwise. External I/O safety timeouts (fetch 15s,
+        extract 30s) come from the dataclass defaults — no internal
+        wall-clock timeouts are added on top.
+        """
+        allowed: tuple[str, ...] = ()
+        blocked: tuple[str, ...] = ()
+        try:
+            from src.api.config import Config
+            cfg_mod = getattr(Config, "UrlFetcher", None)
+            if cfg_mod is not None:
+                allowed = tuple(
+                    getattr(cfg_mod, "ALLOWED_DOMAINS", ()) or ()
+                )
+                blocked = tuple(
+                    getattr(cfg_mod, "BLOCKED_DOMAINS", ()) or ()
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        return FetcherConfig(
+            domain_policy=DomainPolicy(
+                allowed_domains=allowed,
+                blocked_domains=blocked,
+            ),
+        )
+
+    def _is_url_as_prompt_enabled(self, subscription_id: str) -> bool:
+        """Return True iff the Phase 5 flag is ON for *subscription_id*.
+
+        Fail-closed: any resolver failure (singleton uninitialised, store
+        error, etc.) returns False so the URL leg is a no-op.
+        """
+        try:
+            from src.config.feature_flags import (
+                ENABLE_URL_AS_PROMPT,
+                get_flag_resolver,
+            )
+            return bool(get_flag_resolver().is_enabled(
+                subscription_id, ENABLE_URL_AS_PROMPT,
+            ))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _kick_off_url_fetch(
+        self,
+        *,
+        urls: List[str],
+        subscription_id: str,
+        profile_id: str,
+        session_id: str,
+    ) -> Any:
+        """Submit the URL fetch to the dedicated executor and return the future.
+
+        Dispatch is deliberately isolated from the UNDERSTAND+RETRIEVE
+        executor — URL work may complete well after the profile leg, and we
+        must not let the with-exit of that block join on it. No internal
+        timeout is applied; external fetch/extract safety inside
+        :class:`UrlEphemeralSource` is the only timeout.
+        """
+        fetcher_cfg = self._build_fetcher_config(subscription_id)
+        ephemeral = UrlEphemeralSource(
+            embedder=self._embedder,
+            fetcher_config=fetcher_cfg,
+        )
+
+        def _run() -> EphemeralResult:
+            try:
+                return ephemeral.fetch_all(
+                    urls,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    session_id=session_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ephemeral url batch failed entirely: %s", exc,
+                    exc_info=True,
+                )
+                return EphemeralResult(
+                    chunks=[],
+                    warnings=[{
+                        "url": ",".join(urls),
+                        "error": f"{type(exc).__name__}: {exc}"[:300],
+                        "error_class": type(exc).__name__,
+                    }],
+                )
+
+        return self._url_executor.submit(_run)
 
     # ------------------------------------------------------------------
     # Phase 3 — four-layer SME retrieval orchestration
@@ -598,6 +715,31 @@ class CoreAgent:
 
         timing: Dict[str, float] = {}
 
+        # --- PHASE 5: URL-AS-PROMPT KICK-OFF ---
+        # When ENABLE_URL_AS_PROMPT is on for the subscription, detect any
+        # URLs in the query and kick off the fetch+extract+chunk+embed
+        # pipeline in parallel with UNDERSTAND and RETRIEVE. NO internal
+        # timeout — the external fetch/extract safety is the only guard.
+        url_list: List[str] = []
+        cleaned_query = query
+        url_case: CaseSelection = CaseSelection.NONE
+        _ephemeral_future = None
+        ephemeral_warnings: List[Dict[str, Any]] = []
+        ephemeral_chunks: List[Any] = []
+        if self._is_url_as_prompt_enabled(subscription_id):
+            url_list, cleaned_query = detect_urls_in_query(query)
+            if url_list:
+                _ephemeral_future = self._kick_off_url_fetch(
+                    urls=url_list,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    session_id=session_id,
+                )
+                logger.info(
+                    "[URL_AS_PROMPT] kicked off fetch of %d url(s) for sub=%s",
+                    len(url_list), subscription_id,
+                )
+
         # --- UNDERSTAND ---
         t0 = time.monotonic()
         doc_intelligence = self._load_doc_intelligence(subscription_id)
@@ -905,6 +1047,56 @@ class CoreAgent:
             len(reranked),
             len(set(c.document_id for c in reranked if c.document_id)),
         )
+
+        # --- PHASE 5: URL-AS-PROMPT CASE DISPATCH + MERGE ---
+        if _ephemeral_future is not None:
+            # Compute retrieval-signal strength off the reranked profile
+            # chunks. "High similarity" threshold is the same 0.5 rerank
+            # score floor used in the spec.
+            _high_sim = sum(
+                1 for c in reranked if getattr(c, "score", 0.0) >= 0.5
+            )
+            _sme_artifact_count = sum(
+                1 for c in reranked
+                if isinstance(getattr(c, "metadata", {}), dict)
+                and (c.metadata or {}).get("provenance") == "sme_artifact"
+            )
+            signal = RetrievalSignal(
+                sme_artifact_count=_sme_artifact_count,
+                high_sim_chunk_count=_high_sim,
+            )
+            url_case = select_case(
+                cleaned_query=cleaned_query,
+                url_count=len(url_list),
+                signal=signal,
+            )
+            try:
+                # External safety lives inside UrlEphemeralSource; no
+                # internal .result(timeout=...) is added here — per the
+                # Phase 5 rule.
+                ephemeral_result: EphemeralResult = _ephemeral_future.result()
+                ephemeral_chunks = list(ephemeral_result.chunks)
+                ephemeral_warnings = list(ephemeral_result.warnings)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ephemeral url fetch future failed: %s", exc,
+                    exc_info=True,
+                )
+                ephemeral_chunks = []
+                ephemeral_warnings = [{
+                    "url": ",".join(url_list),
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                    "error_class": type(exc).__name__,
+                }]
+            if url_case in (CaseSelection.PRIMARY, CaseSelection.SUPPLEMENTARY):
+                reranked = merge_ephemeral(
+                    reranked, ephemeral_chunks, case=url_case,
+                )
+                logger.info(
+                    "[URL_AS_PROMPT] merged %d ephemeral chunk(s) case=%s",
+                    len(ephemeral_chunks), url_case.value,
+                )
+
         evidence, doc_context = build_context(reranked, doc_intelligence_dict)
         logger.info("[RAG_DEBUG] evidence items: %d", len(evidence))
 
@@ -1208,6 +1400,13 @@ class CoreAgent:
             "timing": timing,
             "profiles_searched": retrieval_result.profiles_searched,
         }
+        # Phase 5 — thread URL-case metadata into the response so callers
+        # see provenance warnings, the selected case, and the source URLs.
+        if url_list:
+            metadata["url_case"] = url_case.value
+            metadata["url_sources"] = list(url_list)
+            if ephemeral_warnings:
+                metadata["url_warnings"] = ephemeral_warnings
         result = compose_response(
             text=reason_result.text,
             evidence=evidence,
