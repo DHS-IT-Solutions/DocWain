@@ -64,12 +64,34 @@ def wired() -> tuple[SMESynthesizer, InMemoryBlob, InMemoryQdrant, InMemoryNeo4j
     builder_ctx.iter_profile_chunks.return_value = []
     builder_ctx.iter_profile_kg.return_value = []
 
+    # Phase 2 builders require an injected LLM + trace sink. With empty
+    # chunk iteration (the builders never call the LLM because there is
+    # nothing to synthesize from), MagicMocks are enough to satisfy the
+    # constructor contract.
+    builder_llm = MagicMock()
+    builder_trace = MagicMock()
+    builder_kg = MagicMock()
+    # The KG materializer iterates ``adapter.kg_inference_rules``; the
+    # generic last-resort adapter ships with an empty list, so
+    # ``run_pattern`` is never called in this integration test.
+    builder_kg.run_pattern.return_value = []
+
     builders = {
-        "dossier": SMEDossierBuilder(ctx=builder_ctx),
-        "insight": InsightIndexBuilder(ctx=builder_ctx),
-        "comparison": ComparativeRegisterBuilder(ctx=builder_ctx),
-        "kg_edge": KGMultiHopMaterializer(ctx=builder_ctx),
-        "recommendation": RecommendationBankBuilder(ctx=builder_ctx),
+        "dossier": SMEDossierBuilder(
+            ctx=builder_ctx, llm=builder_llm, trace=builder_trace
+        ),
+        "insight": InsightIndexBuilder(
+            ctx=builder_ctx, llm=builder_llm, trace=builder_trace
+        ),
+        "comparison": ComparativeRegisterBuilder(
+            ctx=builder_ctx, llm=builder_llm, trace=builder_trace
+        ),
+        "kg_edge": KGMultiHopMaterializer(
+            ctx=builder_ctx, kg=builder_kg, trace=builder_trace
+        ),
+        "recommendation": RecommendationBankBuilder(
+            ctx=builder_ctx, llm=builder_llm, trace=builder_trace
+        ),
     }
 
     synthesizer = SMESynthesizer(
