@@ -263,6 +263,11 @@ class Adapter(_Strict):
     response_persona_prompts: ResponsePersonaPrompts
     retrieval_caps: RetrievalCaps
     output_caps: OutputCaps
+    # Runtime-injected by AdapterLoader after parsing; not part of the YAML.
+    # Exposed so callers (Phase 2+ synthesizer, Phase 4 recommendation grounding)
+    # can read them directly off the Adapter instance. See ERRATA §1.
+    content_hash: str | None = None
+    source_path: str | None = None
 
     @field_validator("version")
     @classmethod
@@ -342,7 +347,7 @@ def _L(blob, lr, ttl=60):
 
 
 def test_resolves_subscription_override_first(blob, lr):
-    _L(blob, lr).get("sub_a", "finance")
+    _L(blob, lr).load("sub_a", "finance")
     assert blob.read_text.call_args_list[0][0][0] == \
         "sme_adapters/subscription/sub_a/finance.yaml"
 
@@ -352,7 +357,7 @@ def test_falls_through_to_global(blob, lr):
         if p.startswith("sme_adapters/subscription/"): raise FileNotFoundError(p)
         return _GENERIC
     blob.read_text.side_effect = side
-    assert isinstance(_L(blob, lr).get("sub_a", "finance"), Adapter)
+    assert isinstance(_L(blob, lr).load("sub_a", "finance"), Adapter)
 
 
 def test_falls_through_to_generic(blob, lr):
@@ -360,23 +365,23 @@ def test_falls_through_to_generic(blob, lr):
         if "mystery" in p: raise FileNotFoundError(p)
         return _GENERIC
     blob.read_text.side_effect = side
-    assert _L(blob, lr).get("sub_a", "mystery").domain == "generic"
+    assert _L(blob, lr).load("sub_a", "mystery").domain == "generic"
 
 
 def test_ttl_cache_hits(blob, lr):
-    l = _L(blob, lr, ttl=60); l.get("sub_a", "finance"); l.get("sub_a", "finance")
+    l = _L(blob, lr, ttl=60); l.load("sub_a", "finance"); l.load("sub_a", "finance")
     assert blob.read_text.call_count == 1
 
 
 def test_ttl_cache_expires(blob, lr):
-    l = _L(blob, lr, ttl=0.01); l.get("sub_a", "finance")
-    time.sleep(0.05); l.get("sub_a", "finance")
+    l = _L(blob, lr, ttl=0.01); l.load("sub_a", "finance")
+    time.sleep(0.05); l.load("sub_a", "finance")
     assert blob.read_text.call_count == 2
 
 
 def test_invalidate_forces_refetch(blob, lr):
-    l = _L(blob, lr, ttl=3600); l.get("sub_a", "finance")
-    l.invalidate("sub_a", "finance"); l.get("sub_a", "finance")
+    l = _L(blob, lr, ttl=3600); l.load("sub_a", "finance")
+    l.invalidate("sub_a", "finance"); l.load("sub_a", "finance")
     assert blob.read_text.call_count == 2
 
 
@@ -384,12 +389,12 @@ def test_blob_unreachable_uses_last_resort(lr):
     bad = MagicMock(spec=BlobReader)
     bad.read_text.side_effect = ConnectionError("blob down")
     l = AdapterLoader(blob=bad, last_resort_path=lr, ttl_seconds=60)
-    assert l.get("sub_a", "finance").domain == "generic"
+    assert l.load("sub_a", "finance").domain == "generic"
     assert l.health_status() == "degraded"
 
 
 def test_records_version_and_hash(blob, lr):
-    l = _L(blob, lr); l.get("sub_a", "finance")
+    l = _L(blob, lr); l.load("sub_a", "finance")
     meta = l.last_load_metadata("sub_a", "finance")
     assert meta["version"] == "1.0.0" and meta["content_hash"]
 
@@ -454,7 +459,9 @@ class AdapterLoader:
         self._lock = threading.Lock()
         self._status = "healthy"
 
-    def get(self, sub_id: str, domain: str) -> Adapter:
+    def load(self, sub_id: str, domain: str) -> Adapter:
+        """Canonical: resolve adapter for (sub_id, domain). Returns Adapter
+        with content_hash + version populated on the instance itself."""
         key = (sub_id, domain)
         now = time.monotonic()
         with self._lock:
@@ -474,6 +481,9 @@ class AdapterLoader:
             with self._lock:
                 self._cache[key] = e; self._status = "degraded"
             return e.adapter
+
+    # Back-compat alias — deprecated, will be removed after Phase 2 lands
+    get = load
 
     def invalidate(self, sub_id: str, domain: str) -> None:
         with self._lock: self._cache.pop((sub_id, domain), None)
@@ -514,7 +524,37 @@ class AdapterLoader:
         data = yaml.safe_load(raw)
         if not isinstance(data, dict):
             raise AdapterLoadError(f"Adapter at {source_path} is not a YAML mapping")
-        return Adapter(**data)
+        a = Adapter(**data)
+        # Populate runtime-injected fields per ERRATA §1
+        return a.model_copy(update={
+            "content_hash": _hash(raw),
+            "source_path": source_path,
+        })
+
+
+# Module-level singleton factory (ERRATA §1)
+_adapter_loader_singleton: AdapterLoader | None = None
+
+
+def get_adapter_loader() -> AdapterLoader:
+    """Return the process-wide AdapterLoader. Non-FastAPI callers use this;
+    FastAPI lifespan wires the same instance into app.state."""
+    global _adapter_loader_singleton
+    if _adapter_loader_singleton is None:
+        raise RuntimeError(
+            "AdapterLoader not initialized — call init_adapter_loader() at startup"
+        )
+    return _adapter_loader_singleton
+
+
+def init_adapter_loader(*, blob: BlobReader, last_resort_path: Path,
+                        ttl_seconds: float = 300.0) -> AdapterLoader:
+    """Initialize the singleton. Called once from app startup / CLI entrypoint."""
+    global _adapter_loader_singleton
+    _adapter_loader_singleton = AdapterLoader(
+        blob=blob, last_resort_path=last_resort_path, ttl_seconds=ttl_seconds,
+    )
+    return _adapter_loader_singleton
 ```
 
 - [ ] **Step 4: Run green** → 9 passed.
@@ -1091,7 +1131,7 @@ def appender(): return MagicMock(spec=TraceBlobAppender)
 def test_synthesis_path(appender):
     w = SynthesisTraceWriter(appender)
     w.open(subscription_id="s", profile_id="p", synthesis_id="syn1")
-    w.record({"stage": "start"}); w.close()
+    w.append({"stage": "start"}); w.close()
     assert appender.append.call_args_list[0][0][0] == \
         "sme_traces/synthesis/s/p/syn1.jsonl"
 
@@ -1099,7 +1139,7 @@ def test_synthesis_path(appender):
 def test_appends_jsonl(appender):
     w = SynthesisTraceWriter(appender)
     w.open(subscription_id="s", profile_id="p", synthesis_id="syn1")
-    w.record({"stage": "builder_start", "builder": "dossier"})
+    w.append({"stage": "builder_start", "builder": "dossier"})
     lines = [c[0][1] for c in appender.append.call_args_list]
     assert lines[0].endswith("\n") and '"builder": "dossier"' in lines[0]
 
@@ -1108,14 +1148,14 @@ def test_query_path_uses_date(appender):
     fixed = datetime(2026, 4, 20, 14, 30)
     w = QueryTraceWriter(appender, now=lambda: fixed)
     w.open(subscription_id="s", profile_id="p", query_id="q42")
-    w.record({"stage": "retrieval"})
+    w.append({"stage": "retrieval"})
     assert appender.append.call_args_list[0][0][0] == \
         "sme_traces/queries/s/p/2026-04-20/q42.jsonl"
 
 
 def test_refuses_record_before_open(appender):
     with pytest.raises(RuntimeError, match="open"):
-        SynthesisTraceWriter(appender).record({"x": 1})
+        SynthesisTraceWriter(appender).append({"x": 1})
 ```
 
 - [ ] **Step 2: Implementation**
@@ -1138,11 +1178,15 @@ class _Base:
     def __init__(self, appender: TraceBlobAppender) -> None:
         self._a = appender; self._path: str | None = None
 
-    def record(self, event: dict[str, Any]) -> None:
+    def append(self, event: dict[str, Any]) -> None:
+        """Canonical per ERRATA §5 — matches underlying TraceBlobAppender.append()."""
         if self._path is None:
             raise RuntimeError("Trace writer not open; call open() first")
         self._a.append(self._path,
                        json.dumps(event, default=str, ensure_ascii=False) + "\n")
+
+    # Back-compat alias — deprecated
+    record = append
 
     def close(self) -> None: self._path = None
 
@@ -1301,6 +1345,37 @@ class SMEArtifactStorage:
                              {"key": "profile_id", "value": prof},
                              {"key": "artifact_type", "value": atype},
                              {"key": "version", "value": version}]})
+
+    # ------ Facade methods per ERRATA §2 (consumers expect these names) ------
+
+    def put_snippet(self, sub: str, prof: str, item: ArtifactItem,
+                    *, synthesis_version: int) -> None:
+        """Write one retrievable snippet to Qdrant sme_artifacts_{sub}.
+        Canonical single-item write; callers use this during streaming persist."""
+        self.deps.qdrant.upsert_points(
+            collection=f"sme_artifacts_{sub}",
+            points=[{"id": item.item_id, "payload": {
+                "subscription_id": sub, "profile_id": prof,
+                "artifact_type": item.artifact_type,
+                "text": item.text, "confidence": item.confidence,
+                "domain_tags": item.domain_tags,
+                "evidence": [e.model_dump() for e in item.evidence],
+                "synthesis_version": synthesis_version}}])
+
+    def put_canonical(self, sub: str, prof: str, atype: str,
+                      items: list[ArtifactItem], *, synthesis_version: int) -> None:
+        """Write canonical JSON to Blob at
+        sme_artifacts/{sub}/{prof}/{atype}/{synthesis_version}.json."""
+        path = f"sme_artifacts/{sub}/{prof}/{atype}/{synthesis_version}.json"
+        body = {"subscription_id": sub, "profile_id": prof,
+                "artifact_type": atype, "version": synthesis_version,
+                "items": [it.model_dump(mode="json") for it in items]}
+        self.deps.blob.write_text(path, json.dumps(body, ensure_ascii=False))
+
+    def put_manifest(self, sub: str, prof: str, manifest: dict) -> None:
+        """Write synthesis run manifest (pointers to the above)."""
+        path = f"sme_artifacts/{sub}/{prof}/manifest/{manifest['synthesis_id']}.json"
+        self.deps.blob.write_text(path, json.dumps(manifest, ensure_ascii=False))
 ```
 
 - [ ] **Step 3: Run green** → 5 passed.
@@ -1339,8 +1414,11 @@ def deps():
         trace_writer=MagicMock(),
         builders={k: MagicMock() for k in
                   ("dossier", "insight", "comparison", "kg_edge", "recommendation")})
-    a = MagicMock(spec=Adapter); a.version = "1.0.0"; a.domain = "generic"
-    d.adapter_loader.get.return_value = a
+    a = MagicMock(spec=Adapter)
+    a.version = "1.0.0"; a.domain = "generic"
+    a.content_hash = "h"; a.source_path = "x"
+    d.adapter_loader.load.return_value = a
+    # last_load_metadata kept for introspection tests but no longer load-bearing
     d.adapter_loader.last_load_metadata.return_value = {
         "version": "1.0.0", "content_hash": "h", "source_path": "x"}
     for b in d.builders.values(): b.build.return_value = []
@@ -1373,7 +1451,7 @@ def test_verifies_and_persists(deps):
 
 def test_records_adapter_version(deps):
     _run(deps)
-    events = [c[0][0] for c in deps.trace_writer.record.call_args_list]
+    events = [c[0][0] for c in deps.trace_writer.append.call_args_list]
     assert any(e.get("stage") == "start" for e in events)
     assert any(e.get("adapter_version") == "1.0.0" for e in events)
 ```
@@ -1420,11 +1498,11 @@ class SMESynthesizer:
         tw.open(subscription_id=subscription_id, profile_id=profile_id,
                 synthesis_id=sid)
         try:
-            adapter = d.adapter_loader.get(subscription_id, profile_domain)
-            meta = d.adapter_loader.last_load_metadata(subscription_id, profile_domain)
-            tw.record({"stage": "start", "synthesis_id": sid,
-                       "adapter_version": meta.get("version"),
-                       "adapter_hash": meta.get("content_hash")})
+            adapter = d.adapter_loader.load(subscription_id, profile_domain)
+            # content_hash + version are attributes on Adapter per ERRATA §1
+            tw.append({"stage": "start", "synthesis_id": sid,
+                       "adapter_version": adapter.version,
+                       "adapter_hash": adapter.content_hash})
             counts: dict[str, int] = {}
             for atype, builder in d.builders.items():
                 items = builder.build(subscription_id=subscription_id,
@@ -1433,17 +1511,17 @@ class SMESynthesizer:
                 verdicts = d.verifier.verify_batch(items)
                 accepted = [v.adjusted_item for v in verdicts if v.passed]
                 for v in (v for v in verdicts if not v.passed):
-                    tw.record({"stage": "verifier_drop", "builder": atype,
+                    tw.append({"stage": "verifier_drop", "builder": atype,
                                "item_id": v.item_id,
                                "failing_check": v.failing_check,
                                "drop_reason": v.drop_reason})
                 d.storage.persist_items(subscription_id, profile_id, atype,
                                         accepted, version=synthesis_version)
                 counts[atype] = len(accepted)
-                tw.record({"stage": "builder_complete", "builder": atype,
+                tw.append({"stage": "builder_complete", "builder": atype,
                            "accepted": len(accepted),
                            "dropped": len(verdicts) - len(accepted)})
-            tw.record({"stage": "complete", "counts": counts})
+            tw.append({"stage": "complete", "counts": counts})
             return counts
         finally:
             tw.close()
@@ -1860,13 +1938,23 @@ Create `src/config/feature_flags.py`:
 """SME feature flag resolution (spec §13). MongoDB feature_flags collection
 = control-plane data (allowed by storage-separation rule)."""
 from __future__ import annotations
-from typing import Protocol
+from typing import Final, Protocol
 
-_MASTER = "sme_redesign_enabled"
-_DEPENDENT = {"enable_sme_synthesis", "enable_sme_retrieval",
-              "enable_kg_synthesized_edges", "enable_rich_mode",
-              "enable_url_as_prompt"}
-_INDEPENDENT = {"enable_hybrid_retrieval", "enable_cross_encoder_rerank"}
+# ---- Exported flag-name constants (canonical per ERRATA §4) ----
+SME_REDESIGN_ENABLED: Final[str] = "sme_redesign_enabled"
+ENABLE_SME_SYNTHESIS: Final[str] = "enable_sme_synthesis"
+ENABLE_SME_RETRIEVAL: Final[str] = "enable_sme_retrieval"
+ENABLE_KG_SYNTHESIZED_EDGES: Final[str] = "enable_kg_synthesized_edges"
+ENABLE_RICH_MODE: Final[str] = "enable_rich_mode"
+ENABLE_URL_AS_PROMPT: Final[str] = "enable_url_as_prompt"
+ENABLE_HYBRID_RETRIEVAL: Final[str] = "enable_hybrid_retrieval"
+ENABLE_CROSS_ENCODER_RERANK: Final[str] = "enable_cross_encoder_rerank"
+
+_MASTER = SME_REDESIGN_ENABLED
+_DEPENDENT = {ENABLE_SME_SYNTHESIS, ENABLE_SME_RETRIEVAL,
+              ENABLE_KG_SYNTHESIZED_EDGES, ENABLE_RICH_MODE,
+              ENABLE_URL_AS_PROMPT}
+_INDEPENDENT = {ENABLE_HYBRID_RETRIEVAL, ENABLE_CROSS_ENCODER_RERANK}
 _ALL = {_MASTER, *_DEPENDENT, *_INDEPENDENT}
 _DEFAULTS: dict[str, bool] = {n: False for n in _ALL}
 
@@ -1887,6 +1975,29 @@ class SMEFeatureFlags:
         if flag in _DEPENDENT and not master_on:
             return False
         return bool(ov.get(flag, _DEFAULTS[flag]))
+
+
+# ---- Module-level singleton factory per ERRATA §4 ----
+_flag_resolver_singleton: SMEFeatureFlags | None = None
+
+
+def get_flag_resolver() -> SMEFeatureFlags:
+    """Return the process-wide SMEFeatureFlags instance.
+    Non-FastAPI callers use this; FastAPI lifespan wires the same instance
+    into app.state. Call init_flag_resolver() once at startup before use."""
+    global _flag_resolver_singleton
+    if _flag_resolver_singleton is None:
+        raise RuntimeError(
+            "SMEFeatureFlags not initialized — call init_flag_resolver() at startup"
+        )
+    return _flag_resolver_singleton
+
+
+def init_flag_resolver(*, store: FlagStore) -> SMEFeatureFlags:
+    """Initialize the singleton. Called once from app startup / CLI entrypoint."""
+    global _flag_resolver_singleton
+    _flag_resolver_singleton = SMEFeatureFlags(store=store)
+    return _flag_resolver_singleton
 ```
 
 - [ ] **Step 3: Run green** → 5 passed.
