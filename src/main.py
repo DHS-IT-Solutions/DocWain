@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import ollama
 import uvicorn
 from bson.objectid import ObjectId
-from fastapi import APIRouter, Body, FastAPI, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Body, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, constr, field_validator
@@ -1104,8 +1104,8 @@ def trigger_single_extraction(doc_id: str, subscription_id: str = "default"):
     if not record:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
 
-    sub = str(record.get("subscription_id") or subscription_id or "")
-    prof = str(record.get("profile_id") or "")
+    sub = str(record.get("subscription_id") or record.get("subscription") or subscription_id or "")
+    prof = str(record.get("profile_id") or record.get("profile") or "")
     if not sub or not prof:
         raise HTTPException(
             status_code=400,
@@ -1177,8 +1177,8 @@ def trigger_single_training(doc_id: str, subscription_id: str = "default"):
     if not record:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
 
-    sub = str(record.get("subscription_id") or subscription_id or "")
-    prof = str(record.get("profile_id") or "")
+    sub = str(record.get("subscription_id") or record.get("subscription") or subscription_id or "")
+    prof = str(record.get("profile_id") or record.get("profile") or "")
     if not sub or not prof:
         raise HTTPException(
             status_code=400,
@@ -1200,7 +1200,10 @@ def trigger_single_training(doc_id: str, subscription_id: str = "default"):
     }
 
 @api_router.get("/extract", tags=["Default"])
-def trigger_extraction(subscription_id: str = "default"):
+def trigger_extraction(
+    subscription_id: str = "default",
+    background_tasks: BackgroundTasks = None,
+):
     """Dispatch Celery extraction tasks for all eligible documents.
 
     Replaces the legacy ``trainData`` → ``extract_documents`` sync batch
@@ -1213,6 +1216,12 @@ def trigger_extraction(subscription_id: str = "default"):
     Eligibility: status is UNDER_REVIEW or EXTRACTION_FAILED. When
     ``subscription_id`` is provided (and not the sentinel "default"), the
     search is scoped to that subscription.
+
+    The endpoint returns immediately after the Mongo eligibility query.
+    The ``extract_document.delay()`` fan-out runs in a FastAPI background
+    task so that N calls to remote Azure Redis don't block the HTTP
+    response — critical because Node frontends often have fetch timeouts
+    well under the 1-2s/call the remote broker takes under load.
     """
     from src.tasks.extraction import extract_document
     from src.api.document_status import get_documents_collection
@@ -1221,13 +1230,22 @@ def trigger_extraction(subscription_id: str = "default"):
     logging.info("Dispatching extraction tasks (subscription=%s)", subscription_id)
     query: Dict[str, Any] = {"status": {"$in": [STATUS_UNDER_REVIEW, STATUS_EXTRACTION_FAILED]}}
     if subscription_id and subscription_id != "default":
-        query["subscription_id"] = str(subscription_id)
+        sub_forms: List[Any] = [str(subscription_id)]
+        try:
+            sub_forms.append(ObjectId(subscription_id))
+        except Exception:
+            pass
+        query["$or"] = [
+            {"subscription_id": {"$in": sub_forms}},
+            {"subscription": {"$in": sub_forms}},
+        ]
 
     try:
         col = get_documents_collection()
         docs = list(col.find(
             query,
-            {"_id": 1, "subscription_id": 1, "profile_id": 1, "name": 1, "status": 1},
+            {"_id": 1, "subscription_id": 1, "subscription": 1,
+             "profile_id": 1, "profile": 1, "name": 1, "status": 1},
         ))
     except Exception as exc:
         logging.error("Failed to list eligible documents: %s", exc, exc_info=True)
@@ -1241,12 +1259,13 @@ def trigger_extraction(subscription_id: str = "default"):
             "documents": [],
         }
 
-    dispatched: List[Dict[str, Any]] = []
+    pending: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
+    eligible: List[tuple] = []   # (doc_id, sub, prof) for background dispatch
     for d in docs:
         doc_id = str(d["_id"])
-        sub = str(d.get("subscription_id") or "")
-        prof = str(d.get("profile_id") or "")
+        sub = str(d.get("subscription_id") or d.get("subscription") or "")
+        prof = str(d.get("profile_id") or d.get("profile") or "")
         if not sub or not prof:
             failed.append({
                 "document_id": doc_id,
@@ -1254,28 +1273,34 @@ def trigger_extraction(subscription_id: str = "default"):
                 "reason": "missing_subscription_or_profile",
             })
             continue
-        try:
-            task = extract_document.delay(doc_id, sub, prof)
-            dispatched.append({
-                "document_id": doc_id,
-                "task_id": task.id,
-                "name": d.get("name", ""),
-                "status": "QUEUED",
-            })
-        except Exception as exc:  # noqa: BLE001
-            logging.error("Dispatch failed for doc %s: %s", doc_id, exc, exc_info=True)
-            failed.append({
-                "document_id": doc_id,
-                "name": d.get("name", ""),
-                "reason": str(exc),
-            })
+        eligible.append((doc_id, sub, prof))
+        pending.append({
+            "document_id": doc_id,
+            "name": d.get("name", ""),
+            "status": "QUEUED",
+        })
+
+    def _fan_out_delays(items: List[tuple]) -> None:
+        for doc_id, sub, prof in items:
+            try:
+                extract_document.delay(doc_id, sub, prof)
+            except Exception as exc:  # noqa: BLE001
+                logging.error(
+                    "Dispatch failed for doc %s: %s", doc_id, exc, exc_info=True
+                )
+
+    if background_tasks is not None and eligible:
+        background_tasks.add_task(_fan_out_delays, eligible)
+    elif eligible:
+        # Direct callers without DI (shouldn't happen via FastAPI routing)
+        _fan_out_delays(eligible)
 
     return {
-        "status": "queued" if dispatched and not failed else ("partial" if dispatched else "failed"),
-        "count": len(dispatched),
-        "documents": dispatched,
+        "status": "queued" if pending and not failed else ("partial" if pending else "failed"),
+        "count": len(pending),
+        "documents": pending,
         "failed": failed,
-        "message": f"Dispatched {len(dispatched)} extraction task(s), {len(failed)} failed to dispatch",
+        "message": f"Queued {len(pending)} extraction task(s), {len(failed)} rejected",
     }
 
 @api_router.get("/extract/progress", tags=["Default"])
@@ -1329,8 +1354,8 @@ def train_documents_batch(request: TrainDocumentsRequest = Body(...)):
     failed: List[Dict[str, Any]] = []
     for doc_id in request.doc_ids:
         record = get_document_record(doc_id) or {}
-        sub = str(record.get("subscription_id") or request.subscription_id or "")
-        prof = str(record.get("profile_id") or request.profile_id or "")
+        sub = str(record.get("subscription_id") or record.get("subscription") or request.subscription_id or "")
+        prof = str(record.get("profile_id") or record.get("profile") or request.profile_id or "")
         if not sub or not prof:
             failed.append({"document_id": doc_id, "reason": "missing_subscription_or_profile"})
             continue
@@ -2144,14 +2169,17 @@ def reprocess_documents_with_new_pii_setting(subscription_id: str):
     try:
         # Get all documents for this subscription
         documents_collection = db[Config.MongoDB.DOCUMENTS]
+        sub_forms: List[Any] = [str(subscription_id)]
+        if ObjectId.is_valid(str(subscription_id)):
+            sub_forms.append(ObjectId(str(subscription_id)))
         # Update all documents in this subscription to UNDER_REVIEW
         # so they get reprocessed with new PII setting
         result = documents_collection.update_many(
             {
                 "$or": [
-                    {"subscriptionId": subscription_id},
-                    {"subscription_id": subscription_id},
-                    {"subscription": subscription_id}
+                    {"subscriptionId":  {"$in": sub_forms}},
+                    {"subscription_id": {"$in": sub_forms}},
+                    {"subscription":    {"$in": sub_forms}}
                 ],
                 "status": {"$in": ["TRAINING_COMPLETED", "TRAINING_PARTIALLY_COMPLETED"]}
             },

@@ -65,6 +65,37 @@ def get_training_progress(document_id: str) -> Optional[dict]:
     except Exception:
         return None
 
+
+def get_training_progress_batch(document_ids: List[str]) -> Dict[str, Optional[dict]]:
+    """Fetch training progress for many documents in a single Redis MGET.
+
+    The per-document `get_training_progress()` is N roundtrips to Azure Redis
+    (~200ms each on Cosmos-backed deployments); this collapses them to one
+    roundtrip for the polling endpoint where N is typically 5-50.
+    Returns {doc_id: dict-or-None}.
+    """
+    if not document_ids:
+        return {}
+    try:
+        from src.api.dw_newron import get_redis_client
+        client = get_redis_client()
+        if not client:
+            return {doc_id: None for doc_id in document_ids}
+        keys = [f"dw:training:progress:{doc_id}" for doc_id in document_ids]
+        raws = client.mget(keys)
+    except Exception:
+        return {doc_id: None for doc_id in document_ids}
+    out: Dict[str, Optional[dict]] = {}
+    for doc_id, raw in zip(document_ids, raws):
+        if not raw:
+            out[doc_id] = None
+            continue
+        try:
+            out[doc_id] = json.loads(raw)
+        except Exception:
+            out[doc_id] = None
+    return out
+
 _STATUS_LOG_TTL = 86400  # 24 hours
 
 
@@ -199,6 +230,55 @@ def _compute_document_progress(status: str, redis_progress: Optional[dict]) -> d
     }
 
 
+# Extraction-scoped progress: used by /api/extract/progress where the
+# endpoint cares only about the extraction stage, not the full pipeline.
+# EXTRACTION_COMPLETED is 100% here (extraction is done, even if screening
+# and training are still ahead). Any downstream-stage status implies
+# extraction finished earlier, so these also show 100%.
+_EXTRACTION_PROGRESS_BY_STATUS = {
+    "UNDER_REVIEW":                  0,
+    "EXTRACTION_IN_PROGRESS":       50,
+    "EXTRACTION_COMPLETED":        100,
+    "EXTRACTION_FAILED":             0,
+    "EXTRACTION_OR_CHUNKING_FAILED": 0,
+    # Downstream stages — extraction is definitionally done.
+    "SCREENING_IN_PROGRESS":       100,
+    "SCREENING_COMPLETED":         100,
+    "TRAINING_STARTED":            100,
+    "EMBEDDING_IN_PROGRESS":       100,
+    "TRAINING_COMPLETED":          100,
+    "TRAINING_PARTIALLY_COMPLETED":100,
+    "TRAINING_FAILED":             100,
+    "EMBEDDING_FAILED":            100,
+    "TRAINING_BLOCKED_SECURITY":   100,
+    "TRAINING_BLOCKED_CONFIDENTIAL":100,
+}
+
+
+def _compute_extraction_progress(status: str, redis_progress: Optional[dict]) -> dict:
+    """Extraction-scoped progress (used by /api/extract/progress).
+
+    Shares the live-Redis path with ``_compute_document_progress`` but derives
+    its deterministic value from the extraction-scoped map so that, for
+    example, ``EXTRACTION_COMPLETED`` reads as 100% (extraction is done).
+    """
+    if redis_progress:
+        result = dict(redis_progress)
+        raw = result.get("progress", 0)
+        if isinstance(raw, (int, float)):
+            result["progress"] = round(raw * 100, 1)
+        result["source"] = "live"
+        return result
+
+    pct = _EXTRACTION_PROGRESS_BY_STATUS.get(status, 0)
+    return {
+        "progress": pct,
+        "stage": status.lower(),
+        "detail": status.replace("_", " ").title(),
+        "source": "derived",
+    }
+
+
 def _format_elapsed(seconds: Optional[float]) -> str:
     """Format elapsed seconds into a human-readable string."""
     if seconds is None or seconds <= 0:
@@ -214,21 +294,86 @@ def _format_elapsed(seconds: Optional[float]) -> str:
     return f"{hours}h {mins}m" if mins else f"{hours}h"
 
 
+# Short TTL so polling (every 2-5s) hits cache most of the time without
+# hiding active-upload progress behind stale data. Redis SETEX wants an
+# int; PSETEX takes milliseconds if we ever want sub-second granularity.
+_PROGRESS_CACHE_TTL_MS = 1500
+_PROGRESS_CACHE_KEY = "dw:progress:extract:{profile_id}"
+
+
+def _progress_cache_get(profile_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        from src.api.dw_newron import get_redis_client
+        client = get_redis_client()
+        if not client:
+            return None
+        raw = client.get(_PROGRESS_CACHE_KEY.format(profile_id=profile_id))
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _progress_cache_set(profile_id: str, payload: Dict[str, Any]) -> None:
+    try:
+        from src.api.dw_newron import get_redis_client
+        client = get_redis_client()
+        if not client:
+            return
+        # PSETEX wants milliseconds; we want sub-second precision (1.5s).
+        # Use default=str in json.dumps so stray datetime/ObjectId values
+        # serialize instead of raising and aborting the cache write.
+        client.psetex(
+            _PROGRESS_CACHE_KEY.format(profile_id=profile_id),
+            _PROGRESS_CACHE_TTL_MS,
+            json.dumps(payload, default=str),
+        )
+    except Exception:
+        pass
+
+
 def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
-    """Get comprehensive extraction status for all documents in a profile."""
+    """Get comprehensive extraction status for all documents in a profile.
+
+    Wrapped in a short (1.5s) Redis cache — this endpoint is polled every
+    few seconds by the UI, so a tiny TTL lets us service most calls from
+    cache while still feeling live during an active upload. The TTL is
+    smaller than the UI's typical 5s poll interval so the user never sees
+    progress "stuck" because of stale cache.
+    """
+    cached = _progress_cache_get(profile_id)
+    if cached is not None:
+        return cached
+
     from src.utils.logging_utils import get_live_logs
 
     collection = get_documents_collection()
     if collection is None:
-        return {"documents": [], "common_data": {
+        empty = {"documents": [], "common_data": {
             "Overall_live_logs": [], "overall_progress": 0,
-            "toatal_documents": 0, "uploaded": 0, "elapsed_time": "0s",
+            "total_documents": 0, "uploaded": 0, "elapsed_time": "0s",
         }}
+        _progress_cache_set(profile_id, empty)
+        return empty
 
+    # Pre-session ObjectId fix: docs may store the profile reference under
+    # `profile` (ObjectId) or `profile_id`/`profileId` (string or ObjectId).
+    prof_forms: List[Any] = [str(profile_id)]
+    if ObjectId.is_valid(str(profile_id)):
+        prof_forms.append(ObjectId(str(profile_id)))
+    query = {
+        "$or": [
+            {"profile_id": {"$in": prof_forms}},
+            {"profile":    {"$in": prof_forms}},
+            {"profileId":  {"$in": prof_forms}},
+        ]
+    }
     docs = list(collection.find(
-        {"profile_id": profile_id},
+        query,
         {
-            "document_id": 1, "status": 1, "source_file": 1,
+            "document_id": 1, "status": 1,
+            "name": 1, "source_file": 1,
             "extraction": 1, "screening": 1, "embedding": 1,
             "training_started_at": 1, "trained_at": 1,
             "created_at": 1, "updated_at": 1,
@@ -242,11 +387,18 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     latest_end: Optional[float] = None
     uploaded_count = 0
 
+    # Batch Redis lookups: single MGET for all docs instead of N GETs.
+    # On Azure-hosted Redis this collapses the polling endpoint's Redis
+    # cost from N * RTT to 1 * RTT.
+    all_doc_ids = [str(doc.get("document_id") or doc.get("_id")) for doc in docs]
+    progress_by_doc = get_training_progress_batch(all_doc_ids)
+
     for doc in docs:
         doc_id = str(doc.get("document_id") or doc.get("_id"))
         status = doc.get("status", "UNKNOWN")
 
-        progress = _compute_document_progress(status, get_training_progress(doc_id))
+        # Extraction-scoped: EXTRACTION_COMPLETED → 100% on this endpoint.
+        progress = _compute_extraction_progress(status, progress_by_doc.get(doc_id))
         progress_sum += progress.get("progress", 0)
 
         # Track earliest start and latest end for elapsed time
@@ -271,7 +423,7 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
 
         result_docs.append({
             "document_id": doc_id,
-            "document_name": doc.get("source_file", ""),
+            "document_name": doc.get("source_file") or doc.get("name", ""),
             "progress": progress,
         })
 
@@ -287,16 +439,18 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
         end_ref = latest_end or now
         elapsed_seconds = round(end_ref - earliest_start, 1)
 
-    return {
+    payload = {
         "documents": result_docs,
         "common_data": {
             "Overall_live_logs": live_logs,
             "overall_progress": overall_progress,
-            "toatal_documents": total_docs,
+            "total_documents": total_docs,
             "uploaded": uploaded_count,
             "elapsed_time": _format_elapsed(elapsed_seconds),
         },
     }
+    _progress_cache_set(profile_id, payload)
+    return payload
 
 
 def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
@@ -307,7 +461,7 @@ def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
     if collection is None:
         return {"documents": [], "common_data": {
             "Overall_live_logs": [], "overall_progress": 0,
-            "toatal_documents": 0, "uploaded": 0, "elapsed_time": "0s",
+            "total_documents": 0, "uploaded": 0, "elapsed_time": "0s",
         }}
 
     # Focus on documents that have reached or passed screening
@@ -359,7 +513,7 @@ def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
 
         result_docs.append({
             "document_id": doc_id,
-            "document_name": doc.get("source_file", ""),
+            "document_name": doc.get("source_file") or doc.get("name", ""),
             "progress": progress,
         })
 
@@ -380,7 +534,7 @@ def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
         "common_data": {
             "Overall_live_logs": live_logs,
             "overall_progress": overall_progress,
-            "toatal_documents": total_docs,
+            "total_documents": total_docs,
             "uploaded": uploaded_count,
             "elapsed_time": _format_elapsed(elapsed_seconds),
         },
@@ -531,8 +685,9 @@ def init_document_record(
     if blob_url:
         update["blob_url"] = blob_url
 
-    # Pipeline status and per-stage tracking
-    update["pipeline_status"] = PIPELINE_UPLOADED
+    # Single-column status (per operator directive): status is the sole
+    # source of truth; the legacy pipeline_status field is no longer written.
+    # Initial state is UNDER_REVIEW to preserve /api/extract eligibility.
     update["created_by"] = created_by
 
     _pending_stage = lambda: {
@@ -599,26 +754,10 @@ def update_document_fields(document_id: str, fields: Dict[str, Any]):
     update["updated_at"] = now
     unset_fields: Dict[str, Any] = {}
 
-    # Keep pipeline_status aligned with status whenever a recognised
-    # terminal status is written. Multiple call sites (screening_service,
-    # embedding_service, extraction_service) transition status without
-    # always setting pipeline_status; syncing here means all of them stay
-    # consistent with the UI contract without duplicating the map. Do not
-    # override an explicit pipeline_status the caller passed in.
-    status_value = update.get("status")
-    if status_value and "pipeline_status" not in update:
-        _status_to_pipeline = {
-            "EXTRACTION_COMPLETED": "EXTRACTION_COMPLETED",
-            "EXTRACTION_FAILED": "EXTRACTION_FAILED",
-            "SCREENING_COMPLETED": "SCREENING_COMPLETED",
-            "EMBEDDING_COMPLETED": "TRAINING_COMPLETED",
-            "EMBEDDING_FAILED": "EMBEDDING_FAILED",
-            "TRAINING_COMPLETED": "TRAINING_COMPLETED",
-            "TRAINING_FAILED": "EMBEDDING_FAILED",
-        }
-        mapped = _status_to_pipeline.get(str(status_value))
-        if mapped:
-            update["pipeline_status"] = mapped
+    # Single-column status (per operator directive): legacy pipeline_status
+    # sync removed. If a caller still passes pipeline_status through, drop it
+    # rather than writing it to Mongo.
+    update.pop("pipeline_status", None)
 
     # Enforce: error is either missing or an object (never null).
     error_value = update.pop("error", _MISSING)
@@ -806,19 +945,25 @@ def append_audit_log(document_id: str, action: str, by: str = "system", **extra)
 
 
 def update_pipeline_status(document_id: str, pipeline_status: str):
-    """Update the top-level pipeline status."""
+    """Update the ``status`` field (single source of truth).
+
+    Function name preserved for backward compatibility with existing
+    callers (Celery tasks, API routes). Writes ONLY the ``status`` field
+    and ``$unset``s any legacy ``pipeline_status`` field so the two never
+    drift — per operator directive to collapse onto a single column.
+    """
     collection = get_documents_collection()
     now = time.time()
     existing = collection.find_one(_doc_filter(document_id), {"_id": 1})
+    update_ops = {
+        "$set": {"status": pipeline_status, "updated_at": now},
+        "$unset": {"pipeline_status": ""},
+    }
     if existing:
-        collection.update_one(
-            {"_id": existing["_id"]},
-            {"$set": {"pipeline_status": pipeline_status, "updated_at": now}},
-        )
+        collection.update_one({"_id": existing["_id"]}, update_ops)
     else:
         collection.update_one(
-            {"_id": _doc_id_value(document_id)},
-            {"$set": {"pipeline_status": pipeline_status, "updated_at": now}},
+            {"_id": _doc_id_value(document_id)}, update_ops
         )
 
 

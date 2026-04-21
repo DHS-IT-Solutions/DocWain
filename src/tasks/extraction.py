@@ -210,7 +210,33 @@ def extract_document(self, document_id: str, subscription_id: str,
         update_stage(document_id, "extraction", status=STAGE_COMPLETED,
                      summary=summary, blob_path=blob_path, error=None)
 
-        # 7. Update pipeline status to EXTRACTION_COMPLETED
+        # 7. Save extraction pickle so legacy sync-embedding consumers can
+        # find it (src/api/embedding_service.py:load_extracted_pickle).
+        # The Celery embed_document task reads blob_path JSON directly, but
+        # /api/documents/embed and similar sync paths still expect a pickle.
+        try:
+            from src.api.content_store import save_extracted_pickle
+            pickle_payload = {
+                # text_content comes from _extract_text_content() above;
+                # result_dict's equivalent key is clean_text.
+                "full_text": text_content or result_dict.get("clean_text", ""),
+                "raw": result_dict,
+                # Blob JSON uses "structure" (no -d). Keep both so either
+                # consumer path works.
+                "structured": result_dict.get("structure", {}) or result_dict.get("structured", {}),
+                "entities": result_dict.get("entities", []),
+                "tables": result_dict.get("tables", []),
+                "doc_type": result_dict.get("doc_type"),
+                "metrics": result_dict.get("metrics", {}),
+                "understanding": result_dict.get("understanding", {}),
+            }
+            save_extracted_pickle(document_id, pickle_payload)
+            logger.info("Saved extraction pickle for %s", document_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to save extraction pickle for %s: %s",
+                          document_id, exc, exc_info=True)
+
+        # 8. Update pipeline status to EXTRACTION_COMPLETED
         update_pipeline_status(document_id, PIPELINE_EXTRACTION_COMPLETED)
         append_audit_log(document_id, "EXTRACTION_COMPLETED",
                          duration_seconds=duration_seconds,

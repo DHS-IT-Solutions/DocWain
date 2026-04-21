@@ -444,6 +444,10 @@ class SectionChunker:
             payload.get("full_text"),
             payload.get("text"),
             payload.get("content"),
+            payload.get("clean_text"),
+            payload.get("raw_text"),
+            payload.get("canonical_text"),
+            payload.get("extracted_text"),
         ]
         text_value = next((t for t in text_candidates if isinstance(t, str) and t.strip()), "")
         if not text_value and isinstance(payload.get("pages"), list):

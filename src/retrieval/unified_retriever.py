@@ -202,7 +202,7 @@ class UnifiedRetriever:
                 {
                     "subscription_id": subscription_id,
                     "profile_id": profile_id,
-                    "pipeline_status": "TRAINING_COMPLETED"
+                    "status": "TRAINING_COMPLETED"
                 },
                 {
                     "document_id": 1, "source_file": 1,
