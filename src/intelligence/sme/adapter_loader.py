@@ -206,17 +206,57 @@ class AdapterLoader:
 _adapter_loader_singleton: AdapterLoader | None = None
 
 
+class _LocalFileBlobReader:
+    """Default BlobReader used when no real Azure Blob client is wired.
+
+    Reads adapter YAMLs from an on-disk root (typically
+    ``deploy/sme_adapters/`` shipped with the repo). Translates the Blob
+    convention path ``sme_adapters/global/...`` to the on-disk location
+    ``deploy/sme_adapters/defaults/...`` because the repo ships adapter
+    defaults under ``defaults/`` (the deploy playbook uploads that folder
+    to the Blob container's ``global/`` prefix).
+    """
+
+    def __init__(self, root: Path):
+        self._root = root
+
+    def read_text(self, path: str) -> str:
+        # Remap Blob-convention "global/" → on-disk "defaults/"
+        on_disk = path.replace("sme_adapters/global/", "sme_adapters/defaults/", 1)
+        target = self._root / on_disk
+        if not target.exists():
+            raise FileNotFoundError(f"adapter not on disk: {target}")
+        return target.read_text(encoding="utf-8")
+
+
+def _default_blob_root() -> Path:
+    """Repo-relative default: ``<project>/deploy/`` — the Blob-convention
+    prefix (``sme_adapters/...``) is resolved under this root."""
+    # src/intelligence/sme/adapter_loader.py → project root is 3 parents up
+    return Path(__file__).resolve().parents[3] / "deploy"
+
+
+def _default_last_resort() -> Path:
+    return _default_blob_root() / "sme_adapters" / "last_resort" / "generic.yaml"
+
+
 def get_adapter_loader() -> AdapterLoader:
     """Return the process-wide :class:`AdapterLoader`.
 
     Non-FastAPI callers (scripts, background workers, synthesis pipeline) use
     this. FastAPI lifespan wires the SAME instance into ``app.state`` so that
     admin endpoints, retrieval paths, and synthesis see identical caches.
+
+    Lazy-init: if no :func:`init_adapter_loader` has been called, falls back
+    to reading adapter YAMLs from the on-disk ``deploy/sme_adapters/`` tree
+    shipped with the repo. This keeps call sites crash-safe without forcing
+    every app entrypoint to explicitly configure Blob storage.
     """
     global _adapter_loader_singleton
     if _adapter_loader_singleton is None:
-        raise RuntimeError(
-            "AdapterLoader not initialized — call init_adapter_loader() at startup"
+        _adapter_loader_singleton = AdapterLoader(
+            blob=_LocalFileBlobReader(_default_blob_root()),
+            last_resort_path=_default_last_resort(),
         )
     return _adapter_loader_singleton
 

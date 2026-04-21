@@ -108,6 +108,31 @@ class SMEFeatureFlags:
 
 
 # ---------------------------------------------------------------------------
+# In-memory default store (ERRATA §4 lazy-init — prevents crashes when apps
+# haven't called init_flag_resolver() explicitly; all flags default False,
+# which matches the spec §13 rollback-safe default).
+# ---------------------------------------------------------------------------
+class _InMemoryFlagStore:
+    """Process-local MutableFlagStore used when no backing store is wired.
+
+    All overrides live in memory and are lost on restart — suitable for dev
+    and for production until a MongoDB-backed FlagStore ships. Admin PATCH
+    endpoints that flip flags will persist for the lifetime of the process.
+    """
+
+    def __init__(self) -> None:
+        self._overrides: dict[str, dict[str, bool]] = {}
+
+    def get_subscription_overrides(self, subscription_id: str) -> dict[str, bool]:
+        return dict(self._overrides.get(subscription_id, {}))
+
+    def set_subscription_override(
+        self, subscription_id: str, flag: str, value: bool
+    ) -> None:
+        self._overrides.setdefault(subscription_id, {})[flag] = value
+
+
+# ---------------------------------------------------------------------------
 # Module-level singleton (ERRATA §4)
 # ---------------------------------------------------------------------------
 _flag_resolver_singleton: SMEFeatureFlags | None = None
@@ -120,12 +145,14 @@ def get_flag_resolver() -> SMEFeatureFlags:
     use this to avoid threading the resolver through every call site.
     FastAPI lifespan wires the same instance into ``app.state`` so admin,
     retrieval, and synthesis paths all see identical overrides.
+
+    If no ``init_flag_resolver()`` has been called, lazily creates a resolver
+    backed by :class:`_InMemoryFlagStore` so call sites never crash. All
+    flags default to False — matches the rollback-safe default from spec §13.
     """
     global _flag_resolver_singleton
     if _flag_resolver_singleton is None:
-        raise RuntimeError(
-            "SMEFeatureFlags not initialized — call init_flag_resolver() at startup"
-        )
+        _flag_resolver_singleton = SMEFeatureFlags(store=_InMemoryFlagStore())
     return _flag_resolver_singleton
 
 
