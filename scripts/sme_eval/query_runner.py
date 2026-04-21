@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 
@@ -46,7 +46,7 @@ class QueryRunner:
 
         url = f"{self._config.base_url}{self._config.path}"
         start = time.perf_counter()
-        captured_at = datetime.utcnow()
+        captured_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             response = self._client.post(url, json=payload)

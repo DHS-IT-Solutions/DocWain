@@ -16,7 +16,7 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -146,7 +146,7 @@ def compose_snapshot(
 
     return BaselineSnapshot(
         run_id=run_id,
-        captured_at=datetime.utcnow(),
+        captured_at=datetime.now(timezone.utc).replace(tzinfo=None),
         git_sha=git_sha,
         api_base_url=api_base_url,
         num_queries=len(results),
@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     # would skip validation. model_copy(update=...) reruns validation.
 
     # Run
-    run_id = f"baseline_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    run_id = f"baseline_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d_%H%M%S')}"
     store = JsonlResultStore(args.results_jsonl)
     config = RunnerConfig(base_url=args.api_base_url)
 
