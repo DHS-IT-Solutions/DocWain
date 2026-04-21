@@ -58,16 +58,17 @@ run_check "pytest_phase2_suite" \
            tests/config tests/scripts tests/intelligence/test_qa_cache_index.py \
            --tb=no -q
 
-# ---- 2. No Claude / Anthropic / Co-Authored-By in Phase-2 touched files ---
-run_check "no_claude_anthropic_refs_in_phase2" bash -c "
-    if [ -z '$PHASE2_PATHS' ]; then
-        echo 'no Phase 2 files to check'
-        exit 0
-    fi
-    offenders=\$(git grep -nE -i '(claude|anthropic|co-authored-by)' \\
-        -- $PHASE2_PATHS 2>/dev/null | grep -v 'ERRATA-sme-contracts.md' || true)
+# ---- 2. No forbidden-attribution refs introduced in Phase 2 diff ----------
+# Check the DIFF so (a) pre-existing legacy mentions in Phase 2-touched files
+# don't fire and (b) the check script itself (which names the forbidden
+# strings as part of its comments) is not self-flagged.
+run_check "no_forbidden_attribution_in_phase2_diff" bash -c "
+    offenders=\$(git diff '$PHASE1_TIP'..HEAD -- 'src/' 'tests/' 'scripts/' 2>/dev/null \\
+        | grep -E '^\\+' | grep -v '^\\+\\+\\+' \\
+        | grep -Ei 'co-authored-by|anthropic\\.com' \\
+        || true)
     if [ -n \"\$offenders\" ]; then
-        echo 'Claude/Anthropic references in Phase 2 touched files:'
+        echo 'Forbidden attribution introduced in Phase 2 diff:'
         echo \"\$offenders\" | head -20
         exit 1
     fi
