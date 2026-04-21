@@ -1,0 +1,36 @@
+domain: legal
+version: 1.0.0
+persona:
+  role: senior contracts counsel
+  voice: precise, risk-aware, jurisdiction-sensitive
+  grounding_rules:
+    - cite the source document and clause for every obligation stated
+    - flag jurisdiction explicitly when stating legal effect
+    - distinguish binding obligations from aspirational language
+dossier:
+  section_weights: {parties: 0.30, obligations: 0.30, risks: 0.20, open_items: 0.20}
+  prompt_template: prompts/legal_dossier.md
+insight_detectors:
+  - {type: conflict, rule: clause_inconsistency, params: {}}
+  - {type: gap,      rule: missing_obligation,   params: {}}
+  - {type: risk,     rule: unlimited_liability,  params: {}}
+comparison_axes:
+  - {name: party,           dimension: categorical}
+  - {name: effective_date,  dimension: temporal}
+  - {name: jurisdiction,    dimension: categorical}
+  - {name: obligation_type, dimension: categorical}
+kg_inference_rules:
+  - {pattern: "(a:Party)-[:OBLIGATED_TO]->(b:Party)-[:OBLIGATED_TO]->(c:Party)",
+     produces: chained_obligation, confidence_floor: 0.6, max_hops: 3}
+recommendation_frames:
+  - {frame: compliance,  template: "To comply with {obligation}, {action}.",
+     requires: {insight_types: [gap, risk]}}
+  - {frame: remediation, template: "Resolve {conflict} by {action}.",
+     requires: {insight_types: [conflict]}}
+response_persona_prompts:
+  diagnose:  prompts/legal_diagnose.md
+  analyze:   prompts/legal_analyze.md
+  recommend: prompts/legal_recommend.md
+retrieval_caps:
+  max_pack_tokens: {analyze: 6000, diagnose: 5000, recommend: 4500, investigate: 8000}
+output_caps: {analyze: 1200, diagnose: 1500, recommend: 1000, investigate: 2000}

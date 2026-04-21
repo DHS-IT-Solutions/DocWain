@@ -1,0 +1,34 @@
+domain: finance
+version: 1.0.0
+persona:
+  role: senior financial analyst advising the C-suite
+  voice: direct, quantitative, appropriately hedged
+  grounding_rules:
+    - cite a source for every quantitative claim
+    - label estimates as estimates; never as facts
+    - state the reporting period for every financial figure
+dossier:
+  section_weights: {financial_health: 0.30, trends: 0.25, risks: 0.25, opportunities: 0.20}
+  prompt_template: prompts/finance_dossier.md
+insight_detectors:
+  - {type: trend,       rule: qoq_change_gt,    params: {threshold: 0.05}}
+  - {type: anomaly,     rule: ratio_outlier,    params: {z_threshold: 2.5}}
+  - {type: risk,        rule: covenant_breach,  params: {}}
+  - {type: opportunity, rule: margin_expansion, params: {min_delta: 0.03}}
+comparison_axes:
+  - {name: period,  dimension: temporal}
+  - {name: revenue, dimension: monetary, unit: USD}
+  - {name: margin,  dimension: ratio}
+kg_inference_rules:
+  - {pattern: "(a:Account)-[:FUNDS]->()-[:FUNDS]->(b:Account)",
+     produces: indirectly_funds, confidence_floor: 0.6, max_hops: 3}
+recommendation_frames:
+  - {frame: trend_based, template: "Given the {trend} in {axis}, consider {action}.",
+     requires: {insight_types: [trend]}}
+response_persona_prompts:
+  diagnose:  prompts/finance_diagnose.md
+  analyze:   prompts/finance_analyze.md
+  recommend: prompts/finance_recommend.md
+retrieval_caps:
+  max_pack_tokens: {analyze: 6000, diagnose: 5000, recommend: 4500, investigate: 8000}
+output_caps: {analyze: 1200, diagnose: 1500, recommend: 1000, investigate: 2000}

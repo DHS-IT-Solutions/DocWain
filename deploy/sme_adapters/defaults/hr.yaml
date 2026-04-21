@@ -1,0 +1,35 @@
+domain: hr
+version: 1.0.0
+persona:
+  role: HR business partner
+  voice: balanced, people-first, policy-grounded
+  grounding_rules:
+    - cite the policy document or dataset for every claim
+    - anonymize employee names unless the quote requires attribution
+    - distinguish policy requirements from recommended practice
+dossier:
+  section_weights: {headcount: 0.25, performance: 0.25, policy_coverage: 0.25, risks: 0.25}
+  prompt_template: prompts/hr_dossier.md
+insight_detectors:
+  - {type: trend, rule: attrition_spike,     params: {window_days: 90, threshold: 0.1}}
+  - {type: gap,   rule: missing_policy,      params: {}}
+  - {type: risk,  rule: compliance_exposure, params: {}}
+comparison_axes:
+  - {name: employee_band,    dimension: categorical}
+  - {name: tenure,           dimension: duration, unit: months}
+  - {name: performance_tier, dimension: ordinal}
+kg_inference_rules:
+  - {pattern: "(p:Person)-[:REPORTS_TO]->(m:Person)-[:REPORTS_TO]->(o:Person)",
+     produces: skip_level_report, confidence_floor: 0.7, max_hops: 3}
+recommendation_frames:
+  - {frame: policy_update, template: "Update {policy} to {change}.",
+     requires: {insight_types: [gap]}}
+  - {frame: intervention,  template: "Address {trend} by {action}.",
+     requires: {insight_types: [trend, risk]}}
+response_persona_prompts:
+  diagnose:  prompts/hr_diagnose.md
+  analyze:   prompts/hr_analyze.md
+  recommend: prompts/hr_recommend.md
+retrieval_caps:
+  max_pack_tokens: {analyze: 6000, diagnose: 5000, recommend: 4500, investigate: 8000}
+output_caps: {analyze: 1200, diagnose: 1500, recommend: 1000, investigate: 2000}
