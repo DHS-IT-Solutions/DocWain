@@ -219,20 +219,23 @@ def _real_feedback_tracker():
     """Build the Redis-backed FeedbackTracker for production runs.
 
     Falls back to an offline stub if Redis is unreachable — pattern mining
-    must tolerate Redis being down (it's evidence, not a critical path).
+    must tolerate Redis being down (it is evidence, not a critical path).
+
+    Import guard: ``src.utils.redis_cache`` is the project's Redis helper
+    (per ERRATA §18). The top-level Redis client factory lives at
+    ``src.api.dw_newron.get_redis_client``; if its import fails we drop back
+    to the offline stub so the batch job still completes.
     """
     logger_ = logging.getLogger(__name__)
     try:
-        # Guarded import: src.utils.redis_cache exists; src.utils.redis_client
-        # does NOT (per ERRATA §18).
         from src.utils import redis_cache  # noqa: F401
     except ImportError:
         logger_.warning("src.utils.redis_cache unavailable; using offline stub tracker")
         return _OfflineTrackerStub()
 
     try:
+        from src.api.dw_newron import get_redis_client
         from src.intelligence.feedback_tracker import FeedbackTracker
-        from src.utils.redis_startup import get_redis_client
 
         r = get_redis_client()
         return FeedbackTracker(r)

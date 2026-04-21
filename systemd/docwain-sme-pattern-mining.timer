@@ -1,0 +1,10 @@
+[Unit]
+Description=Run DocWain SME Pattern Mining on the 1st of each month at 02:00 UTC
+
+[Timer]
+OnCalendar=*-*-01 02:00:00 UTC
+Persistent=true
+Unit=docwain-sme-pattern-mining.service
+
+[Install]
+WantedBy=timers.target

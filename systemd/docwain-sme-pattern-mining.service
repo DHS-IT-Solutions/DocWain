@@ -1,0 +1,22 @@
+[Unit]
+Description=DocWain SME Pattern Mining (monthly batch)
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PycharmProjects/DocWain
+EnvironmentFile=/home/ubuntu/PycharmProjects/DocWain/.env
+Environment="PATH=/home/ubuntu/PycharmProjects/DocWain/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/ubuntu/PycharmProjects/DocWain/deploy/sme-pattern-mining.sh
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=docwain-sme-pattern-mining
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/PycharmProjects/DocWain /tmp
+PrivateTmp=true
