@@ -1,0 +1,25 @@
+{
+  "document_id": "batch0-fixture-inv-001",
+  "source_name": "fixture_invoice_001.pdf",
+  "doc_domain": "generic",
+  "subscription_id": "batch0-fixture-sub",
+  "profile_id": "batch0-fixture-prof",
+  "chunks": [
+    {
+      "text": "Invoice number INV-778899 issued to Acme Corp on 2026-03-15 for a total of $12,345.67 payable within 30 days.",
+      "type": "text",
+      "hash": "sha256:fixture1",
+      "token_count": 28,
+      "section": {"id": "sec-1", "kind": "invoice_header", "title": "Header", "path": [], "level": 0},
+      "provenance": {"page_start": 1, "page_end": 1}
+    },
+    {
+      "text": "Line item: 100 widgets at $100.00 each. Line item: 50 sprockets at $46.91 each. Subtotal $12,345.50.",
+      "type": "text",
+      "hash": "sha256:fixture2",
+      "token_count": 24,
+      "section": {"id": "sec-2", "kind": "line_items", "title": "Line Items", "path": [], "level": 0},
+      "provenance": {"page_start": 1, "page_end": 1}
+    }
+  ]
+}
