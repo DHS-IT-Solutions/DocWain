@@ -418,8 +418,14 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
             if latest_end is None or end_at > latest_end:
                 latest_end = end_at
 
-        # Count uploaded (any document that exists is uploaded)
-        uploaded_count += 1
+        # ``uploaded`` on this endpoint means "currently being extracted".
+        # Previously it counted every document that existed, which made it
+        # identical to ``total_documents`` and gave the UI no signal about
+        # how many extractions are actively in flight. We keep the field
+        # name unchanged (callers read ``uploaded``) but redefine its
+        # semantics to the in-flight extraction count.
+        if status == "EXTRACTION_IN_PROGRESS":
+            uploaded_count += 1
 
         result_docs.append({
             "document_id": doc_id,
