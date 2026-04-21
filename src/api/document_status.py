@@ -214,176 +214,418 @@ def _format_elapsed(seconds: Optional[float]) -> str:
     return f"{hours}h {mins}m" if mins else f"{hours}h"
 
 
-def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
-    """Get comprehensive extraction status for all documents in a profile."""
-    from src.utils.logging_utils import get_live_logs
+# Extraction-specific status → progress% mapping. Monotonic along the
+# pipeline: once a document has moved past extraction, its contribution
+# is 100% regardless of downstream stage. Pre-extraction (UNDER_REVIEW/
+# UPLOADED) contributes 0, EXTRACTION_IN_PROGRESS contributes 50.
+_EXTRACTION_PROGRESS_BY_STATUS = {
+    "UNDER_REVIEW": 0,
+    "UPLOADED": 0,
+    "EXTRACTION_IN_PROGRESS": 50,
+    "EXTRACTION_COMPLETED": 100,
+    "EXTRACTION_FAILED": 0,
+    "EXTRACTION_OR_CHUNKING_FAILED": 0,
+    "SCREENING_IN_PROGRESS": 100,
+    "SCREENING_COMPLETED": 100,
+    "SCREENING_FAILED": 100,
+    "TRAINING_STARTED": 100,
+    "EMBEDDING_IN_PROGRESS": 100,
+    "TRAINING_COMPLETED": 100,
+    "TRAINING_PARTIALLY_COMPLETED": 100,
+    "TRAINING_FAILED": 100,
+    "TRAINING_BLOCKED_SECURITY": 0,
+    "TRAINING_BLOCKED_CONFIDENTIAL": 0,
+    "EMBEDDING_FAILED": 100,
+    "AWAITING_REVIEW_1": 100,
+    "AWAITING_REVIEW_2": 100,
+    "REJECTED": 0,
+    "PROCESSING_IN_PROGRESS": 100,
+    "PROCESSING_COMPLETED": 100,
+    "PROCESSING_FAILED": 100,
+}
 
+_UPLOAD_STATE_STATUSES = {"UNDER_REVIEW", "UPLOADED"}
+
+_ACTIVE_EXTRACTION_STATUSES = {
+    "UNDER_REVIEW",
+    "UPLOADED",
+    "EXTRACTION_IN_PROGRESS",
+}
+
+_EXTRACTION_FAILURE_STATUSES = {
+    "EXTRACTION_FAILED",
+    "EXTRACTION_OR_CHUNKING_FAILED",
+}
+
+# Documents uploaded within this many seconds of each other are treated as
+# one batch. Wide enough to survive slow per-file uploads, narrow enough
+# that a user returning after a break starts a fresh batch.
+_BATCH_CLUSTER_WINDOW_SECONDS = 120
+
+
+def _doc_status(doc: Dict[str, Any]) -> str:
+    return doc.get("pipeline_status") or doc.get("status") or "UNKNOWN"
+
+
+def _doc_created_at(doc: Dict[str, Any]) -> float:
+    """Best-effort upload timestamp in epoch seconds.
+
+    Different upload paths populate different fields:
+    - ``init_document_record`` (Python)  → ``created_at`` (float epoch)
+    - Node upload layer                   → ``createdAt`` (BSON datetime)
+    - Legacy rows with neither            → fall back to ObjectId's
+      generation time so clustering stays stable.
+    """
+    ts = doc.get("created_at")
+    if isinstance(ts, (int, float)) and ts > 0:
+        return float(ts)
+
+    alt = doc.get("createdAt")
+    if isinstance(alt, datetime):
+        return alt.timestamp()
+    if isinstance(alt, (int, float)) and alt > 0:
+        return float(alt)
+
+    oid = doc.get("_id")
+    if isinstance(oid, ObjectId):
+        return oid.generation_time.timestamp()
+    return 0.0
+
+
+def _doc_name(doc: Dict[str, Any]) -> str:
+    """Prefer ``source_file`` (Python init path); fall back to ``name`` (Node path)."""
+    return doc.get("source_file") or doc.get("name") or ""
+
+
+def _identify_current_batch(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return the most recent upload batch from a list of profile documents.
+
+    Two regimes:
+    - If any doc is still actively extracting (UNDER_REVIEW / UPLOADED /
+      EXTRACTION_IN_PROGRESS), anchor the batch at the earliest such doc's
+      upload time and include everything uploaded within the cluster
+      window before it — so freshly completed siblings stay in the view.
+    - Otherwise walk the docs from most-recent backwards and stop at the
+      first upload-time gap larger than the cluster window.
+    """
+    if not docs:
+        return []
+
+    sorted_docs = sorted(docs, key=_doc_created_at, reverse=True)
+
+    active_docs = [d for d in sorted_docs if _doc_status(d) in _ACTIVE_EXTRACTION_STATUSES]
+    if active_docs:
+        earliest_active_ts = min(_doc_created_at(d) for d in active_docs)
+        threshold = earliest_active_ts - _BATCH_CLUSTER_WINDOW_SECONDS
+        return [d for d in sorted_docs if _doc_created_at(d) >= threshold]
+
+    batch = [sorted_docs[0]]
+    for i in range(1, len(sorted_docs)):
+        prev_ts = _doc_created_at(sorted_docs[i - 1])
+        curr_ts = _doc_created_at(sorted_docs[i])
+        if prev_ts - curr_ts <= _BATCH_CLUSTER_WINDOW_SECONDS:
+            batch.append(sorted_docs[i])
+        else:
+            break
+    return batch
+
+
+def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
+    """Get extraction progress for the current upload batch (UI-facing).
+
+    Response shape::
+
+        {
+          "common_data": {
+            "overall_live_logs": "No issues" | "<N document(s) failed extraction>",
+            "elapsed_time": "23m 29s",
+            "overall_progress": "47%",
+            "total_documents": 5,
+            "uploaded": 5,
+          },
+          "documents": [
+            {"document_id": "...", "document_name": "..."},
+            ...  # every document in the current upload batch
+          ],
+        }
+
+    The endpoint reflects only the **current upload batch** — documents
+    uploaded close together in time — so values don't regress when older
+    profile documents (at various downstream stages) are mixed in.
+    """
     collection = get_documents_collection()
     if collection is None:
-        return {"documents": [], "common_data": {
-            "Overall_live_logs": [], "overall_progress": 0,
-            "toatal_documents": 0, "uploaded": 0, "elapsed_time": "0s",
-        }}
+        return {
+            "common_data": {
+                "overall_live_logs": [],
+                "elapsed_time": "0s",
+                "overall_progress": 0,
+                "total_documents": 0,
+                "uploaded": 0,
+            },
+            "documents": [],
+        }
 
+    # Project both snake_case (Python init path) and camelCase (Node upload
+    # path) timestamp / name fields so batch detection works regardless of
+    # which layer created the row.
     docs = list(collection.find(
         {"profile_id": profile_id},
         {
-            "document_id": 1, "status": 1, "source_file": 1,
-            "extraction": 1, "screening": 1, "embedding": 1,
-            "training_started_at": 1, "trained_at": 1,
-            "created_at": 1, "updated_at": 1,
+            "document_id": 1, "status": 1, "pipeline_status": 1,
+            "source_file": 1, "name": 1, "extraction": 1,
+            "created_at": 1, "createdAt": 1,
+            "updated_at": 1, "updatedAt": 1,
         },
-    ).sort("updated_at", -1))
+    ))
+
+    batch = _identify_current_batch(docs)
 
     now = time.time()
-    result_docs = []
-    progress_sum = 0.0
+    progress_sum = 0
     earliest_start: Optional[float] = None
     latest_end: Optional[float] = None
-    uploaded_count = 0
+    batch_docs: List[Dict[str, Any]] = []
+    failure_count = 0
+    any_still_active = False
 
-    for doc in docs:
-        doc_id = str(doc.get("document_id") or doc.get("_id"))
-        status = doc.get("status", "UNKNOWN")
+    for doc in batch:
+        # Prefer pipeline_status (written by the tracked_stage decorator
+        # and authoritative for the new pipeline). Fall back to the legacy
+        # ``status`` field for older rows.
+        status = _doc_status(doc)
+        progress_sum += _EXTRACTION_PROGRESS_BY_STATUS.get(status, 0)
 
-        progress = _compute_document_progress(status, get_training_progress(doc_id))
-        progress_sum += progress.get("progress", 0)
+        # Upload-time anchors the user-facing "elapsed" clock — it reflects
+        # "how long since I hit upload", not when Celery picked up the task.
+        created_ts = _doc_created_at(doc)
+        if created_ts > 0:
+            if earliest_start is None or created_ts < earliest_start:
+                earliest_start = created_ts
 
-        # Track earliest start and latest end for elapsed time
         extraction = doc.get("extraction") or {}
-        embedding = doc.get("embedding") or {}
-        start_at = extraction.get("started_at")
-        if start_at and isinstance(start_at, (int, float)):
-            if earliest_start is None or start_at < earliest_start:
-                earliest_start = start_at
-
-        end_at = (
-            doc.get("trained_at")
-            or embedding.get("completed_at")
-            or extraction.get("completed_at")
-        )
-        if end_at and isinstance(end_at, (int, float)):
+        end_at = extraction.get("completed_at")
+        if isinstance(end_at, (int, float)):
             if latest_end is None or end_at > latest_end:
                 latest_end = end_at
 
-        # Count uploaded (any document that exists is uploaded)
-        uploaded_count += 1
+        if status in _EXTRACTION_FAILURE_STATUSES:
+            failure_count += 1
 
-        result_docs.append({
-            "document_id": doc_id,
-            "document_name": doc.get("source_file", ""),
-            "progress": progress,
+        if status in _ACTIVE_EXTRACTION_STATUSES:
+            any_still_active = True
+
+        batch_docs.append({
+            "document_id": str(doc.get("document_id") or doc.get("_id")),
+            "document_name": _doc_name(doc),
         })
 
-    # Live logs: actual terminal output captured by RedisLogHandler
-    live_logs = get_live_logs(profile_id)
+    batch_size = len(batch)
+    overall_pct = int(progress_sum / batch_size) if batch_size else 0
 
-    total_docs = len(result_docs)
-    overall_progress = round(progress_sum / total_docs, 1) if total_docs else 0
-
-    # Elapsed time: from earliest start to latest end (or now if still running)
     elapsed_seconds: Optional[float] = None
     if earliest_start:
-        end_ref = latest_end or now
+        # While any doc is still extracting, tick against wall-clock; once the
+        # batch finishes, freeze at the last completion so the UI stops moving.
+        end_ref = now if any_still_active else (latest_end or now)
         elapsed_seconds = round(end_ref - earliest_start, 1)
 
+    # ``overall_live_logs`` is deprecated — the field stays in the response
+    # contract as an empty array so the UI keeps rendering without breaking.
     return {
-        "documents": result_docs,
         "common_data": {
-            "Overall_live_logs": live_logs,
-            "overall_progress": overall_progress,
-            "toatal_documents": total_docs,
-            "uploaded": uploaded_count,
+            "overall_live_logs": [],
             "elapsed_time": _format_elapsed(elapsed_seconds),
+            "overall_progress": overall_pct,
+            "total_documents": batch_size,
+            "uploaded": batch_size,
         },
+        "documents": batch_docs,
     }
 
 
-def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
-    """Get comprehensive training (embedding) status for all documents in a profile."""
-    from src.utils.logging_utils import get_live_logs
+# Training-phase statuses the /train/progress endpoint considers.
+_TRAINING_VISIBLE_STATUSES = {
+    "SCREENING_COMPLETED", "TRAINING_STARTED", "TRAINING_COMPLETED",
+    "TRAINING_FAILED", "TRAINING_PARTIALLY_COMPLETED",
+    "TRAINING_BLOCKED_SECURITY", "TRAINING_BLOCKED_CONFIDENTIAL",
+    "EXTRACTION_OR_CHUNKING_FAILED", "EMBEDDING_FAILED",
+    "EMBEDDING_IN_PROGRESS",
+}
 
+_ACTIVE_TRAINING_STATUSES = {
+    "SCREENING_COMPLETED",
+    "TRAINING_STARTED",
+    "EMBEDDING_IN_PROGRESS",
+}
+
+# Monotonic status → progress% for training, mirroring the extraction map.
+_TRAINING_PROGRESS_BY_STATUS = {
+    "SCREENING_COMPLETED": 0,
+    "TRAINING_STARTED": 50,
+    "EMBEDDING_IN_PROGRESS": 75,
+    "TRAINING_COMPLETED": 100,
+    "TRAINING_PARTIALLY_COMPLETED": 80,
+    "TRAINING_FAILED": 0,
+    "EMBEDDING_FAILED": 0,
+    "TRAINING_BLOCKED_SECURITY": 0,
+    "TRAINING_BLOCKED_CONFIDENTIAL": 0,
+    "EXTRACTION_OR_CHUNKING_FAILED": 0,
+}
+
+
+def _doc_training_status(doc: Dict[str, Any]) -> str:
+    """Pick the training-phase status for a doc.
+
+    Prefer whichever of ``status`` / ``pipeline_status`` is already in the
+    training-visible set — stale ``pipeline_status=EXTRACTION_COMPLETED``
+    values are common in Mongo even after ``status=TRAINING_COMPLETED``.
+    """
+    status = doc.get("status") or ""
+    pipeline_status = doc.get("pipeline_status") or ""
+    if status in _TRAINING_VISIBLE_STATUSES:
+        return status
+    if pipeline_status in _TRAINING_VISIBLE_STATUSES:
+        return pipeline_status
+    return status or pipeline_status or "UNKNOWN"
+
+
+def _doc_training_started_at(doc: Dict[str, Any]) -> float:
+    """Return the training-start timestamp (epoch seconds).
+
+    Priority:
+    1. ``embedding.started_at`` (new pipeline-schema field)
+    2. ``training_started_at`` (legacy field)
+    3. upload time — so docs that are queued for training but not yet
+       started still cluster together.
+    """
+    emb = doc.get("embedding") or {}
+    ts = emb.get("started_at")
+    if isinstance(ts, (int, float)) and ts > 0:
+        return float(ts)
+    ts = doc.get("training_started_at")
+    if isinstance(ts, (int, float)) and ts > 0:
+        return float(ts)
+    return _doc_created_at(doc)
+
+
+def _identify_current_training_batch(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return the most recent training batch via ``training_started_at`` clustering.
+
+    Mirrors ``_identify_current_batch`` but uses the training-start timestamp
+    so a batch = the set of docs the user triggered embedding for in one session,
+    not necessarily the same docs as an earlier extraction batch.
+    """
+    if not docs:
+        return []
+
+    sorted_docs = sorted(docs, key=_doc_training_started_at, reverse=True)
+
+    active_docs = [d for d in sorted_docs if _doc_training_status(d) in _ACTIVE_TRAINING_STATUSES]
+    if active_docs:
+        earliest_active_ts = min(_doc_training_started_at(d) for d in active_docs)
+        threshold = earliest_active_ts - _BATCH_CLUSTER_WINDOW_SECONDS
+        return [d for d in sorted_docs if _doc_training_started_at(d) >= threshold]
+
+    batch = [sorted_docs[0]]
+    for i in range(1, len(sorted_docs)):
+        prev_ts = _doc_training_started_at(sorted_docs[i - 1])
+        curr_ts = _doc_training_started_at(sorted_docs[i])
+        if prev_ts - curr_ts <= _BATCH_CLUSTER_WINDOW_SECONDS:
+            batch.append(sorted_docs[i])
+        else:
+            break
+    return batch
+
+
+def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
+    """Get training/embedding progress for the current training batch (UI-facing).
+
+    Same response contract as ``get_profile_extraction_status`` — only a single
+    training batch is reflected at a time, so values don't regress when older
+    docs at downstream stages are mixed in. ``overall_live_logs`` is a
+    deprecated placeholder that always returns ``[]``.
+    """
     collection = get_documents_collection()
     if collection is None:
-        return {"documents": [], "common_data": {
-            "Overall_live_logs": [], "overall_progress": 0,
-            "toatal_documents": 0, "uploaded": 0, "elapsed_time": "0s",
-        }}
+        return {
+            "common_data": {
+                "overall_live_logs": [],
+                "elapsed_time": "0s",
+                "overall_progress": 0,
+                "total_documents": 0,
+                "uploaded": 0,
+            },
+            "documents": [],
+        }
 
-    # Focus on documents that have reached or passed screening
+    visible = list(_TRAINING_VISIBLE_STATUSES)
     docs = list(collection.find(
         {
             "profile_id": profile_id,
-            "status": {"$in": [
-                "SCREENING_COMPLETED", "TRAINING_STARTED", "TRAINING_COMPLETED",
-                "TRAINING_FAILED", "TRAINING_PARTIALLY_COMPLETED",
-                "TRAINING_BLOCKED_SECURITY", "TRAINING_BLOCKED_CONFIDENTIAL",
-                "EXTRACTION_OR_CHUNKING_FAILED", "EMBEDDING_FAILED",
-            ]},
+            "$or": [
+                {"status": {"$in": visible}},
+                {"pipeline_status": {"$in": visible}},
+            ],
         },
         {
-            "document_id": 1, "status": 1, "source_file": 1,
-            "embedding": 1,
+            "document_id": 1, "status": 1, "pipeline_status": 1,
+            "source_file": 1, "name": 1, "embedding": 1,
             "training_started_at": 1, "trained_at": 1,
-            "created_at": 1, "updated_at": 1,
+            "created_at": 1, "createdAt": 1,
+            "updated_at": 1, "updatedAt": 1,
         },
-    ).sort("updated_at", -1))
+    ))
+
+    batch = _identify_current_training_batch(docs)
 
     now = time.time()
-    result_docs = []
-    progress_sum = 0.0
+    progress_sum = 0
     earliest_start: Optional[float] = None
     latest_end: Optional[float] = None
-    uploaded_count = 0
+    batch_docs: List[Dict[str, Any]] = []
+    any_still_active = False
 
-    for doc in docs:
-        doc_id = str(doc.get("document_id") or doc.get("_id"))
-        status = doc.get("status", "UNKNOWN")
+    for doc in batch:
+        status = _doc_training_status(doc)
+        progress_sum += _TRAINING_PROGRESS_BY_STATUS.get(status, 0)
 
-        progress = _compute_document_progress(status, get_training_progress(doc_id))
-        progress_sum += progress.get("progress", 0)
+        start_ts = _doc_training_started_at(doc)
+        if start_ts > 0:
+            if earliest_start is None or start_ts < earliest_start:
+                earliest_start = start_ts
 
-        # Track earliest start and latest end for elapsed time
         embedding = doc.get("embedding") or {}
-        start_at = embedding.get("started_at") or doc.get("training_started_at")
-        if start_at and isinstance(start_at, (int, float)):
-            if earliest_start is None or start_at < earliest_start:
-                earliest_start = start_at
-
         end_at = doc.get("trained_at") or embedding.get("completed_at")
-        if end_at and isinstance(end_at, (int, float)):
+        if isinstance(end_at, (int, float)):
             if latest_end is None or end_at > latest_end:
                 latest_end = end_at
 
-        uploaded_count += 1
+        if status in _ACTIVE_TRAINING_STATUSES:
+            any_still_active = True
 
-        result_docs.append({
-            "document_id": doc_id,
-            "document_name": doc.get("source_file", ""),
-            "progress": progress,
+        batch_docs.append({
+            "document_id": str(doc.get("document_id") or doc.get("_id")),
+            "document_name": _doc_name(doc),
         })
 
-    # Live logs: actual terminal output captured by RedisLogHandler
-    live_logs = get_live_logs(profile_id)
+    batch_size = len(batch)
+    overall_pct = int(progress_sum / batch_size) if batch_size else 0
 
-    total_docs = len(result_docs)
-    overall_progress = round(progress_sum / total_docs, 1) if total_docs else 0
-
-    # Elapsed time: from earliest start to latest end (or now if still running)
     elapsed_seconds: Optional[float] = None
     if earliest_start:
-        end_ref = latest_end or now
+        end_ref = now if any_still_active else (latest_end or now)
         elapsed_seconds = round(end_ref - earliest_start, 1)
 
     return {
-        "documents": result_docs,
         "common_data": {
-            "Overall_live_logs": live_logs,
-            "overall_progress": overall_progress,
-            "toatal_documents": total_docs,
-            "uploaded": uploaded_count,
+            "overall_live_logs": [],
             "elapsed_time": _format_elapsed(elapsed_seconds),
+            "overall_progress": overall_pct,
+            "total_documents": batch_size,
+            "uploaded": batch_size,
         },
+        "documents": batch_docs,
     }
 
 
@@ -856,6 +1098,136 @@ def upsert_screening_report(
 def get_document_record(document_id: str) -> Optional[Dict[str, Any]]:
     collection = get_documents_collection()
     return collection.find_one(_doc_filter(document_id))
+
+# ---------------------------------------------------------------------------
+# Control-plane helpers for SME Phase 2 (ERRATA §12)
+#
+# "MongoDB = control plane only" (project memory rule): these helpers read /
+# write ONLY lightweight per-subscription and per-profile control fields. No
+# document content, artifact content, or heavy payloads are ever persisted
+# through this module — canonical artifacts live in Azure Blob, retrievable
+# snippets in Qdrant, inferred edges in Neo4j.
+#
+# ``update_profile_record`` enforces an allowlist of control-plane-only keys
+# so a misbehaving caller cannot sneak a ``narrative`` or payload blob into
+# the profile record. Callers that need to persist heavy artifacts MUST use
+# the Blob / Qdrant / Neo4j facade in ``src/intelligence/sme/storage.py``.
+# ---------------------------------------------------------------------------
+_SUBSCRIPTIONS_COLLECTION_NAME = "subscriptions"
+_PROFILES_COLLECTION_NAME = "profiles"
+
+_CP_ALLOWED_PROFILE_KEYS = frozenset(
+    {
+        "profile_domain",
+        "sme_synthesis_version",
+        "sme_last_input_hash",
+        "sme_redesign_enabled",
+        "sme_last_run_id",
+        "enable_sme_synthesis",
+        "enable_sme_retrieval",
+        "enable_kg_synthesized_edges",
+    }
+)
+
+
+def _documents_collection():
+    """Return the Mongo documents collection, respecting a test patch."""
+    return get_documents_collection()
+
+
+def _subscriptions_collection():
+    """Return the Mongo subscriptions collection.
+
+    Separate helper so tests can patch this without touching the documents
+    collection accessor.
+    """
+    from src.api.dataHandler import db
+
+    return db[_SUBSCRIPTIONS_COLLECTION_NAME]
+
+
+def _profiles_collection():
+    """Return the Mongo profiles collection (control plane only)."""
+    from src.api.dataHandler import db
+
+    return db[_PROFILES_COLLECTION_NAME]
+
+
+def count_incomplete_docs_in_profile(
+    *, subscription_id: str, profile_id: str, exclude_document_id: str
+) -> int:
+    """Count docs in ``(subscription_id, profile_id)`` not yet at
+    ``TRAINING_COMPLETED``, excluding ``exclude_document_id``.
+
+    Used by Phase 2 Task 8 to gate last-doc-in-profile SME synthesis firing:
+    when this count hits zero the last document is the one whose embedding
+    just finished, so synthesis runs as the final training-stage step before
+    ``PIPELINE_TRAINING_COMPLETED`` flips.
+    """
+    collection = _documents_collection()
+    if collection is None:
+        return 0
+    return int(
+        collection.count_documents(
+            {
+                "subscription_id": subscription_id,
+                "profile_id": profile_id,
+                "document_id": {"$ne": exclude_document_id},
+                "pipeline_status": {"$ne": "TRAINING_COMPLETED"},
+            }
+        )
+    )
+
+
+def get_subscription_record(subscription_id: str) -> Optional[Dict[str, Any]]:
+    """Return the subscription record or ``None`` if not present."""
+    collection = _subscriptions_collection()
+    if collection is None:
+        return None
+    return collection.find_one({"subscription_id": subscription_id})
+
+
+def get_profile_record(
+    subscription_id: str, profile_id: str
+) -> Optional[Dict[str, Any]]:
+    """Return the profile record or ``None`` if not present."""
+    collection = _profiles_collection()
+    if collection is None:
+        return None
+    return collection.find_one(
+        {"subscription_id": subscription_id, "profile_id": profile_id}
+    )
+
+
+def update_profile_record(
+    subscription_id: str, profile_id: str, updates: Dict[str, Any]
+) -> None:
+    """Merge control-plane fields onto the profile record.
+
+    Raises :class:`ValueError` when ``updates`` contains any key outside
+    :data:`_CP_ALLOWED_PROFILE_KEYS` — preserving the
+    "MongoDB = control plane only" invariant.
+
+    Writes are upserts so the first-time synthesis run creates the profile
+    record.
+    """
+    if not updates:
+        return
+    unknown = set(updates) - _CP_ALLOWED_PROFILE_KEYS
+    if unknown:
+        raise ValueError(
+            "update_profile_record: only control-plane keys allowed; "
+            f"got disallowed: {sorted(unknown)!r}"
+        )
+    collection = _profiles_collection()
+    if collection is None:
+        raise RuntimeError("profiles collection unavailable")
+    collection.update_one(
+        {"subscription_id": subscription_id, "profile_id": profile_id},
+        {"$set": dict(updates)},
+        upsert=True,
+    )
+
 
 _ERROR_NULL_PATHS = [
     "error",
