@@ -7,10 +7,19 @@ the subscription has ``enable_sme_synthesis`` on, this runs
 internal step before ``PIPELINE_TRAINING_COMPLETED`` fires (no new status
 string per spec invariant). Failure keeps the doc in its current status so
 retry is idempotent.
+
+Phase 2 user Task 13 adds an input-hash short-circuit: if the profile's
+``sme_last_input_hash`` equals the current inputs' hash, synthesis is
+skipped (idempotent re-run). On synthesis success the new hash + run_id
+are persisted on the profile record so the next re-entry can short-circuit.
+A :func:`invalidate_qa_index` Redis hook runs after the
+``PIPELINE_TRAINING_COMPLETED`` flip to clear the Phase-3 Q&A fast-path
+cache (ERRATA §13).
 """
 
 import logging
-from typing import Any, Callable, Optional
+import uuid
+from typing import Any, Callable, Iterable, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -30,6 +39,10 @@ from src.api.statuses import (
 from src.config.feature_flags import (
     ENABLE_SME_SYNTHESIS,
     get_flag_resolver,
+)
+from src.intelligence.sme.input_hash import (
+    compute_input_hash_for_profile,
+    input_hash_unchanged,
 )
 from src.tasks.screening import screen_document
 from src.tasks.embedding import embed_document
@@ -64,6 +77,57 @@ def register_sme_synthesizer_factory(
     """
     global _sme_synth_factory
     _sme_synth_factory = factory
+
+
+# ---------------------------------------------------------------------------
+# Profile-chunk reader hook — used by the input-hash short-circuit to avoid
+# re-synthesising unchanged inputs. Apps wire a reader at startup; tests
+# install a callable returning in-memory chunks so the finalize flow can be
+# exercised without talking to Qdrant/Mongo. Default ``None`` disables the
+# short-circuit (synthesis always fires) which is the safe fallback when the
+# reader is not yet wired.
+# ---------------------------------------------------------------------------
+_ProfileChunksReader = Callable[[str, str], Iterable[dict[str, Any]]]
+_profile_chunks_reader: Optional[_ProfileChunksReader] = None
+
+
+def register_profile_chunks_reader(
+    reader: Optional[_ProfileChunksReader],
+) -> None:
+    """Install / clear the profile-chunks reader.
+
+    ``reader`` takes ``(subscription_id, profile_id)`` and returns an
+    iterable of dicts with ``doc_id`` / ``chunk_id`` / ``text`` keys. The
+    return value is hashed (stable under reorder) and compared against
+    the profile record's ``sme_last_input_hash``; equal hashes skip
+    synthesis. Passing ``None`` clears the registration.
+    """
+    global _profile_chunks_reader
+    _profile_chunks_reader = reader
+
+
+# ---------------------------------------------------------------------------
+# Adapter-loader hook for the input-hash computation. The synthesiser keeps
+# its own loader reference; this hook exists so the pipeline layer can read
+# ``adapter.version`` + ``adapter.content_hash`` without duplicating the
+# synthesis wiring. Tests install a lambda returning a :class:`types.
+# SimpleNamespace` with ``version`` / ``content_hash`` attributes.
+# ---------------------------------------------------------------------------
+_AdapterFingerprintReader = Callable[[str, str], tuple[str, str] | None]
+_adapter_fingerprint_reader: Optional[_AdapterFingerprintReader] = None
+
+
+def register_adapter_fingerprint_reader(
+    reader: Optional[_AdapterFingerprintReader],
+) -> None:
+    """Install / clear the adapter-fingerprint reader.
+
+    ``reader`` takes ``(subscription_id, profile_domain)`` and returns a
+    tuple ``(version, content_hash)`` for the adapter that would be used
+    for synthesis. Returning ``None`` disables the short-circuit.
+    """
+    global _adapter_fingerprint_reader
+    _adapter_fingerprint_reader = reader
 
 
 def _is_last_doc_in_profile(doc: dict) -> bool:
@@ -150,7 +214,38 @@ def finalize_training_for_doc(doc: dict) -> None:
 
     profile_rec = get_profile_record(subscription_id, profile_id) or {}
     profile_domain = str(profile_rec.get("profile_domain", "generic"))
+
+    # Incremental short-circuit: if we can build the input hash *and* it
+    # matches the profile's last-stored hash, skip synthesis entirely. The
+    # short-circuit is best-effort: any failure to compute the hash (missing
+    # reader, adapter load error) falls through to real synthesis so we
+    # never skip when the short-circuit state is indeterminate.
+    current_input_hash = _safe_compute_input_hash(
+        subscription_id=subscription_id,
+        profile_id=profile_id,
+        profile_domain=profile_domain,
+    )
+    if current_input_hash and input_hash_unchanged(
+        subscription_id=subscription_id,
+        profile_id=profile_id,
+        current_hash=current_input_hash,
+    ):
+        append_audit_log(
+            document_id,
+            "SME_SYNTHESIS_SKIPPED_INPUT_UNCHANGED",
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+            profile_domain=profile_domain,
+            input_hash=current_input_hash,
+        )
+        update_pipeline_status(document_id, PIPELINE_TRAINING_COMPLETED)
+        _safe_invalidate_qa_index(
+            subscription_id=subscription_id, profile_id=profile_id
+        )
+        return
+
     synthesis_version = _next_synthesis_version(subscription_id, profile_id)
+    run_id = str(uuid.uuid4())
 
     try:
         synth = _sme_synth_factory()
@@ -180,15 +275,15 @@ def finalize_training_for_doc(doc: dict) -> None:
 
     # Record success on the profile record (control-plane only, allowlisted
     # keys) + audit log, then flip status.
+    updates: dict[str, Any] = {
+        "sme_synthesis_version": synthesis_version,
+        "profile_domain": profile_domain,
+        "sme_last_run_id": run_id,
+    }
+    if current_input_hash:
+        updates["sme_last_input_hash"] = current_input_hash
     try:
-        update_profile_record(
-            subscription_id,
-            profile_id,
-            {
-                "sme_synthesis_version": synthesis_version,
-                "profile_domain": profile_domain,
-            },
-        )
+        update_profile_record(subscription_id, profile_id, updates)
     except Exception:  # noqa: BLE001
         # Best-effort: the pipeline advance should not block on a control-
         # plane write failure; re-synthesis picks up via the input hash.
@@ -203,9 +298,88 @@ def finalize_training_for_doc(doc: dict) -> None:
         subscription_id=subscription_id,
         profile_id=profile_id,
         synthesis_version=synthesis_version,
+        run_id=run_id,
+        input_hash=current_input_hash,
         counts=report if isinstance(report, dict) else None,
     )
     update_pipeline_status(document_id, PIPELINE_TRAINING_COMPLETED)
+    _safe_invalidate_qa_index(
+        subscription_id=subscription_id, profile_id=profile_id
+    )
+
+
+def _safe_compute_input_hash(
+    *, subscription_id: str, profile_id: str, profile_domain: str
+) -> str | None:
+    """Best-effort input-hash computation. Returns ``None`` when any input
+    is missing so the caller falls through to real synthesis."""
+    reader = _profile_chunks_reader
+    fp_reader = _adapter_fingerprint_reader
+    if reader is None or fp_reader is None:
+        return None
+    try:
+        chunks = list(reader(subscription_id, profile_id))
+    except Exception:  # noqa: BLE001
+        logger.debug("profile chunks reader failed", exc_info=True)
+        return None
+    try:
+        fp = fp_reader(subscription_id, profile_domain)
+    except Exception:  # noqa: BLE001
+        logger.debug("adapter fingerprint reader failed", exc_info=True)
+        return None
+    if not fp:
+        return None
+    adapter_version, adapter_content_hash = fp
+    try:
+        return compute_input_hash_for_profile(
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+            chunks=chunks,
+            adapter_version=adapter_version,
+            adapter_content_hash=adapter_content_hash,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("compute_input_hash_for_profile failed", exc_info=True)
+        return None
+
+
+def invalidate_qa_index(*, subscription_id: str, profile_id: str) -> None:
+    """Delete all ``qa_idx:{sub}:{prof}:*`` Redis entries for a profile.
+
+    Called from :func:`finalize_training_for_doc` after
+    ``PIPELINE_TRAINING_COMPLETED`` fires so Phase 3's ``QAFastPath.lookup``
+    (ERRATA §13) never serves a stale answer after re-synthesis. Best-
+    effort: Redis failure logs + continues — the pipeline status flip is
+    already persisted and must not be undone.
+    """
+    try:
+        from src.api.dw_newron import get_redis_client
+        client = get_redis_client()
+    except Exception:  # noqa: BLE001
+        logger.debug("qa_idx invalidate: redis client unavailable", exc_info=True)
+        return
+    if client is None:
+        return
+    pattern = f"qa_idx:{subscription_id}:{profile_id}:*"
+    try:
+        for key in client.scan_iter(pattern):
+            client.delete(key)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "qa_idx invalidate scan/delete failed for %s/%s",
+            subscription_id,
+            profile_id,
+            exc_info=True,
+        )
+
+
+def _safe_invalidate_qa_index(*, subscription_id: str, profile_id: str) -> None:
+    try:
+        invalidate_qa_index(
+            subscription_id=subscription_id, profile_id=profile_id
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("qa_idx invalidation failed; ignoring", exc_info=True)
 
 pipeline_router = APIRouter(prefix="/documents", tags=["pipeline"])
 
