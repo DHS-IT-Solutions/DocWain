@@ -1,0 +1,15 @@
+{
+  "status": "skipped",
+  "reason": "dry-run",
+  "generated_at": "2026-04-21T08:37:50.398027+00:00",
+  "metrics": {
+    "sme_artifact_hit_rate": {
+      "value": null,
+      "status": "skipped"
+    },
+    "hallucination_rate": {
+      "value": null,
+      "status": "skipped"
+    }
+  }
+}
