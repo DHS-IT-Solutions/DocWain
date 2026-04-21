@@ -166,6 +166,13 @@ class CoreAgent:
         self._sme_kg_client = sme_kg_client  # src.retrieval.unified_retriever.UnifiedRetrieverKGClient
         self._hybrid_searcher = hybrid_searcher  # Phase 1 HybridSearcher (optional)
         self._redis_client_injected = redis_client  # Phase 3 QA fast-path
+        # Phase 3 Task 8/10 — retrieval cache bound to the injected redis
+        # client. Constructed lazily because we want the same instance
+        # across handle() calls within a CoreAgent lifetime but we don't
+        # want to pay the Redis lookup if the feature flag is off.
+        self._retrieval_cache_obj = None  # type: Any
+        # Phase 3 Task 9/10 — intent gate. Stateless; shared across calls.
+        self._intent_gate_obj = None  # type: Any
 
     # ------------------------------------------------------------------
     # Phase 3 — four-layer SME retrieval orchestration
@@ -248,6 +255,11 @@ class CoreAgent:
         def _layer_d_fn() -> List[Dict[str, Any]]:
             return []
 
+        # Phase 3 Task 9 — consult the shared intent gate so simple
+        # intents skip B/C entirely. Task 10 passes the same gate to the
+        # four-layer orchestrator so gated layers never hit their
+        # backing store.
+        gate = self._intent_gate()
         bundle = sme_unified.retrieve_four_layers(
             query=query,
             subscription_id=subscription_id,
@@ -257,8 +269,172 @@ class CoreAgent:
             layer_b_fn=_layer_b_fn,
             layer_c_fn=_layer_c_fn,
             layer_d_fn=_layer_d_fn,
+            gate=gate,
         )
         return bundle
+
+    # ------------------------------------------------------------------
+    # Phase 3 Task 10 — SME pack assembly + doc_context injection
+    # ------------------------------------------------------------------
+
+    def _intent_gate(self) -> Any:
+        """Lazily construct and return the shared :class:`IntentGate`."""
+        if self._intent_gate_obj is None:
+            from src.retrieval.intent_gating import IntentGate
+            self._intent_gate_obj = IntentGate()
+        return self._intent_gate_obj
+
+    def _retrieval_cache(self) -> Any:
+        """Lazily construct and return the shared :class:`RetrievalCache`.
+
+        Uses the injected Redis client if present, else the app-state
+        client. Returns a cache bound to ``None`` when Redis isn't
+        explicitly wired — important for unit tests that construct
+        :class:`CoreAgent` without a redis_client so Phase 3 doesn't
+        blocking-connect against a non-existent Redis. Production
+        deployments inject the app-state client at construction time.
+        """
+        if self._retrieval_cache_obj is None:
+            from src.retrieval.retrieval_cache import RetrievalCache
+            # Only prefer the app-state client when the env is set up —
+            # bare ``CoreAgent(...)`` constructions (tests) skip Redis.
+            client = self._redis_client_injected
+            if client is None:
+                try:
+                    from src.api.rag_state import get_app_state
+                    app_state = get_app_state()
+                    if app_state is not None and hasattr(
+                        app_state, "redis_client"
+                    ):
+                        client = app_state.redis_client
+                except Exception:  # noqa: BLE001
+                    client = None
+            self._retrieval_cache_obj = RetrievalCache(redis_client=client)
+        return self._retrieval_cache_obj
+
+    def _resolve_adapter(
+        self, subscription_id: str, profile_domain: str
+    ) -> Any:
+        """Resolve the domain adapter for pack assembly.
+
+        Returns a thin stub with the default ``retrieval_caps`` shape
+        when the :class:`AdapterLoader` singleton isn't initialized —
+        this happens in unit tests and in the pre-SME production
+        deployment. The stub always satisfies
+        :class:`PackAssembler` so Phase 3 wiring never explodes on
+        missing infrastructure.
+        """
+        try:
+            from src.intelligence.sme.adapter_loader import get_adapter_loader
+            return get_adapter_loader().load(subscription_id, profile_domain)
+        except Exception:  # noqa: BLE001
+            # Stub adapter — PackAssembler reads ``.retrieval_caps.max_pack_tokens``.
+            class _StubCaps:
+                max_pack_tokens = {"generic": 4000}
+            class _StubAdapter:
+                retrieval_caps = _StubCaps()
+            return _StubAdapter()
+
+    def _build_sme_pack(
+        self,
+        *,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        profile_domain: str,
+        intent: str,
+        query_understanding: Dict[str, Any],
+    ) -> List[Any]:
+        """Run the full Phase 3 SME retrieval + assembly pipeline.
+
+        Pipeline:
+
+        1. Retrieval-cache lookup keyed by
+           ``(sub, prof, query_fingerprint, flag_set_version)``. Cache
+           stores the raw :class:`RetrievalBundle`; a hit skips the four
+           layer dispatch entirely.
+        2. On miss — :meth:`_retrieve_four_layers` dispatches Layer
+           A/B/C/D in parallel, honouring the intent gate.
+        3. :func:`merge_layers` unions the four outputs and tags Layer
+           C + inferred Layer B as ``sme_backed=True``.
+        4. :func:`rerank_merged_candidates` applies the cross-encoder
+           blend + SME-intent bonus.
+        5. :func:`mmr_select` picks a diverse top-K (default 10 items).
+        6. :class:`PackAssembler` compresses Layer C and enforces the
+           adapter's per-intent token budget.
+
+        Returns a ``List[PackedItem]`` (frozen dataclasses) ready for
+        ``doc_context["sme_pack"]``. The assembled list is always
+        returned — even when retrieval fails every layer the empty list
+        is safe for the reasoner path.
+        """
+        from src.config.feature_flags import (
+            ENABLE_CROSS_ENCODER_RERANK,
+            get_flag_set_version,
+            get_flag_resolver,
+        )
+        from src.retrieval.merge import (
+            merge_layers,
+            mmr_select,
+            rerank_merged_candidates,
+        )
+        from src.retrieval.pack_assembler import PackAssembler
+        from src.retrieval.retrieval_cache import _query_fingerprint
+
+        fp = _query_fingerprint(query)
+        version = get_flag_set_version()
+        cache = self._retrieval_cache()
+        bundle = cache.get(
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+            query_fingerprint=fp,
+            flag_set_version=f"v{version}",
+        )
+        if bundle is None:
+            bundle = self._retrieve_four_layers(
+                query=query,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                query_understanding=query_understanding,
+            )
+            cache.set(
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                query_fingerprint=fp,
+                flag_set_version=f"v{version}",
+                bundle=bundle,
+            )
+
+        merged = merge_layers(bundle)
+        if not merged:
+            return []
+
+        # Cross-encoder rerank — gated per-subscription by
+        # ENABLE_CROSS_ENCODER_RERANK. When flag off, we still call
+        # rerank_merged_candidates so the score-sort path runs, but we
+        # pass enable_cross_encoder=False to skip the CE model call.
+        enable_ce = False
+        try:
+            resolver = get_flag_resolver()
+            enable_ce = bool(
+                resolver.is_enabled(subscription_id, ENABLE_CROSS_ENCODER_RERANK)
+            )
+        except Exception:  # noqa: BLE001
+            enable_ce = False
+
+        reranked = rerank_merged_candidates(
+            query=query,
+            candidates=merged,
+            cross_encoder=self._cross_encoder,
+            top_k=10,
+            intent=intent,
+            enable_cross_encoder=enable_ce,
+        )
+        diverse = mmr_select(items=reranked, top_k=10, lam=0.7)
+
+        adapter = self._resolve_adapter(subscription_id, profile_domain or "generic")
+        pack = PackAssembler(adapter).assemble(items=diverse, intent=intent)
+        return pack
 
     # ------------------------------------------------------------------
     # Phase 3 Task 7 — QA-cache fast path
@@ -836,6 +1012,49 @@ class CoreAgent:
                     )
                 else:
                     doc_context["doc_intelligence_summaries"] = doc_intelligence_entries
+
+        # --- PHASE 3 TASK 10 — SME pack assembly ---
+        # Run the four-layer SME retrieval + merge + rerank + MMR +
+        # pack-assembly pipeline when ENABLE_SME_RETRIEVAL is on for the
+        # subscription. The assembled pack lands in
+        # ``doc_context["sme_pack"]`` as a list[PackedItem] for the
+        # rich-mode consumer to read in Phase 4. Phase 3 does NOT modify
+        # the prompt surface — the reasoner stays unchanged.
+        try:
+            from src.config.feature_flags import (
+                ENABLE_SME_RETRIEVAL,
+                get_flag_resolver,
+            )
+            _sme_on = False
+            try:
+                _sme_on = get_flag_resolver().is_enabled(
+                    subscription_id, ENABLE_SME_RETRIEVAL
+                )
+            except Exception:  # noqa: BLE001
+                _sme_on = False
+            if _sme_on:
+                _sme_t0 = time.monotonic()
+                sme_pack = self._build_sme_pack(
+                    query=understanding.resolved_query,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    profile_domain=(
+                        doc_context.get("profile_domain") or "generic"
+                    ) if doc_context else "generic",
+                    intent=understanding.task_type,
+                    query_understanding={
+                        "intent": understanding.task_type,
+                        "entities": list(getattr(understanding, "entities", []) or []),
+                    },
+                )
+                if doc_context is None:
+                    doc_context = {}
+                doc_context["sme_pack"] = sme_pack
+                timing["sme_pack_ms"] = round(
+                    (time.monotonic() - _sme_t0) * 1000, 1
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug("SME pack assembly skipped (non-fatal)", exc_info=True)
 
         # --- REASON ---
         t0 = time.monotonic()
