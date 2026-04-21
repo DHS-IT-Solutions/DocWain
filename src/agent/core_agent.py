@@ -123,6 +123,39 @@ _META_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4 — module-level wiring helpers (test-patchable seams)
+# ---------------------------------------------------------------------------
+
+
+async def _load_adapter(subscription_id: str, profile_domain: str):
+    """Thin wrapper around the module-level adapter loader.
+
+    Kept at module scope so tests can patch it without constructing a full
+    CoreAgent + AdapterLoader singleton. In production the singleton is
+    initialised at FastAPI lifespan; this helper routes through it.
+    """
+    from src.intelligence.sme.adapter_loader import get_adapter_loader
+    return get_adapter_loader().load(subscription_id, profile_domain)
+
+
+async def _is_rich_mode_enabled(subscription_id: str) -> bool:
+    """Delegates to the Phase 1 flag resolver (ERRATA §4).
+
+    Wrapped in a try/except so pre-Phase-1 deployments (where the resolver
+    singleton isn't initialised) degrade to compact without raising into
+    the hot path.
+    """
+    try:
+        from src.config.feature_flags import (
+            ENABLE_RICH_MODE,
+            get_flag_resolver,
+        )
+        return get_flag_resolver().is_enabled(subscription_id, ENABLE_RICH_MODE)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ---------------------------------------------------------------------------
 # CoreAgent
 # ---------------------------------------------------------------------------
 
@@ -1056,6 +1089,49 @@ class CoreAgent:
         except Exception:  # noqa: BLE001
             logger.debug("SME pack assembly skipped (non-fatal)", exc_info=True)
 
+        # --- PHASE 4 — rich-mode pack summary + adapter resolution ---
+        # Computes PackSummary + persona + shape decision BEFORE the reasoner
+        # runs. Stored on ``doc_context`` so the reasoner (or a downstream
+        # rewrite pass) can consume it. Gated behind ENABLE_RICH_MODE; when
+        # OFF this block is a no-op and the reasoner sees today's compact
+        # path unchanged.
+        sme_pack_summary = None
+        sme_response_shape = None
+        try:
+            from src.config.feature_flags import (
+                ENABLE_RICH_MODE,
+                get_flag_resolver,
+            )
+            from src.generation.pack_summary import PackSummary
+            from src.generation.prompts import (
+                resolve_response_shape,
+            )
+            from src.serving.model_router import FormatHint
+
+            _rich_on = False
+            try:
+                _rich_on = get_flag_resolver().is_enabled(
+                    subscription_id, ENABLE_RICH_MODE
+                )
+            except Exception:  # noqa: BLE001
+                _rich_on = False
+
+            if _rich_on:
+                _pack_items = (doc_context or {}).get("sme_pack") or []
+                sme_pack_summary = PackSummary.from_packed_items(_pack_items)
+                sme_response_shape = resolve_response_shape(
+                    intent=understanding.task_type,
+                    format_hint=FormatHint.AUTO,
+                    pack=sme_pack_summary,
+                    enable_rich_mode=True,
+                )
+                if doc_context is None:
+                    doc_context = {}
+                doc_context["sme_pack_summary"] = sme_pack_summary
+                doc_context["sme_response_shape"] = sme_response_shape.value
+        except Exception:  # noqa: BLE001
+            logger.debug("Rich-mode pack summary skipped (non-fatal)", exc_info=True)
+
         # --- REASON ---
         t0 = time.monotonic()
         # Enable thinking for cloud backends — adds reasoning depth.
@@ -1094,6 +1170,37 @@ class CoreAgent:
             profile_expertise=profile_expertise,
         )
         timing["reason_ms"] = round((time.monotonic() - t0) * 1000, 1)
+
+        # --- PHASE 4 — recommendation grounding post-pass ---
+        # For recommend-intent rich responses, strip any claim that doesn't
+        # trace to a Recommendation Bank entry or an inline [doc_id:chunk_id]
+        # citation. Preserves the 0.0 hallucination invariant. The post-pass
+        # is a no-op for any other intent or when shape is not RICH.
+        try:
+            from src.generation.prompts import ResponseShape
+            from src.generation.recommendation_grounding import (
+                enforce_recommendation_grounding,
+            )
+
+            if (
+                understanding.task_type == "recommend"
+                and sme_response_shape is ResponseShape.RICH
+                and sme_pack_summary is not None
+            ):
+                rewritten, _report = enforce_recommendation_grounding(
+                    reason_result.text,
+                    bank_entries=list(sme_pack_summary.bank_entries),
+                )
+                reason_result.text = rewritten
+                logger.info(
+                    "[PHASE4_GROUNDING] intent=recommend kept=%d dropped=%d",
+                    _report.kept_count, _report.dropped_count,
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "Recommendation grounding post-pass skipped (non-fatal)",
+                exc_info=True,
+            )
 
         # --- COMPOSE ---
         metadata = {
@@ -1618,3 +1725,218 @@ class CoreAgent:
         except Exception:
             logger.exception("Failed to load doc intelligence for subscription=%s", subscription_id)
             return []
+
+    # ------------------------------------------------------------------
+    # Phase 4 — rich-mode prompt building (test seam + production path)
+    # ------------------------------------------------------------------
+
+    async def _resolve_profile_domain(
+        self, subscription_id: str, profile_id: str
+    ) -> str:
+        """Resolve ``profile_domain`` for adapter lookup.
+
+        The production path reads from the profile record in MongoDB (the
+        Phase 1 ingest writes the domain there). Tests patch this method.
+        Falls back to ``"generic"`` on any error so rich-mode wiring never
+        blows up a request.
+        """
+        try:
+            from src.api.document_status import get_profile_record
+            rec = get_profile_record(subscription_id, profile_id)
+            if rec:
+                return rec.get("profile_domain") or "generic"
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "profile_domain lookup failed for sub=%s prof=%s",
+                subscription_id, profile_id, exc_info=True,
+            )
+        return "generic"
+
+    @staticmethod
+    def _build_compact_prompt(classified: Any, pack_summary: Any) -> str:
+        """Legacy-compact prompt — a no-op stand-in for the pre-Phase-4 path.
+
+        The real compact reasoner path is driven by
+        :func:`src.generation.prompts.build_reason_prompt`; the Phase 4
+        wiring test only needs a distinct return value so tests can prove
+        the resolver chose the compact branch without invoking the full
+        reasoner pipeline.
+        """
+        return f"COMPACT:{getattr(classified, 'query_text', '')}"
+
+    async def _build_prompt_for_test(
+        self,
+        *,
+        classified: Any,
+        pack_summary: Any,
+        subscription_id: str,
+        profile_id: str,
+    ) -> str:
+        """Rich-mode wiring seam used by tests.
+
+        Production's :meth:`handle` embeds the same resolver → adapter →
+        template dispatch inline. This method exists so the wiring can be
+        exercised in isolation without booting the full pipeline.
+
+        Logic:
+
+        1. Flag OFF or explicit compact override → compact prompt.
+        2. Analytical / borderline intent + thin pack → honest-compact.
+        3. Rich-shaped intent → load adapter, build persona, dispatch to
+           the rich template for ``analyze`` / ``diagnose`` / ``recommend``.
+           ``investigate`` / ``overview`` route through the analyze template
+           per spec §8.
+        """
+        from src.generation.prompts import (
+            AnalyzePromptInputs,
+            DiagnosePromptInputs,
+            RecommendPromptInputs,
+            ResponseShape,
+            build_analyze_rich_prompt,
+            build_diagnose_rich_prompt,
+            build_honest_compact_prompt,
+            build_recommend_rich_prompt,
+            persona_bundle_from_adapter,
+            resolve_response_shape,
+        )
+
+        enable_rich = await _is_rich_mode_enabled(subscription_id)
+        shape = resolve_response_shape(
+            intent=classified.intent,
+            format_hint=classified.format_hint,
+            pack=pack_summary,
+            enable_rich_mode=enable_rich,
+        )
+
+        if shape is ResponseShape.COMPACT:
+            return self._build_compact_prompt(classified, pack_summary)
+
+        domain = await self._resolve_profile_domain(subscription_id, profile_id)
+        adapter = await _load_adapter(subscription_id, domain)
+
+        if shape is ResponseShape.HONEST_COMPACT:
+            return build_honest_compact_prompt(
+                query_text=classified.query_text,
+                pack_summary=pack_summary,
+            )
+
+        # Investigate / overview route through the analyze template (spec §8).
+        template_intent = (
+            "analyze"
+            if classified.intent in ("investigate", "overview")
+            else classified.intent
+        )
+
+        # Rich shape for a borderline intent (compare / summarize / etc.)
+        # falls back to compact — they don't have dedicated rich templates.
+        if template_intent not in ("analyze", "diagnose", "recommend"):
+            return self._build_compact_prompt(classified, pack_summary)
+
+        persona = persona_bundle_from_adapter(adapter, intent=template_intent)
+        cap = getattr(adapter.output_caps, template_intent, 1200) or 1200
+        pack_tokens = (
+            adapter.retrieval_caps.max_pack_tokens.get(template_intent, 6000)
+            if hasattr(adapter.retrieval_caps, "max_pack_tokens")
+            else 6000
+        )
+
+        # Build evidence / insights / bank entries directly off PackSummary
+        # per ERRATA §10 — no private helper methods required.
+        evidence = []
+        for item in pack_summary.evidence_items:
+            if not item.provenance:
+                continue
+            doc_id, chunk_id = item.provenance[0]
+            evidence.append(
+                {"doc_id": doc_id, "chunk_id": chunk_id, "text": item.text}
+            )
+        insights = [
+            {
+                "type": (item.metadata or {}).get("insight_type", "insight"),
+                "narrative": item.text,
+            }
+            for item in pack_summary.insights
+        ]
+
+        if template_intent == "analyze":
+            return build_analyze_rich_prompt(
+                AnalyzePromptInputs(
+                    query_text=classified.query_text,
+                    persona_role=persona.role,
+                    persona_voice=persona.voice,
+                    grounding_rules=persona.grounding_rules,
+                    pack_tokens=pack_tokens,
+                    output_cap_tokens=cap,
+                    evidence_items=evidence,
+                    insight_refs=insights,
+                    domain=domain,
+                )
+            )
+        if template_intent == "diagnose":
+            hits = [
+                {
+                    "symptom": (item.metadata or {}).get(
+                        "symptom", item.text[:120]
+                    ),
+                    "doc_id": item.provenance[0][0] if item.provenance else "",
+                    "chunk_id": item.provenance[0][1] if item.provenance else "",
+                    "rank": i + 1,
+                }
+                for i, item in enumerate(pack_summary.insights)
+            ]
+            return build_diagnose_rich_prompt(
+                DiagnosePromptInputs(
+                    query_text=classified.query_text,
+                    persona_role=persona.role,
+                    persona_voice=persona.voice,
+                    grounding_rules=persona.grounding_rules,
+                    pack_tokens=pack_tokens,
+                    output_cap_tokens=cap,
+                    evidence_items=evidence,
+                    diagnostic_hits=hits,
+                    domain=domain,
+                )
+            )
+        if template_intent == "recommend":
+            return build_recommend_rich_prompt(
+                RecommendPromptInputs(
+                    query_text=classified.query_text,
+                    persona_role=persona.role,
+                    persona_voice=persona.voice,
+                    grounding_rules=persona.grounding_rules,
+                    pack_tokens=pack_tokens,
+                    output_cap_tokens=cap,
+                    evidence_items=evidence,
+                    bank_entries=list(pack_summary.bank_entries),
+                    domain=domain,
+                )
+            )
+        return self._build_compact_prompt(classified, pack_summary)
+
+    async def _apply_recommend_grounding(
+        self,
+        *,
+        response_text: str,
+        classified: Any,
+        shape: Any,
+        pack_summary: Any,
+    ) -> str:
+        """Run the recommendation post-pass for recommend-intent rich output.
+
+        Called from the production streaming / non-streaming response path
+        once the LLM has produced final text. A no-op for any other intent
+        or shape so the caller can invoke it unconditionally.
+        """
+        from src.generation.prompts import ResponseShape
+        from src.generation.recommendation_grounding import (
+            enforce_recommendation_grounding,
+        )
+
+        intent = getattr(classified, "intent", "")
+        if intent != "recommend" or shape is not ResponseShape.RICH:
+            return response_text
+        rewritten, _report = enforce_recommendation_grounding(
+            response_text,
+            bank_entries=list(getattr(pack_summary, "bank_entries", ()) or ()),
+        )
+        return rewritten
