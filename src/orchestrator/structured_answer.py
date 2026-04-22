@@ -44,6 +44,7 @@ def generate_structured_answer(
         return json.dumps(base_payload, indent=2)
 
     prompt = _build_prompt(user_query, schema["schema"], base_payload)
+    logger.info("structured_answer: prompt_len=%d schema=%s", len(prompt), schema["schema"])
     try:
         if llm_client is not None:
             text = llm_client.generate(prompt, max_tokens=_LLM_ANSWER_MAX_TOKENS)
@@ -51,19 +52,29 @@ def generate_structured_answer(
             from src.llm.gateway import get_llm_gateway
             text = get_llm_gateway().generate(prompt, max_tokens=_LLM_ANSWER_MAX_TOKENS)
         text = (text or "").strip()
+        logger.info(
+            "structured_answer: llm returned len=%d preview=%r",
+            len(text), text[:200] if text else "",
+        )
         payload = _extract_json(text)
-        # Minimal validation: parseable JSON + required top-level fields.
-        # The strict per-item consistency checks in validate_response_payload
-        # were written for the deterministic-path output shape, which uses
-        # document_id on every leaf item. Since _compact_payload_for_prompt
-        # drops those leaf document_id fields to keep the prompt under the
-        # 32K context limit, the LLM echoes back the compact shape, which
-        # the strict validator rejects — sending every LLM-enriched
-        # response back to the deterministic fallback.
-        if payload and isinstance(payload, dict) and _has_top_level_required(payload, schema):
+        if payload is None:
+            logger.warning("structured_answer: json extract FAILED; returning base_payload")
+        elif not isinstance(payload, dict):
+            logger.warning(
+                "structured_answer: parsed payload not a dict (type=%s); returning base_payload",
+                type(payload).__name__,
+            )
+        elif not _has_top_level_required(payload, schema):
+            logger.warning(
+                "structured_answer: top-level required-field check FAILED; "
+                "required=%s got_keys=%s; returning base_payload",
+                schema.get("required_fields"), list(payload.keys()),
+            )
+        else:
+            logger.info("structured_answer: LLM response accepted (keys=%s)", list(payload.keys()))
             return json.dumps(payload, indent=2)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("Structured answer generation failed: %s", exc)
+        logger.exception("structured_answer: LLM path raised — returning base_payload")
     return json.dumps(base_payload, indent=2)
 
 
