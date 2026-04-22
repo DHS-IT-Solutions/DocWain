@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate Claude-quality training data for DocWain-14B-v2.
+Generate teacher-quality training data for DocWain-14B-v2.
 
 This script generates high-quality SFT and DPO examples that teach DocWain
 to be both fast and intelligent. Each example is carefully crafted with:
@@ -25,7 +25,7 @@ SYSTEM = (
     "When information is insufficient, you say so clearly rather than guessing."
 )
 
-OUTPUT_DIR = Path("finetune_artifacts/sprint/claude_quality")
+OUTPUT_DIR = Path("finetune_artifacts/sprint/teacher_quality")
 
 
 def sft(query: str, reasoning: str, answer: str, category: str, difficulty: str = "medium") -> dict:
@@ -34,7 +34,7 @@ def sft(query: str, reasoning: str, answer: str, category: str, difficulty: str 
         f"<|im_start|>user\n{query}<|im_end|>\n"
         f"<|im_start|>assistant\n<think>\n{reasoning}\n</think>\n\n{answer}<|im_end|>"
     )
-    return {"text": text, "category": category, "difficulty": difficulty, "source": "claude_quality"}
+    return {"text": text, "category": category, "difficulty": difficulty, "source": "teacher_quality"}
 
 
 def dpo(query: str, chosen_reasoning: str, chosen_answer: str,
@@ -47,7 +47,7 @@ def dpo(query: str, chosen_reasoning: str, chosen_answer: str,
     chosen = f"<think>\n{chosen_reasoning}\n</think>\n\n{chosen_answer}<|im_end|>"
     rejected = f"<think>\n{rejected_reasoning}\n</think>\n\n{rejected_answer}<|im_end|>"
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected,
-            "category": category, "source": "claude_quality"}
+            "category": category, "source": "teacher_quality"}
 
 
 def save_jsonl(examples: list, path: Path):
@@ -1625,7 +1625,7 @@ The company is **not in distress** but faces a **refinancing-dependent trajector
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Generating Claude-quality training data...")
+    print("Generating teacher-quality training data...")
     print("=" * 60)
 
     all_sft = []
