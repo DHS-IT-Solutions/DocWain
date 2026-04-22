@@ -213,6 +213,35 @@ def _diff_values(doc: DocumentEvidence, other: DocumentEvidence) -> List[str]:
     right = {item.value.lower() for item in other.identifiers}
     return sorted(left.symmetric_difference(right))
 
+_SCHEMA_OUTPUT_HINT: Dict[str, str] = {
+    "answer": (
+        '{"schema":"answer",'
+        '"answer":"<natural-language answer to the user query, 1-3 sentences>",'
+        '"documents":[<echo the evidence documents unchanged>]}'
+    ),
+    "extract": (
+        '{"schema":"extract",'
+        '"documents":[<echo the evidence documents, preserving extracted fields>]}'
+    ),
+    "list": (
+        '{"schema":"list",'
+        '"items":[{"label":"<short label>","document_id":"<doc id>"}, ...],'
+        '"documents":[<echo the evidence documents unchanged>]}'
+    ),
+    "compare": (
+        '{"schema":"compare",'
+        '"comparisons":[{"document_a":"<id>","document_b":"<id>",'
+        '"similarities":["..."],"differences":["..."],"notes":"<short note>"}, ...],'
+        '"documents":[<echo the evidence documents unchanged>]}'
+    ),
+    "rank": (
+        '{"schema":"rank",'
+        '"ranking":[{"rank":1,"document_id":"<id>","reason":"<short reason>"}, ...],'
+        '"documents":[<echo the evidence documents unchanged>]}'
+    ),
+}
+
+
 def _build_prompt(user_query: str, schema_name: str, base_payload: Dict[str, Any]) -> str:
     # Compact evidence before embedding: the raw base_payload carries per-item
     # snippet/chunk_id/meta/document_id/source_name that are redundant once
@@ -222,15 +251,24 @@ def _build_prompt(user_query: str, schema_name: str, base_payload: Dict[str, Any
     # Compact form targets <=16K tokens for profiles up to ~25 docs.
     compact = _compact_payload_for_prompt(base_payload)
     schema_json = json.dumps(compact, separators=(",", ":"))
+    hint = _SCHEMA_OUTPUT_HINT.get(schema_name, _SCHEMA_OUTPUT_HINT["answer"])
+    answer_requirement = (
+        '- The "answer" field MUST contain a natural-language answer '
+        'to the user query (1-3 sentences), grounded in the evidence.\n'
+        if schema_name == "answer" else ""
+    )
     return (
-        "You are an evidence-first synthesis engine. "
-        "Use only the provided structured evidence. "
-        "Do not add new facts. "
-        "Return ONLY valid JSON following the given schema.\n\n"
-        f"Schema name: {schema_name}\n"
+        "You are DocWain's synthesis engine. Answer the user's query using ONLY "
+        "the provided evidence. Do not invent facts.\n\n"
         f"User query: {user_query}\n\n"
-        "Structured evidence (fill in narrative fields as needed):\n"
-        f"{schema_json}\n"
+        "Evidence (compact JSON):\n"
+        f"{schema_json}\n\n"
+        "Return ONLY valid JSON with EXACTLY this shape:\n"
+        f"{hint}\n\n"
+        "Requirements:\n"
+        f'- The top-level "schema" field MUST be "{schema_name}".\n'
+        '- Do not add commentary, markdown, or text outside the JSON object.\n'
+        f"{answer_requirement}"
     )
 
 
