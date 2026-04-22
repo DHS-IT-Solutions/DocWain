@@ -145,7 +145,14 @@ class CoreAgent:
         self._qdrant = qdrant_client
         self._mongodb = mongodb
         self._intent_analyzer = IntentAnalyzer(llm_gateway=llm_gateway)
-        self._retriever = UnifiedRetriever(qdrant_client=qdrant_client, embedder=embedder)
+        from src.api.rag_state import get_app_state
+        _state = get_app_state()
+        self._retriever = UnifiedRetriever(
+            qdrant_client=qdrant_client,
+            embedder=embedder,
+            sparse_encoder=_state.sparse_encoder if _state else None,
+            graph_augmenter=_state.graph_augmenter if _state else None,
+        )
         self._reasoner = Reasoner(llm_gateway=llm_gateway)
         self.kg_query_service = kg_query_service
         self._cross_encoder = cross_encoder

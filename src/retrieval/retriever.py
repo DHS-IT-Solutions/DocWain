@@ -53,9 +53,11 @@ class UnifiedRetriever:
     # without requiring a server restart.
     _NEGATIVE_CACHE_TTL = 30
 
-    def __init__(self, qdrant_client, embedder):
+    def __init__(self, qdrant_client, embedder, sparse_encoder=None, graph_augmenter=None):
         self.qdrant_client = qdrant_client
         self.embedder = embedder
+        self.sparse_encoder = sparse_encoder
+        self.graph_augmenter = graph_augmenter  # used by Task 9
         # Maps collection_name → (exists: bool, checked_at: float)
         self._collection_exists_cache: dict[str, tuple[bool, float]] = {}
 
@@ -124,6 +126,15 @@ class UnifiedRetriever:
             )
             all_chunks.extend(chunks)
 
+        # KG entity expansion: pull 1-hop chunks for entities matched in the
+        # query via the knowledge graph. Dedup against dense/sparse results.
+        kg_chunks = self._kg_expand(query, subscription_id, profile_ids)
+        existing_ids = {c.chunk_id for c in all_chunks}
+        for kc in kg_chunks:
+            if kc.chunk_id and kc.chunk_id not in existing_ids:
+                all_chunks.append(kc)
+                existing_ids.add(kc.chunk_id)
+
         # Fill missing documents: fetch one chunk from each doc not yet in results
         all_chunks = self._fill_missing_documents(
             collection_name, all_chunks, subscription_id, profile_ids,
@@ -180,10 +191,11 @@ class UnifiedRetriever:
         top_k: int = 30,
         correlation_id: Optional[str] = None,
     ) -> List[EvidenceChunk]:
-        """Dense search for a single profile, with keyword fallback."""
+        """Dense + sparse hybrid search with RRF fusion, keyword fallback."""
         qfilter = self._build_filter(subscription_id, profile_id, document_ids,
                                      chunks_only=True)
 
+        # Dense (existing path)
         try:
             result = self.qdrant_client.query_points(
                 collection_name=collection_name,
@@ -193,30 +205,167 @@ class UnifiedRetriever:
                 limit=top_k,
                 with_payload=True,
             )
-            points = result.points if hasattr(result, "points") else []
+            dense_points = result.points if hasattr(result, "points") else []
         except Exception:
             logger.exception(
                 "Dense search failed collection=%s profile=%s cid=%s",
                 collection_name, profile_id, correlation_id,
             )
-            points = []
+            dense_points = []
 
-        # Filter out doc_index/doc_intelligence points — those are fetched separately
-        points = [
-            pt for pt in points
+        dense_points = [
+            pt for pt in dense_points
             if (pt.payload or {}).get("resolution", "chunk") not in ("doc_index", "doc_intelligence")
         ]
-        chunks = [self._point_to_chunk(pt, profile_id) for pt in points]
+        dense_chunks = [self._point_to_chunk(pt, profile_id) for pt in dense_points]
 
-        # Keyword fallback when dense returns too few high-quality hits
+        # Sparse (new — empty list when encoder is None or fails)
+        sparse_chunks = self._sparse_search(
+            collection_name, query, subscription_id, profile_id,
+            document_ids=document_ids, top_k=top_k,
+        )
+
+        # RRF fusion when we have both; otherwise pass through dense
+        if sparse_chunks:
+            chunks = self._rrf_merge(dense_chunks, sparse_chunks, top_k=top_k)
+        else:
+            chunks = dense_chunks
+
+        # Keyword fallback path (unchanged) — only fires when hybrid returned few high-quality hits
         high_quality = [c for c in chunks if c.score >= self._HIGH_QUALITY_THRESHOLD]
         if len(high_quality) < self._DENSE_MIN:
             fallback = self._keyword_fallback(
-                collection_name, query, qfilter, top_k, existing_ids={c.chunk_id for c in chunks},
+                collection_name, query, qfilter, top_k,
+                existing_ids={c.chunk_id for c in chunks},
             )
             chunks.extend(fallback)
 
         return chunks
+
+    def _sparse_search(
+        self,
+        collection_name: str,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        *,
+        document_ids: Optional[List[str]] = None,
+        top_k: int = 30,
+    ) -> List[EvidenceChunk]:
+        """SPLADE sparse search against Qdrant's keywords_vector named sparse slot."""
+        if self.sparse_encoder is None:
+            return []
+        try:
+            from qdrant_client.models import SparseVector
+            sparse_dict = self.sparse_encoder.encode(query)
+            sparse_query = SparseVector(
+                indices=sparse_dict["indices"],
+                values=sparse_dict["values"],
+            )
+        except Exception as exc:
+            logger.warning("Sparse encode failed for query: %s", exc)
+            return []
+
+        qfilter = self._build_filter(subscription_id, profile_id, document_ids)
+
+        try:
+            result = self.qdrant_client.query_points(
+                collection_name=collection_name,
+                query=sparse_query,
+                using="keywords_vector",
+                query_filter=qfilter,
+                limit=top_k,
+                with_payload=True,
+            )
+            points = result.points if hasattr(result, "points") else []
+        except Exception as exc:
+            logger.warning(
+                "Sparse search failed collection=%s profile=%s: %s",
+                collection_name, profile_id, exc,
+            )
+            return []
+
+        points = [
+            pt for pt in points
+            if (pt.payload or {}).get("resolution", "chunk") not in ("doc_index", "doc_intelligence")
+        ]
+        return [self._point_to_chunk(pt, profile_id) for pt in points]
+
+    @staticmethod
+    def _rrf_merge(
+        dense: List[EvidenceChunk],
+        sparse: List[EvidenceChunk],
+        top_k: int = 30,
+        k: int = 60,
+        dense_weight: float = 0.6,
+        sparse_weight: float = 0.4,
+    ) -> List[EvidenceChunk]:
+        """Reciprocal Rank Fusion of dense + sparse chunk lists by chunk_id.
+
+        Important: does NOT mutate chunk.score. Downstream code
+        (`_HIGH_QUALITY_THRESHOLD` gate, `_keyword_fallback` score scale,
+        `_ensure_document_diversity` sort) reads `score` expecting raw
+        dense-cosine-range values, not RRF sub-unit scores. The RRF score is
+        only used here to order the returned list. Each chunk keeps whichever
+        score (dense cosine or sparse) it arrived with.
+        """
+        scores: dict[str, float] = {}
+        chunks_by_id: dict[str, EvidenceChunk] = {}
+
+        for rank, c in enumerate(dense):
+            scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + dense_weight / (k + rank + 1)
+            chunks_by_id[c.chunk_id] = c  # prefer dense chunk when both present
+
+        for rank, c in enumerate(sparse):
+            scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + sparse_weight / (k + rank + 1)
+            chunks_by_id.setdefault(c.chunk_id, c)
+
+        fused_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)
+        return [chunks_by_id[cid] for cid in fused_ids[:top_k]]
+
+    def _kg_expand(
+        self,
+        query: str,
+        subscription_id: str,
+        profile_ids: List[str],
+    ) -> List[EvidenceChunk]:
+        """Pull 1-hop KG chunks for entities in the query via GraphAugmenter.
+
+        Graceful degradation: returns [] when graph_augmenter is None, when
+        augment() raises, or when no entities matched in the KG.
+        """
+        if self.graph_augmenter is None:
+            return []
+
+        all_chunks: List[EvidenceChunk] = []
+        for pid in profile_ids:
+            try:
+                hints = self.graph_augmenter.augment(query, subscription_id, pid)
+            except Exception as exc:
+                logger.warning("KG augment failed for profile=%s: %s", pid, exc)
+                continue
+
+            # Materialise graph_snippets as EvidenceChunks. Score 0.4 places KG
+            # chunks below the _HIGH_QUALITY_THRESHOLD (0.5) but above the
+            # keyword fallback floor — they won't dominate dense results but
+            # will appear in the candidate pool for rerank.
+            for snip in getattr(hints, "graph_snippets", []) or []:
+                if not snip.chunk_id:
+                    continue
+                all_chunks.append(EvidenceChunk(
+                    text=snip.text or "",
+                    source_name=snip.doc_name or snip.doc_id or "",
+                    document_id=snip.doc_id or "",
+                    profile_id=pid,
+                    section=snip.relation or "",
+                    page_start=0,
+                    page_end=0,
+                    score=0.4,
+                    chunk_id=snip.chunk_id,
+                    chunk_type="kg",
+                ))
+
+        return all_chunks
 
     def _fill_missing_documents(
         self,

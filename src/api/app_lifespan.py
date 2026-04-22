@@ -45,12 +45,13 @@ def initialize_app_state(app: FastAPI) -> AppState:
 
     embedding_model = None
     cross_encoder = None
+    sparse_encoder = None
     qdrant_client = None
     redis_client = None
     ollama_client = None
     rag_system = None
 
-    # Load embedding model + cross-encoder in parallel (they're CPU-bound and independent)
+    # Load embedding model + cross-encoder + sparse-encoder in parallel (CPU-bound, independent)
     def _load_embedding():
         nonlocal embedding_model
         try:
@@ -65,10 +66,20 @@ def initialize_app_state(app: FastAPI) -> AppState:
         except Exception as exc:  # noqa: BLE001
             logger.error("Reranker init failed: %s", exc)
 
+    def _load_sparse_encoder():
+        nonlocal sparse_encoder
+        try:
+            from src.embedding.sparse import SparseEncoder
+            sparse_encoder = SparseEncoder()  # lazy — model loads on first encode()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("SparseEncoder init failed: %s", exc)
+
     t_embed = threading.Thread(target=_load_embedding, daemon=True)
     t_rerank = threading.Thread(target=_load_cross_encoder, daemon=True)
+    t_sparse = threading.Thread(target=_load_sparse_encoder, daemon=True)
     t_embed.start()
     t_rerank.start()
+    t_sparse.start()
 
     # While models load, initialize clients (I/O bound, fast)
     try:
@@ -83,6 +94,7 @@ def initialize_app_state(app: FastAPI) -> AppState:
     # Wait for model loading to finish
     t_embed.join()
     t_rerank.join()
+    t_sparse.join()
     if redis_client and getattr(Config.Redis, "CLEAR_UNSAFE_ON_STARTUP", False):
         try:
             from src.utils.redis_startup import clear_unsafe_keys, parse_unsafe_patterns
@@ -232,6 +244,7 @@ def initialize_app_state(app: FastAPI) -> AppState:
         multi_agent_gateway=multi_agent_gateway,
         graph_augmenter=graph_augmenter,
         vllm_manager=vllm_manager,
+        sparse_encoder=sparse_encoder,
         qdrant_index_status=_bootstrap_qdrant_indexes(qdrant_client) if qdrant_client else {"__all__": {"status": "unhealthy", "error": "qdrant_unavailable"}},
     )
     register_instance_ids(state)
