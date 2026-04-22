@@ -190,7 +190,14 @@ def _diff_values(doc: DocumentEvidence, other: DocumentEvidence) -> List[str]:
     return sorted(left.symmetric_difference(right))
 
 def _build_prompt(user_query: str, schema_name: str, base_payload: Dict[str, Any]) -> str:
-    schema_json = json.dumps(base_payload, indent=2)
+    # Compact evidence before embedding: the raw base_payload carries per-item
+    # snippet/chunk_id/meta/document_id/source_name that are redundant once
+    # pulled into the prompt (document-level fields already scope them). For a
+    # 12-doc profile the uncompacted payload is ~70K tokens, which overflows
+    # DocWain's 32K context window and causes vLLM to reject with 400.
+    # Compact form targets <=16K tokens for profiles up to ~25 docs.
+    compact = _compact_payload_for_prompt(base_payload)
+    schema_json = json.dumps(compact, separators=(",", ":"))
     return (
         "You are an evidence-first synthesis engine. "
         "Use only the provided structured evidence. "
@@ -201,6 +208,71 @@ def _build_prompt(user_query: str, schema_name: str, base_payload: Dict[str, Any
         "Structured evidence (fill in narrative fields as needed):\n"
         f"{schema_json}\n"
     )
+
+
+_MAX_ITEMS_PER_FIELD = 10
+_MAX_SECTION_TITLE_LEN = 60
+
+
+def _compact_payload_for_prompt(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a size-bounded copy of ``payload`` safe to embed in a prompt."""
+    out: Dict[str, Any] = {
+        k: v for k, v in payload.items() if k != "documents"
+    }
+    out["documents"] = [
+        _compact_document(doc) for doc in payload.get("documents", [])
+    ]
+    if "merged_entities" in payload:
+        out["merged_entities"] = payload["merged_entities"]
+    return out
+
+
+def _compact_document(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip redundant per-item fields; cap list lengths."""
+    return {
+        "id": doc.get("document_id"),
+        "name": doc.get("source_name"),
+        "contacts": _compact_contacts(doc.get("contacts")),
+        "dates": _compact_items(doc.get("dates")),
+        "identifiers": _compact_items(doc.get("identifiers")),
+        "entities": _compact_items(doc.get("entities")),
+        "sections": _compact_items(doc.get("sections")),
+        "tables": _compact_items(doc.get("tables")),
+    }
+
+
+def _compact_contacts(contacts: Any) -> Dict[str, Any]:
+    if not isinstance(contacts, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for key, items in contacts.items():
+        compacted = _compact_items(items)
+        if compacted:
+            out[key] = compacted
+    return out
+
+
+def _compact_items(items: Any) -> List[Any]:
+    if not isinstance(items, list) or not items:
+        return []
+    capped = items[:_MAX_ITEMS_PER_FIELD]
+    return [_compact_item(it) for it in capped]
+
+
+def _compact_item(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item
+    out: Dict[str, Any] = {}
+    if item.get("value") is not None:
+        out["v"] = item["value"]
+    p_start = item.get("page_start")
+    p_end = item.get("page_end")
+    if p_start is not None:
+        out["p"] = str(p_start) if (p_end is None or p_end == p_start) else f"{p_start}-{p_end}"
+    sec = item.get("section_title")
+    if sec and sec != item.get("value"):
+        out["sec"] = sec[:_MAX_SECTION_TITLE_LEN]
+    return out
 
 def _should_merge(user_query: str) -> bool:
     lowered = (user_query or "").lower()

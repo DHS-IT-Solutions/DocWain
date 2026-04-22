@@ -125,71 +125,43 @@ class LLMGateway:
     # ------------------------------------------------------------------
 
     def _init_clients(self) -> None:
-        """Create backend clients in priority order.
+        """Create the 3rd-party fallback clients.
 
-        Primary:   vLLM serving the unified DocWain model (local, OpenAI-compat).
-        Fallback1: Ollama Cloud qwen3.5:397b (remote, used when vLLM unhealthy).
-        Fallback2: Azure GPT-4o (used when both above fail).
+        The vLLM path is handled inside ``_do_generate`` / ``_do_stream``
+        by calling ``app_state.vllm_manager`` directly (see lines ~531
+        and ~410). That path injects ``/no_think`` into the system
+        prompt, respects the GPU-mode file, and honours
+        ``require_vllm=True`` for extraction callers that must not
+        silently fall back.
 
-        This keeps the fallback chain intact for training windows when
-        vLLM is paused by the GPU scheduler. Document processing still
-        uses ``get_local_client()`` (a separate path) for ingestion-time
-        classification/extraction.
+        The clients wired here are the 3rd-party **fallbacks** that
+        kick in when ``vllm_manager`` is absent (unit tests, standalone
+        scripts) or its internal vLLM → Ollama Cloud → Ollama local
+        chain has exhausted itself:
+
+            _primary : Ollama Cloud qwen3.5:397b (high-quality reasoning)
+            _fallback: Azure GPT-4o
+
+        Earlier versions of this method briefly registered an
+        ``OpenAICompatibleClient`` pointing at the same vLLM endpoint,
+        which duplicated the vllm_manager path and bypassed its
+        ``/no_think`` injection — removed.
         """
         self._primary = None
         self._fallback = None
 
-        # --- vLLM (primary — unified DocWain model) ---
-        if getattr(Config.VLLM, "ENABLED", True):
-            try:
-                from src.llm.clients import OpenAICompatibleClient
-                vllm_client = OpenAICompatibleClient(
-                    endpoint=Config.VLLM.URL.rstrip("/") + "/v1",
-                    model_name=Config.VLLM.MODEL,
-                    api_key=Config.VLLM.API_KEY or "EMPTY",
-                )
-                # Cheap reachability probe — /v1/models. Avoids wiring an
-                # unhealthy primary that would fail every request before
-                # fallback kicks in.
-                import urllib.request
-                with urllib.request.urlopen(
-                    Config.VLLM.URL.rstrip("/") + "/v1/models", timeout=5
-                ) as r:
-                    if r.status != 200:
-                        raise RuntimeError(f"vLLM /v1/models returned {r.status}")
-                self._primary = vllm_client
-                self.backend = "vllm"
-                self.model_name = vllm_client.model_name
-                logger.info(
-                    "vLLM primary ready (endpoint=%s, model=%s)",
-                    Config.VLLM.URL, vllm_client.model_name,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "vLLM primary unavailable (%s) — falling back to Ollama Cloud",
-                    exc,
-                )
-
-        # --- Ollama Cloud (fallback #1 — used when vLLM down, e.g. training window) ---
+        # --- Ollama Cloud (primary 3rd-party fallback — high-quality reasoning) ---
         cloud_model = os.getenv("OLLAMA_CLOUD_MODEL", "qwen3.5:397b")
-        ollama_client = None
         try:
             from src.llm.clients import OllamaClient
-            ollama_client = OllamaClient(model_name=cloud_model)
-            logger.info("Ollama Cloud client initialised (model=%s)", ollama_client.model_name)
-        except Exception as exc:
-            logger.warning("Failed to create Ollama Cloud client: %s", exc)
-
-        if self._primary is None and ollama_client is not None:
-            self._primary = ollama_client
+            self._primary = OllamaClient(model_name=cloud_model)
             self.backend = "ollama"
-            self.model_name = ollama_client.model_name
-            logger.info("Ollama Cloud promoted to primary (vLLM unavailable)")
-        elif ollama_client is not None:
-            # vLLM is primary; keep Ollama as the active fallback.
-            self._fallback = ollama_client
+            self.model_name = self._primary.model_name
+            logger.info("Ollama Cloud primary client initialised (model=%s)", self.model_name)
+        except Exception as exc:
+            logger.warning("Failed to create Ollama Cloud client: %s — falling back to Azure GPT-4o", exc)
 
-        # --- Azure GPT-4o (fallback #2 — used when vLLM and Ollama Cloud down) ---
+        # --- Azure GPT-4o (secondary fallback) ---
         try:
             from src.llm.clients import OpenAIClient
             endpoint = Config.AzureGpt4o.AZUREGPT4O_ENDPOINT
@@ -198,21 +170,21 @@ class LLMGateway:
             api_version = Config.AzureGpt4o.AZUREGPT4O_Version
             if not endpoint or not api_key:
                 raise ValueError("AZUREGPT4O_ENDPOINT or AZUREGPT4O_API_KEY not configured")
-            azure_client = OpenAIClient(
+            fallback_client = OpenAIClient(
                 endpoint=endpoint,
                 api_key=api_key,
                 deployment=deployment,
                 api_version=api_version,
             )
             if self._primary is None:
-                self._primary = azure_client
+                self._primary = fallback_client
+                self._fallback = None
                 self.backend = "azure_openai"
-                self.model_name = azure_client.model_name
-                logger.info("Azure GPT-4o promoted to primary (vLLM + Ollama unavailable)")
-            elif self._fallback is None:
-                self._fallback = azure_client
-                logger.info("Azure GPT-4o registered as fallback (model=%s)", azure_client.model_name)
-            # else: vLLM primary + Ollama fallback already wired; Azure not needed as tertiary.
+                self.model_name = self._primary.model_name
+                logger.info("Azure GPT-4o promoted to primary (model=%s)", self.model_name)
+            else:
+                self._fallback = fallback_client
+                logger.info("Azure GPT-4o fallback client ready (model=%s)", fallback_client.model_name)
         except Exception as exc:
             logger.warning("Failed to create Azure GPT-4o fallback: %s", exc)
 
