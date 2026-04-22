@@ -342,7 +342,7 @@ def _build_doc_summary_hint(payload: Dict[str, Any]) -> str:
     return "Documents:\n" + "\n".join(lines)
 
 
-_MAX_ITEMS_PER_FIELD = 10
+_MAX_ITEMS_PER_FIELD = 4
 _MAX_SECTION_TITLE_LEN = 60
 
 
@@ -391,7 +391,7 @@ def _compact_items(items: Any) -> List[Any]:
     return [_compact_item(it) for it in capped]
 
 
-_MAX_SNIPPET_LEN = 180
+_MAX_SNIPPET_LEN = 80
 
 
 def _compact_item(item: Any) -> Any:
