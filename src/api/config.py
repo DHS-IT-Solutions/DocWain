@@ -357,7 +357,7 @@ class Config:
         API_KEY = _secret("VLLM_API_KEY", "")
         TIMEOUT = float(os.getenv("VLLM_TIMEOUT", "30"))
         URL = os.getenv("VLLM_URL", "http://localhost:8100")
-        MODEL = os.getenv("VLLM_MODEL", "docwain-fast")
+        MODEL = os.getenv("VLLM_MODEL", "docwain")
         GPU_MODE_FILE = os.getenv("DOCWAIN_GPU_MODE_FILE", "/tmp/docwain-gpu-mode.json")
 
     class DocumentProfiler:

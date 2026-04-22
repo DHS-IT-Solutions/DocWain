@@ -7,6 +7,61 @@ No other module should contain prompt text or LLM instructions.
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
+# Response-format templates. Owned here (not in src/intelligence/generator.py)
+# per the prompt-path rule. Each template instructs the model on how to
+# structure a user-facing response.
+# ---------------------------------------------------------------------------
+
+_FORMAT_INSTRUCTIONS = {
+    "table": (
+        "Present data in a clean markdown table.\n"
+        "- Use | column | headers | with alignment\n"
+        "- One data point per row, no merged cells\n"
+        "- Bold key values: **$9,000.00**, **Jessica Jones**\n"
+        "- Add a brief summary sentence above the table"
+    ),
+    "bullets": (
+        "Present as a structured bulleted list.\n"
+        "- Lead with a one-line summary sentence\n"
+        "- Group related bullets under **bold category headers**\n"
+        "- Each bullet: **Label:** value or description\n"
+        "- Bold key names, amounts, dates, entities\n"
+        "- Most important items first"
+    ),
+    "sections": (
+        "Organize the response with clear visual hierarchy.\n"
+        "- Start with a one-line executive summary\n"
+        "- Use ## for major sections, ### for subsections\n"
+        "- Within sections, use bullet points with **bold labels**\n"
+        "- Format: **Field Name:** extracted value or insight\n"
+        "- Bold all key values: names, amounts, dates, identifiers\n"
+        "- Use markdown tables for tabular data (line items, comparisons)\n"
+        "- Never leave headers as plain text — always use ## or ###\n"
+        "- Keep bullets self-contained — each makes sense alone\n"
+        "- End with a brief synthesis or key takeaway if appropriate"
+    ),
+    "numbered": (
+        "Present as a numbered list.\n"
+        "- Each item: **Label** — description with **bold key values**\n"
+        "- Sequential order, one point per number\n"
+        "- Brief summary before the list"
+    ),
+    "prose": (
+        "Write clear, structured paragraphs.\n"
+        "- Lead with the direct answer in the first sentence\n"
+        "- Bold key values: **$9,000.00**, **Jessica Jones**, **Document 0522**\n"
+        "- Use short paragraphs (2-3 sentences each)\n"
+        "- For any tabular data, use a markdown table instead of inline text"
+    ),
+}
+
+
+def get_format_instruction(shape: str) -> str:
+    """Return the format template for the given shape. Defaults to 'prose'."""
+    return _FORMAT_INSTRUCTIONS.get(shape, _FORMAT_INSTRUCTIONS["prose"])
+
+
+# ---------------------------------------------------------------------------
 # System prompt — used as the system message for every generation call
 # ---------------------------------------------------------------------------
 

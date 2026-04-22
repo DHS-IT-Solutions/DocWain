@@ -1,4 +1,4 @@
-"""Main query pipeline orchestrator — routes, plans, executes, generates, verifies."""
+"""Main query pipeline orchestrator — unified-model path: route, plan, execute, generate, verify."""
 
 from __future__ import annotations
 
@@ -19,12 +19,10 @@ logger = logging.getLogger(__name__)
 try:
     from src.serving.vllm_manager import VLLMManager
     from src.serving.model_router import IntentRouter, RouterResult
-    from src.serving.fast_path import FastPathHandler
 except ImportError:
     VLLMManager = None
     IntentRouter = None
     RouterResult = None
-    FastPathHandler = None
 
 _MAX_RE_RETRIEVAL = 2
 _MIN_CONFIDENCE = 0.7
@@ -36,7 +34,7 @@ _MIN_CONFIDENCE = 0.7
 
 @dataclass
 class QueryPipelineResult:
-    """Final output of the V2 query pipeline."""
+    """Final output of the query pipeline."""
     response: str
     sources: List[Dict[str, Any]] = field(default_factory=list)
     chart_spec: Optional[Dict[str, Any]] = None
@@ -44,7 +42,7 @@ class QueryPipelineResult:
     grounded: bool = False
     context_found: bool = False
     confidence: float = 0.0
-    route_taken: str = "smart"
+    route_taken: str = "intelligence"
     plan: Optional[QueryPlan] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -60,14 +58,13 @@ def run_query_pipeline(
     clients: Dict[str, Any],
     profile_intelligence: Optional[Dict[str, Any]] = None,
 ) -> QueryPipelineResult:
-    """Run the full V2 query pipeline.
+    """Run the full query pipeline.
 
     Flow:
-        1. Route query via 14B intent router.
-        2. Fast path  -> FastPathHandler (simple greet / meta queries).
-        3. Smart path -> Plan (27B) -> Execute -> Assemble -> Generate+Verify (27B).
-        4. Re-retrieval loop if confidence < 0.7 (max 2 iterations).
-        5. Return QueryPipelineResult.
+        1. Route query via unified-model intent router.
+        2. Plan -> Execute -> Assemble -> Generate+Verify.
+        3. Re-retrieval loop if confidence < 0.7 (max 2 iterations).
+        4. Return QueryPipelineResult.
 
     Args:
         query: User's natural language query.
@@ -98,16 +95,7 @@ def run_query_pipeline(
     route_intent = _get_intent(router_result)
 
     # -----------------------------------------------------------------
-    # Step 2: Fast path (greetings, meta questions)
-    # -----------------------------------------------------------------
-    if _is_fast_path(route_intent):
-        fast_response = _handle_fast_path(query, router_result, profile_intelligence)
-        if fast_response is not None:
-            fast_response.metadata["duration_seconds"] = round(time.monotonic() - t0, 3)
-            return fast_response
-
-    # -----------------------------------------------------------------
-    # Step 3: Full-reasoning path — Plan -> Execute -> Assemble -> Generate
+    # Step 2: Plan -> Execute -> Assemble -> Generate
     # -----------------------------------------------------------------
     exec_clients = ExecutionClients(
         qdrant_client=qdrant_client,
@@ -128,7 +116,7 @@ def run_query_pipeline(
     gen_result = generator.generate(query, context, router_result)
 
     # -----------------------------------------------------------------
-    # Step 4: Verify and re-retrieve if needed
+    # Step 3: Verify and re-retrieve if needed
     # -----------------------------------------------------------------
     verification = verify_response(gen_result.response_text, context, query)
     loop_count = 0
@@ -151,7 +139,7 @@ def run_query_pipeline(
         verification = verify_response(gen_result.response_text, context, query)
 
     # -----------------------------------------------------------------
-    # Step 5: Collect sources from execution results
+    # Step 4: Collect sources from execution results
     # -----------------------------------------------------------------
     sources = _collect_sources(execution)
     context_found = bool(sources)
@@ -167,7 +155,7 @@ def run_query_pipeline(
         grounded=grounded,
         context_found=context_found,
         confidence=verification.confidence,
-        route_taken="simple" if _is_fast_path(route_intent) else "full_reasoning",
+        route_taken="intelligence",
         plan=plan,
         metadata={
             "intent": route_intent,
@@ -204,48 +192,6 @@ def _get_intent(router_result: Any) -> str:
     if router_result is None:
         return "unknown"
     return getattr(router_result, "intent", "unknown") or "unknown"
-
-
-def _is_fast_path(intent: str) -> bool:
-    """Determine if the intent qualifies for the fast path."""
-    fast_intents = {"greet", "goodbye", "meta", "help", "identity", "capability"}
-    return intent.lower() in fast_intents
-
-
-def _handle_fast_path(
-    query: str,
-    router_result: Any,
-    profile_intelligence: Dict[str, Any],
-) -> Optional[QueryPipelineResult]:
-    """Handle fast-path queries using the FastPathHandler."""
-    if FastPathHandler is None:
-        # No fast path handler available — generate a simple greeting
-        intent = _get_intent(router_result)
-        if intent == "greet":
-            return QueryPipelineResult(
-                response="Hello! How can I help you with your documents today?",
-                route_taken="fast",
-                confidence=1.0,
-                grounded=False,
-                context_found=False,
-                metadata={"intent": intent, "fast_path": True},
-            )
-        return None
-
-    try:
-        handler = FastPathHandler()
-        result = handler.handle(query, router_result=router_result, profile_context=profile_intelligence)
-        return QueryPipelineResult(
-            response=result.get("response", ""),
-            route_taken="fast",
-            confidence=1.0,
-            grounded=False,
-            context_found=False,
-            metadata={"intent": _get_intent(router_result), "fast_path": True},
-        )
-    except Exception as exc:
-        logger.warning("FastPathHandler failed: %s", exc)
-        return None
 
 
 def _collect_sources(execution: ExecutionResult) -> List[Dict[str, Any]]:

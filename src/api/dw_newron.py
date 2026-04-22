@@ -2119,6 +2119,7 @@ class QdrantRetriever:
             conditions.append(FieldCondition(key="document_id", match=MatchAny(any=[str(d) for d in document_ids])))
         if source_files:
             values = [str(s) for s in source_files]
+            should.append(FieldCondition(key="source_name", match=MatchAny(any=values)))
             should.append(FieldCondition(key="source.name", match=MatchAny(any=values)))
             should.append(FieldCondition(key="source_file", match=MatchAny(any=values)))
         return Filter(must=conditions, should=should or None)

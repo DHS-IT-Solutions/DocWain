@@ -29,6 +29,7 @@ def _build_filter(
         should.append(FieldCondition(key="doc_type", match=MatchAny(any=values)))
     if filters.file_name_hints:
         values = filters.file_name_hints
+        should.append(FieldCondition(key="source_name", match=MatchAny(any=values)))
         should.append(FieldCondition(key="source.name", match=MatchAny(any=values)))
         should.append(FieldCondition(key="file_name", match=MatchAny(any=values)))
         should.append(FieldCondition(key="source_file", match=MatchAny(any=values)))
@@ -43,8 +44,8 @@ def _map_hit(hit: Any) -> Dict[str, Any]:
         "text": get_canonical_text(payload),
         "file_name": get_source_name(payload) or payload.get("file_name"),
         "section_title": payload.get("section_title") or "",
-        "page_start": payload.get("page_start"),
-        "page_end": payload.get("page_end"),
+        "page_start": payload.get("page") or payload.get("page_start"),
+        "page_end": payload.get("page") or payload.get("page_end"),
         "chunk_kind": payload.get("chunk_kind") or payload.get("chunk_type"),
     }
 

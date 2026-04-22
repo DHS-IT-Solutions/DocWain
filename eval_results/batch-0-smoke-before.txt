@@ -1,0 +1,25 @@
+Canary base_url=http://localhost:8000 profile=69e78d09... sub=67fde075...
+INTENT     OK  STATUS T(s)   REASON
+------------------------------------------------------------------------------------------
+greet      YES 200    7.96   pass
+           grounded=False ctx=False  head='Welcome to DocWain. I can help you with:  - **Search & Extract** — Find specific data, names, dates, amounts from your documents - **Compare & Analyze** — Side-'
+identity   YES 200    1.64   pass
+           grounded=False ctx=False  head="I'm DocWain, a document intelligence expert. I can search, extract, compare, rank, summarize, and analyze information across all the documents in your profile. "
+lookup     YES 200    8.40   pass
+           grounded=True ctx=True  head='**The invoice total on the most recent invoice is $1,641.75.**  This amount is derived from the following source:  - **SOURCE-6**: Invoice Number: 123456/22-A, '
+list       YES 200    15.47  pass
+           grounded=False ctx=True  head='**N items found:** 16  - **documents:** related to document name: 69e79440af9231725f583c57 - **documents:** related to document name: 69e78de0af9231725f583b9a -'
+count      YES 200    7.87   pass
+           grounded=False ctx=True  head='**You have 15 documents uploaded.**  Here is the breakdown:  | Document | Count | |----------|-------| | SOURCE-1 | 1 | | SOURCE-2 | 1 | | SOURCE-3 | 1 | | SOUR'
+extract    YES 200    8.42   pass
+           grounded=False ctx=True  head='## Line Items  | Description | Quantity | Unit Price | Amount | |-------------|----------|------------|--------| | Waterproof French overcoat | 1 | $995.00 | **'
+summarize  YES 200    8.98   pass
+           grounded=False ctx=True  head='# Most Recent Document Summary  ## Executive Summary The most recent document is **document 69e79440af9231725f583c85**, dated **2025-05-13**, containing informa'
+compare    YES 200    8.41   pass
+           grounded=False ctx=True  head='The two most recent documents differ primarily in their **date** and **organization**.  | Criteria | Document 1 | Document 2 | |----------|------------|--------'
+analyze    YES 200    22.31  pass
+           grounded=False ctx=True  head='**The data suggests mixed spending trends across different organizations and time periods.**  From the documents reviewed, the following details are relevant:  '
+timeline   YES 200    12.13  pass
+           grounded=True ctx=True  head='**The timeline of documents received is not explicitly provided in the documents.** Based on the information available, the documents referenced are from variou'
+------------------------------------------------------------------------------------------
+TOTAL: 10/10 passed

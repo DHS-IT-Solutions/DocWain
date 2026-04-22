@@ -17,7 +17,7 @@ async def test_extract_builds_correct_request():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain", timeout=30)
     client._client = mock_client
 
     result = await client.extract("Invoice total: $500", output_format="json", prompt=None)
@@ -25,7 +25,7 @@ async def test_extract_builds_correct_request():
     assert result == '{"tables": [["A", "B"], [1, 2]]}'
     call_args = mock_client.post.call_args
     body = call_args.kwargs["json"]
-    assert body["model"] == "docwain-fast"
+    assert body["model"] == "docwain"
     assert len(body["messages"]) == 2
     assert body["messages"][0]["role"] == "system"
     assert body["messages"][1]["role"] == "user"
@@ -46,7 +46,7 @@ async def test_extract_includes_user_prompt():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain", timeout=30)
     client._client = mock_client
 
     await client.extract("doc text", output_format="tables", prompt="focus on financial data")
@@ -71,7 +71,7 @@ async def test_analyze_builds_correct_request():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain", timeout=30)
     client._client = mock_client
 
     result = await client.analyze("contract text", analysis_type="risk_assessment", prompt=None)
@@ -96,7 +96,7 @@ async def test_analyze_with_custom_prompt():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain", timeout=30)
     client._client = mock_client
 
     await client.analyze("doc text", analysis_type="summary", prompt="focus on compliance")
@@ -120,7 +120,7 @@ async def test_strips_think_tags():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain", timeout=30)
     client._client = mock_client
 
     result = await client.extract("text", output_format="json", prompt=None)
@@ -138,7 +138,7 @@ async def test_health_check():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain", timeout=30)
     client._client = mock_client
 
     result = await client.health_check()
@@ -159,7 +159,7 @@ async def test_extract_image_sends_multimodal():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain", timeout=30)
     client._client = mock_client
 
     image_data_uri = "data:image/png;base64,iVBORw0KGgo="
@@ -180,7 +180,7 @@ async def test_health_check_failure():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
-    client = VLLMClient(base_url="http://test:8100/v1", model="docwain-fast", timeout=30)
+    client = VLLMClient(base_url="http://test:8100/v1", model="docwain", timeout=30)
     client._client = mock_client
 
     result = await client.health_check()
