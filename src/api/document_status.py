@@ -1034,3 +1034,98 @@ def normalize_error_fields(collection=None) -> Dict[str, Any]:
         updated += int(getattr(result, "modified_count", 0) or 0)
 
     return {"updated": updated, "paths": list(_ERROR_NULL_PATHS), "skipped": False}
+
+
+# ---------------------------------------------------------------------------
+# Control-plane profile helpers (SME synthesis gating).
+# ---------------------------------------------------------------------------
+_PROFILES_COLLECTION_NAME = "profiles"
+
+# Guards update_profile_record: MongoDB is control plane only, so only
+# these fields may be written via this path.
+_CP_ALLOWED_PROFILE_KEYS = frozenset(
+    {
+        "profile_domain",
+        "sme_synthesis_version",
+        "sme_last_input_hash",
+        "sme_redesign_enabled",
+        "sme_last_run_id",
+        "enable_sme_synthesis",
+        "enable_sme_retrieval",
+        "enable_kg_synthesized_edges",
+    }
+)
+
+
+def _profiles_collection():
+    """Return the Mongo profiles collection (control plane only)."""
+    from src.api.dataHandler import db
+    return db[_PROFILES_COLLECTION_NAME]
+
+
+def count_incomplete_docs_in_profile(
+    *, subscription_id: str, profile_id: str, exclude_document_id: str
+) -> int:
+    """Count docs in ``(subscription_id, profile_id)`` not yet at
+    ``TRAINING_COMPLETED``, excluding ``exclude_document_id``.
+
+    Used to gate last-doc-in-profile SME synthesis firing: when this count
+    hits zero the last document is the one whose embedding just finished,
+    so synthesis runs as the final training-stage step before
+    ``PIPELINE_TRAINING_COMPLETED`` flips.
+    """
+    collection = get_documents_collection()
+    if collection is None:
+        return 0
+    return int(
+        collection.count_documents(
+            {
+                "subscription_id": subscription_id,
+                "profile_id": profile_id,
+                "document_id": {"$ne": exclude_document_id},
+                "pipeline_status": {"$ne": "TRAINING_COMPLETED"},
+            }
+        )
+    )
+
+
+def get_profile_record(
+    subscription_id: str, profile_id: str
+) -> Optional[Dict[str, Any]]:
+    """Return the profile record or ``None`` if not present."""
+    collection = _profiles_collection()
+    if collection is None:
+        return None
+    return collection.find_one(
+        {"subscription_id": subscription_id, "profile_id": profile_id}
+    )
+
+
+def update_profile_record(
+    subscription_id: str, profile_id: str, updates: Dict[str, Any]
+) -> None:
+    """Merge control-plane fields onto the profile record.
+
+    Raises :class:`ValueError` when ``updates`` contains any key outside
+    :data:`_CP_ALLOWED_PROFILE_KEYS` — preserving the
+    "MongoDB = control plane only" invariant.
+
+    Writes are upserts so the first-time synthesis run creates the profile
+    record.
+    """
+    if not updates:
+        return
+    unknown = set(updates) - _CP_ALLOWED_PROFILE_KEYS
+    if unknown:
+        raise ValueError(
+            "update_profile_record: only control-plane keys allowed; "
+            f"got disallowed: {sorted(unknown)!r}"
+        )
+    collection = _profiles_collection()
+    if collection is None:
+        raise RuntimeError("profiles collection unavailable")
+    collection.update_one(
+        {"subscription_id": subscription_id, "profile_id": profile_id},
+        {"$set": dict(updates)},
+        upsert=True,
+    )
