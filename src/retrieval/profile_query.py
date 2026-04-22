@@ -20,6 +20,14 @@ def query_profile(
 ) -> Dict[str, Any]:
     logger.debug("query_profile: subscription_id=%s, profile_id=%s, top_k=%d", subscription_id, profile_id, top_k)
     profile_name = resolve_profile_name(subscription_id=subscription_id, profile_id=profile_id)
+    # Default to the unified DocWain model when the caller doesn't specify
+    # one. Without this, downstream route_with_ollama and
+    # generate_structured_answer short-circuit to the deterministic path
+    # (guard: "if not model_name and llm_client is None: return base"),
+    # bypassing both intent classification and LLM-generated answers.
+    if not model_name:
+        from src.api.config import Config
+        model_name = Config.VLLM.MODEL
     return run_query(
         subscription_id=subscription_id,
         profile_id=profile_id,
