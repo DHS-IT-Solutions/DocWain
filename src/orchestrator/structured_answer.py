@@ -193,7 +193,14 @@ def _list_items_from_evidence(graph: ProfileEvidenceGraph) -> List[Dict[str, Any
             items.append({"item": ident.value, "document_id": doc.document_id, "source_name": doc.source_name})
     return items
 
+_MAX_COMPARE_PAIRS = 6
+
+
 def _compare_documents(graph: ProfileEvidenceGraph) -> List[Dict[str, Any]]:
+    # Cap at _MAX_COMPARE_PAIRS pairs — the full O(n^2) list for a 12-doc
+    # profile produces 66 comparisons, which blows the LLM prompt budget
+    # and the user-facing response size. The first few pairs are the
+    # highest-signal anyway (most recently added docs).
     comparisons: List[Dict[str, Any]] = []
     doc_list = list(graph.documents.values())
     for idx, doc in enumerate(doc_list):
@@ -207,6 +214,8 @@ def _compare_documents(graph: ProfileEvidenceGraph) -> List[Dict[str, Any]]:
                     "notes": "Not Mentioned" if not (doc.identifiers or other.identifiers) else "See identifiers.",
                 }
             )
+            if len(comparisons) >= _MAX_COMPARE_PAIRS:
+                return comparisons
     return comparisons
 
 def _rank_documents(graph: ProfileEvidenceGraph) -> List[Dict[str, Any]]:
@@ -342,18 +351,30 @@ def _compact_items(items: Any) -> List[Any]:
     return [_compact_item(it) for it in capped]
 
 
+_MAX_SNIPPET_LEN = 180
+
+
 def _compact_item(item: Any) -> Any:
     if not isinstance(item, dict):
         return item
     out: Dict[str, Any] = {}
-    if item.get("value") is not None:
-        out["v"] = item["value"]
+    value = item.get("value")
+    if value is not None:
+        out["v"] = value
+    snippet = item.get("snippet")
+    # Snippets are the extracted surrounding text — essential for the LLM
+    # to actually answer queries like "What is the total?" / "Which invoice
+    # mentions X?". Without them the compact payload is just isolated
+    # tokens and the model has nothing to reason over. Truncated so the
+    # prompt stays under the 32K context budget.
+    if snippet and snippet != value:
+        out["snip"] = snippet[:_MAX_SNIPPET_LEN]
     p_start = item.get("page_start")
     p_end = item.get("page_end")
     if p_start is not None:
         out["p"] = str(p_start) if (p_end is None or p_end == p_start) else f"{p_start}-{p_end}"
     sec = item.get("section_title")
-    if sec and sec != item.get("value"):
+    if sec and sec != value:
         out["sec"] = sec[:_MAX_SECTION_TITLE_LEN]
     return out
 

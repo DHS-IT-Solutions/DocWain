@@ -77,13 +77,11 @@ def route(
         metrics_store().observe_ms("route_latency_ms", (time.perf_counter() - start) * 1000)
         return decision
 
-    decision = route_with_ollama(
-        query=query,
-        subscription_id=subscription_id,
-        profile_id=profile_id,
-        profile_name=profile_name,
-        model_name=model_name,
-    ) or fallback_decision(
+    # Skip the router LLM and use the heuristic fallback directly. The
+    # LLM router adds ~10s per query without changing the downstream
+    # answer-schema template selection (the "answer" NL path fires on
+    # any qa/summarize/rank/compute classification anyway).
+    decision = fallback_decision(
         query=query,
         subscription_id=subscription_id,
         profile_id=profile_id,
