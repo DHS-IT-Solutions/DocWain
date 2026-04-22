@@ -392,17 +392,56 @@ def _join_keys(doc: DocumentEvidence) -> set[str]:
     return keys
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+    """Extract the first JSON object from an LLM response.
+
+    DocWain's vLLM output is well-shaped JSON but frequently has:
+      * a trailing ``.`` the model appends after the closing ``}``,
+      * ``<think>...</think>`` blocks already stripped by vllm_manager
+        but occasionally leaking a lone ``<think>`` when output hit
+        max_tokens mid-reasoning,
+      * markdown code fences (```` ```json ... ``` ````) when the
+        model falls into "helpful" mode.
+    ``json.loads(text)`` rejects any of these with "Extra data" /
+    "Expecting value" — which used to send every LLM-enriched
+    response straight to the deterministic fallback.
+    """
     if not text:
         return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            return None
+
+    cleaned = text.strip()
+
+    # Strip ``` code fences (```json ... ``` or ``` ... ```)
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json|JSON)?\s*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
+
+    # Strip leaked <think> artefacts.
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
+    cleaned = cleaned.lstrip("<think>").strip()
+
+    # raw_decode returns the first valid JSON object and the index of
+    # where it ended — tolerates any trailing garbage (period, prose,
+    # another JSON block, etc.).
+    decoder = json.JSONDecoder()
+    # Try from the first ``{`` if there's text preceding.
+    first_brace = cleaned.find("{")
+    if first_brace != -1:
         try:
-            return json.loads(match.group(0))
+            obj, _ = decoder.raw_decode(cleaned[first_brace:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    # Final fallback: greedy ``{...}`` match.
+    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if match:
+        try:
+            obj = json.loads(match.group(0))
+            if isinstance(obj, dict):
+                return obj
         except json.JSONDecodeError:
             return None
+    return None
 
 __all__ = ["select_output_schema", "generate_structured_answer", "build_payload"]
