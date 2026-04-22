@@ -350,6 +350,8 @@ def embed_document(self, document_id: str, subscription_id: str,
                 screening_summary=screening_summary,
                 kg_node_ids=kg_node_ids if kg_ready else [],
                 quality_grade=grade,
+                source_name=source_filename,
+                doc_domain=str(record.get("doc_domain") or "generic"),
             )
             if contexts[idx]:
                 payload["chunk_context"] = contexts[idx]

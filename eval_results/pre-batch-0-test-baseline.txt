@@ -1,0 +1,15 @@
+ERROR tests/test_viz_finetune_loop.py
+ERROR tests/test_zero_source_fix.py
+ERROR tests/unit/extraction/test_v2_extractor.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 99 errors during collection !!!!!!!!!!!!!!!!!!!
+5443 tests collected, 99 errors in 61.32s (0:01:01)
+ERROR tests/test_v2_data_generator.py
+ERROR tests/test_verification.py
+ERROR tests/test_viz_finetune_loop.py
+ERROR tests/test_zero_source_fix.py
+ERROR tests/unit/extraction/test_v2_extractor.py
+ERROR tests/test_standalone_integration.py::test_templates_endpoint - ModuleN...
+ERROR tests/test_standalone_integration.py::test_process_endpoint - ModuleNot...
+ERROR tests/test_standalone_integration.py::test_extract_endpoint_requires_mode
+1470 failed, 3866 passed, 104 skipped, 58 warnings, 102 errors in 210.03s (0:03:30)
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

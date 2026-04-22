@@ -114,10 +114,12 @@ def _normalize_type(raw: Any) -> str:
 
 
 # JSON schema for vLLM guided_json. ``type`` is an open string — no enum.
+# No ``think`` field: it's pure latency tax (hundreds of tokens of reasoning
+# that never reaches the caller) and guided_json will emit it verbatim when
+# included in the schema.
 _V2_RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "think": {"type": "string"},
         "entities": {
             "type": "array",
             "items": {
@@ -173,8 +175,15 @@ _SYSTEM_PROMPT = (
     "protocol_version, etc., whatever fits the document)\n"
     "  - relationships: factual relations between entities\n"
     "  - confidence: overall score in [0, 1]\n\n"
+    "BE CONCISE. List each distinct entity exactly once — never repeat the "
+    "same text/type pair. Extract only content-bearing entities. Skip page "
+    "numbers, running headers/footers, boilerplate, and generic label words. "
+    "Prefer ``fields`` over entity duplication when the information is a "
+    "key-value fact (put vendor/total/date in fields, not as a separate "
+    "ORGANIZATION/MONEY/DATE entity too).\n\n"
     "Do not invent content not present in the provided text. Use exact "
-    "values from the text. Return a JSON object matching the schema.\n\n"
+    "values from the text. Omit any field not stated in the text rather "
+    "than guessing. Return a JSON object matching the schema.\n\n"
     "Entity type naming — use SCREAMING_SNAKE_CASE. These are common "
     "canonical types; use them when they fit:\n"
     "  PERSON ORGANIZATION LOCATION ADDRESS CITY COUNTRY POSTAL_CODE\n"
@@ -212,7 +221,6 @@ def _build_user_prompt(
 
 def _default_empty_result(confidence: float = 0.0) -> Dict[str, Any]:
     return {
-        "think": "",
         "entities": [],
         "tables": [],
         "fields": {},
@@ -221,11 +229,81 @@ def _default_empty_result(confidence: float = 0.0) -> Dict[str, Any]:
     }
 
 
+def _repair_truncated_json(candidate: str) -> Optional[str]:
+    """Best-effort close for JSON truncated by max_tokens.
+
+    When the model hits ``max_tokens`` mid-array the output looks like::
+
+        {"entities": [{"text":"a","type":"X"}, {"text":"b","type
+
+    ``json.loads`` dies with ``Expecting ',' delimiter`` partway through.
+    Re-running the 90-second call just to get a tidy closing brace is a
+    non-starter, so we walk the string once, track structural depth, and
+    remember the position of the last ``}``/``]`` that closed something
+    at depth >= 1 (i.e. ended an inner element of an outer container).
+
+    On truncation we slice to that position and append the closing
+    characters needed to balance what's still open. That lets us keep
+    the entities/fields that did make it out rather than discarding the
+    whole response.
+    """
+    stack: List[str] = []
+    in_string = False
+    escape = False
+    last_inner_close = -1
+    stack_at_last: List[str] = []
+
+    for i, ch in enumerate(candidate):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if in_string:
+            if ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch == "}":
+            if not stack or stack[-1] != "{":
+                return None  # unbalanced — not a shape we can repair
+            stack.pop()
+            if stack:
+                last_inner_close = i
+                stack_at_last = list(stack)
+        elif ch == "]":
+            if not stack or stack[-1] != "[":
+                return None
+            stack.pop()
+            if stack:
+                last_inner_close = i
+                stack_at_last = list(stack)
+
+    if not stack:
+        return candidate  # already balanced — caller will parse cleanly
+    if last_inner_close < 0:
+        return None  # nothing safe to keep
+
+    head = candidate[: last_inner_close + 1].rstrip().rstrip(",")
+    closers = "".join(
+        "}" if c == "{" else "]" for c in reversed(stack_at_last)
+    )
+    return head + closers
+
+
 def _parse_response(raw_text: str) -> Dict[str, Any]:
     """Parse the model's JSON response defensively.
 
-    vLLM guided_json should give us valid JSON, but we still handle the
-    "wrapped in fences / extra prose" case from any fallback backend.
+    vLLM guided_json should give us valid JSON, but when generation is
+    cut off by ``max_tokens`` the output is a truncated prefix. Instead
+    of retrying the whole 90-second generation we attempt a one-shot
+    repair (closing unbalanced braces/brackets at the last safe point)
+    and only fall back to an empty result if that also fails.
     """
     if not raw_text or not raw_text.strip():
         return _default_empty_result(confidence=0.0)
@@ -243,30 +321,55 @@ def _parse_response(raw_text: str) -> Dict[str, Any]:
     # find the outermost JSON object
     start = candidate.find("{")
     end = candidate.rfind("}")
-    if start == -1 or end == -1 or end < start:
+    if start == -1:
         logger.warning("V2: model output contained no JSON object")
         return _default_empty_result(confidence=0.3)
+    body = candidate[start: end + 1] if end > start else candidate[start:]
 
+    parsed: Optional[Dict[str, Any]] = None
     try:
-        parsed = json.loads(candidate[start: end + 1])
+        parsed = json.loads(body)
     except json.JSONDecodeError as exc:
-        logger.warning("V2: JSON decode failed: %s", exc)
-        return _default_empty_result(confidence=0.3)
+        repaired = _repair_truncated_json(body)
+        if repaired:
+            try:
+                parsed = json.loads(repaired)
+                logger.info(
+                    "V2: JSON repaired from %d→%d chars (was %s)",
+                    len(body), len(repaired), exc.msg,
+                )
+            except json.JSONDecodeError as exc2:
+                logger.warning(
+                    "V2: JSON repair still invalid: %s (original: %s)",
+                    exc2, exc,
+                )
+        if parsed is None:
+            logger.warning("V2: JSON decode failed, unrepairable: %s", exc)
+            return _default_empty_result(confidence=0.3)
 
     # Normalise entities to the shape the merger's Entity dataclass expects
     # (text / type / confidence). Entity ``type`` is also normalised via the
     # alias table so common drift variants (ORG/ORGANISATION, POSTCODE, etc.)
     # collapse to canonical labels, while domain-specific types pass through.
+    # De-dup on (text, type) so a model that still lists the same entity
+    # twice despite the prompt guidance doesn't double-bill downstream
+    # consumers (KG, UI entity counts).
     entities = []
+    seen: set = set()
     for e in (parsed.get("entities") or []):
         if not isinstance(e, dict):
             continue
         text = str(e.get("text") or e.get("name") or e.get("value") or "").strip()
         if not text:
             continue
+        etype = _normalize_type(e.get("type"))
+        key = (text.lower(), etype)
+        if key in seen:
+            continue
+        seen.add(key)
         entities.append({
             "text": text,
-            "type": _normalize_type(e.get("type")),
+            "type": etype,
             "confidence": float(e.get("confidence", 0.8) or 0.0),
         })
 
@@ -285,7 +388,6 @@ def _parse_response(raw_text: str) -> Dict[str, Any]:
         })
 
     return {
-        "think": parsed.get("think", "") or "",
         "entities": entities,
         "tables": list(parsed.get("tables") or []),
         "fields": dict(parsed.get("fields") or {}),
@@ -363,9 +465,11 @@ class V2Extractor:
     ) -> Dict[str, Any]:
         """Run V2 semantic extraction over the deterministic text.
 
-        Returns a dict with keys: think, entities, tables, fields,
-        relationships, confidence. The shape matches the previous Ollama
-        implementation so ``ExtractionEngine`` / merger don't need changes.
+        Returns a dict with keys: entities, tables, fields, relationships,
+        confidence. The shape matches what ``ExtractionEngine`` / merger
+        expect; callers that relied on a ``think`` field should reference
+        ``extraction_confidence`` or the merger's ``understanding`` payload
+        instead.
         """
         text = (text_content or "").strip()
         if not text:
@@ -386,66 +490,44 @@ class V2Extractor:
             file_type=file_type,
         )
 
-        # Dynamically size max_tokens so dense documents don't get truncated
-        # mid-JSON. JSON output on structured docs (invoices, quotes, POs)
-        # can easily be 2-4x the input character size once every line item
-        # becomes a typed entity with confidence, every key becomes a field
-        # entry, and relationships are enumerated. Observed worst case to
-        # date: 1212ch input -> 11397ch JSON (~3800 output tokens at ~3
-        # chars/token for JSON). We give generous headroom with a floor
-        # that covers the worst observed case for short table-heavy docs,
-        # and scale up for longer inputs.
-        estimated_output_tokens = int(len(text) * 0.8)  # chars_out / chars_per_token
-        max_tokens = max(8192, min(16384, estimated_output_tokens + 2048))
+        # Size max_tokens proportional to input. The JSON encoding of a
+        # well-structured extraction (entities + fields + relationships +
+        # wrapping syntax) runs about 3x the input char count, which
+        # translates to ~output_chars/3 tokens for JSON. Floor 1024 covers
+        # tiny table-heavy docs; ceiling 6144 covers realistic long docs
+        # without inviting runaway generation.
+        #
+        # The earlier 8192-floor setting was the root cause of minute-long
+        # extractions: on short inputs the model would fill the budget with
+        # duplicated entities and verbose "think" text, and — worse — often
+        # hit the ceiling mid-JSON and produce corrupt output. Keep this
+        # proportional sizing in lockstep with the "be concise" prompt
+        # guidance above; loosening one without the other reintroduces the
+        # runaway-generation pathology.
+        max_tokens = max(1024, min(6144, int(len(text) * 3)))
 
         manager = self._get_manager()
 
-        # Generate, then — if the response has 0 entities but the input is
-        # non-trivial — retry once with slightly higher temperature. vLLM
-        # under guided_json occasionally emits minimal-valid JSON (empty
-        # arrays) for reasons that aren't parse failures. The retry catches
-        # that class of variance before it reaches downstream KG ingest.
-        def _generate(temperature: float) -> Dict[str, Any]:
-            try:
-                raw_text = manager.query(
-                    prompt=user_prompt,
-                    system_prompt=_SYSTEM_PROMPT,
-                    guided_json=_V2_RESPONSE_SCHEMA,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    require_vllm=True,  # impact #7 — no Ollama fallback on extraction
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.error("V2: vLLM query failed: %s", exc)
-                return _default_empty_result(confidence=0.0)
-            return _parse_response(raw_text)
-
-        result = _generate(temperature=0.05)
-
-        should_retry = (
-            len(result["entities"]) == 0
-            and len(result["fields"]) == 0
-            and len(text) > 500  # non-trivial input that should yield something
-        )
-        if should_retry:
-            logger.warning(
-                "V2: empty result on non-trivial text (%dch); retrying once with T=0.15",
-                len(text),
+        try:
+            raw_text = manager.query(
+                prompt=user_prompt,
+                system_prompt=_SYSTEM_PROMPT,
+                guided_json=_V2_RESPONSE_SCHEMA,
+                max_tokens=max_tokens,
+                temperature=0.05,
+                require_vllm=True,  # unified DocWain model, no Ollama fallback
             )
-            retry_result = _generate(temperature=0.15)
-            # Accept the retry only if it's better than the original
-            if len(retry_result["entities"]) + len(retry_result["fields"]) > 0:
-                result = retry_result
-                logger.info(
-                    "V2: retry produced entities=%d fields=%d",
-                    len(result["entities"]), len(result["fields"]),
-                )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("V2: vLLM query failed: %s", exc)
+            return _default_empty_result(confidence=0.0)
+
+        result = _parse_response(raw_text)
 
         logger.info(
-            "V2 extraction complete — fmt=%s doc_type=%s entities=%d tables=%d confidence=%.2f",
+            "V2 extraction complete — fmt=%s doc_type=%s entities=%d tables=%d confidence=%.2f max_tokens=%d",
             file_type, doc_type,
             len(result["entities"]), len(result["tables"]),
-            result["confidence"],
+            result["confidence"], max_tokens,
         )
         return result
 

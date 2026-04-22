@@ -1,4 +1,4 @@
-"""LLM-based intent classification for the unified DocWain serving layer.
+"""LLM-based intent classification for the DocWain serving layer.
 
 Historical context: this module used to route between a 14B "fast" and 27B
 "smart" vLLM instance. DocWain is now a single unified model; the classifier

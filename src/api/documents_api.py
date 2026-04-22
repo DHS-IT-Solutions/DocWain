@@ -2,7 +2,7 @@ import asyncio
 import json
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -72,42 +72,83 @@ def get_documents(
 
 
 @documents_router.post("/documents/embed")
-def embed_document(request: DocumentEmbedRequest = Body(...)):
-    try:
-        result = embed_documents(
-            document_id=request.document_id,
-            document_ids=request.document_ids,
-            subscription_id=request.subscription_id,
-            profile_id=request.profile_id,
-            doc_type=request.doc_type,
-            max_blobs=request.max_blobs,
+def embed_document(
+    request: DocumentEmbedRequest = Body(...),
+    background_tasks: BackgroundTasks = None,
+):
+    """Queue embedding for the requested document(s).
+
+    Previously this endpoint ran ``embed_documents()`` synchronously in the
+    request thread — each document takes 15–60s (chunking, LLM embedding,
+    Qdrant writes, MongoDB updates), so batch calls commonly exceeded 60s
+    and tripped Node-side fetch timeouts even though the work eventually
+    completed.
+
+    New behaviour: resolve the target document_ids, dispatch one Celery
+    ``embed_document`` task per doc on the embedding queue, and return
+    ``QUEUED`` immediately. Callers that still need the blocking semantics
+    (e.g. internal health checks or ingestion scripts) should call
+    ``src.api.embedding_service.embed_documents()`` directly.
+    """
+    # Resolve target doc ids
+    doc_ids: List[str] = []
+    if request.document_ids:
+        doc_ids.extend(str(d) for d in request.document_ids if d)
+    if request.document_id:
+        doc_ids.append(str(request.document_id))
+    doc_ids = list(dict.fromkeys(doc_ids))  # de-dup preserving order
+    if not doc_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "missing_ids",
+                               "message": "document_id or document_ids is required"}},
         )
-        sanitized = sanitize_user_payload(result)
-        if request.document_id and not request.document_ids:
-            documents = sanitized.get("documents") or []
-            if documents:
-                doc_result = documents[0]
-                if doc_result.get("failed_reason") == "extraction_or_chunking_failed":
-                    diagnostics = doc_result.get("diagnostics") or {}
-                    raise HTTPException(
-                        status_code=422,
-                        detail={
-                            "status": STATUS_EXTRACTION_OR_CHUNKING_FAILED,
-                            "document_id": doc_result.get("document_id"),
-                            "error": {
-                                "code": "extraction_or_chunking_failed",
-                                "message": doc_result.get("error_message") or "chunking failed",
-                            },
-                            "diagnostics": diagnostics,
-                        },
-                    )
-        return sanitized
-    except HTTPException:
-        raise
-    except BlobConfigurationError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Resolve sub/profile per doc (fall back to request overrides)
+    from src.tasks.embedding import embed_document as embed_task
+    queued: List[dict] = []
+    rejected: List[dict] = []
+    for doc_id in doc_ids:
+        rec = get_document_record(doc_id) or {}
+        sub = str(
+            rec.get("subscription_id") or rec.get("subscription")
+            or request.subscription_id or ""
+        )
+        prof = str(
+            rec.get("profile_id") or rec.get("profile")
+            or request.profile_id or ""
+        )
+        if not sub or not prof:
+            rejected.append({"document_id": doc_id,
+                             "reason": "missing_subscription_or_profile"})
+            continue
+        queued.append({"document_id": doc_id, "sub": sub, "prof": prof})
+
+    def _fan_out_embedding(items: List[dict]) -> None:
+        for item in items:
+            try:
+                embed_task.delay(item["document_id"], item["sub"], item["prof"])
+            except Exception as exc:  # noqa: BLE001
+                # Don't raise from background — just log.
+                import logging
+                logging.getLogger(__name__).error(
+                    "Embedding dispatch failed for %s: %s",
+                    item["document_id"], exc, exc_info=True,
+                )
+
+    if background_tasks is not None and queued:
+        background_tasks.add_task(_fan_out_embedding, queued)
+    elif queued:
+        _fan_out_embedding(queued)
+
+    return {
+        "status": "queued" if queued and not rejected else ("partial" if queued else "failed"),
+        "count": len(queued),
+        "documents": [{"document_id": q["document_id"], "status": "EMBEDDING_IN_PROGRESS"}
+                      for q in queued],
+        "rejected": rejected,
+        "message": f"Queued {len(queued)} embedding task(s), {len(rejected)} rejected",
+    }
 
 
 @documents_router.post("/documents/embed/report")

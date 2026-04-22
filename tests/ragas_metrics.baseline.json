@@ -1,0 +1,756 @@
+{
+  "timestamp": "2026-04-17T09:16:03",
+  "source": "/tmp/intensive_test_results.json",
+  "total_queries": 106,
+  "aggregate": {
+    "answer_faithfulness": 0.519,
+    "hallucination_rate": 0.0,
+    "context_recall": 0.84,
+    "grounding_bypass_rate": 0.0
+  },
+  "thresholds": {
+    "answer_faithfulness_target": 0.85,
+    "hallucination_rate_target": 0.05,
+    "context_recall_target": 0.8,
+    "grounding_bypass_rate_target": 0.02
+  },
+  "pass": false,
+  "low_faithfulness": [
+    {
+      "id": "HR-01",
+      "grade": "D",
+      "faithfulness": 0.25,
+      "context_recall": 0.5
+    },
+    {
+      "id": "HR-15",
+      "grade": "C",
+      "faithfulness": 0.25,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-18",
+      "grade": "F",
+      "faithfulness": 0.25,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CTR-08",
+      "grade": "D",
+      "faithfulness": 0.25,
+      "context_recall": 0.5
+    },
+    {
+      "id": "GEN-03",
+      "grade": "C",
+      "faithfulness": 0.25,
+      "context_recall": 1.0
+    },
+    {
+      "id": "TRANS-02",
+      "grade": "F",
+      "faithfulness": 0.25,
+      "context_recall": 0.0
+    }
+  ],
+  "low_context_recall": [
+    {
+      "id": "HR-06",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "HR-13",
+      "grade": "D",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "HR-18",
+      "grade": "F",
+      "faithfulness": 0.25,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CTR-02",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CTR-07",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CTR-09",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "LAW-03",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "LAW-09",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "REC-04",
+      "grade": "D",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "TRANS-02",
+      "grade": "F",
+      "faithfulness": 0.25,
+      "context_recall": 0.0
+    }
+  ],
+  "per_result": [
+    {
+      "id": "HR-01",
+      "grade": "D",
+      "faithfulness": 0.25,
+      "context_recall": 0.5
+    },
+    {
+      "id": "HR-02",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-03",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-04",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-05",
+      "grade": "A",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-06",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "HR-07",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-08",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-09",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-10",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-11",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-12",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-13",
+      "grade": "D",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "HR-14",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-15",
+      "grade": "C",
+      "faithfulness": 0.25,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-16",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-17",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "HR-18",
+      "grade": "F",
+      "faithfulness": 0.25,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CTR-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 0.5
+    },
+    {
+      "id": "CTR-02",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CTR-03",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CTR-04",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CTR-05",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CTR-06",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CTR-07",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CTR-08",
+      "grade": "D",
+      "faithfulness": 0.25,
+      "context_recall": 0.5
+    },
+    {
+      "id": "CTR-09",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CTR-10",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CTR-11",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CTR-12",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EMAIL-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EMAIL-02",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EMAIL-03",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "GEN-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "GEN-02",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "GEN-03",
+      "grade": "C",
+      "faithfulness": 0.25,
+      "context_recall": 1.0
+    },
+    {
+      "id": "DISC-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "DISC-02",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "DISC-03",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "DISC-04",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "WEB-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "WEB-02",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EDGE-01",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EDGE-02",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EDGE-03",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EDGE-04",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EDGE-05",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 0.5
+    },
+    {
+      "id": "CGEN-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CGEN-02",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CGEN-03",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CGEN-04",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CGEN-05",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CGEN-06",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CGEN-07",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CGEN-08",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "REASON-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "REASON-02",
+      "grade": "C",
+      "faithfulness": 0.5,
+      "context_recall": 0.5
+    },
+    {
+      "id": "REASON-03",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "REASON-04",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "REASON-05",
+      "grade": "A",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "REASON-06",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CROSS-01",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CROSS-02",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CROSS-03",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CROSS-04",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CROSS-05",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "LAW-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "LAW-02",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 0.5
+    },
+    {
+      "id": "LAW-03",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "LAW-04",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "LAW-05",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "LAW-06",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "LAW-07",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "LAW-08",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "LAW-09",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "LAW-10",
+      "grade": "C",
+      "faithfulness": 0.5,
+      "context_recall": 0.5
+    },
+    {
+      "id": "REC-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "REC-02",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "REC-03",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "REC-04",
+      "grade": "D",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "REC-05",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "SCREEN-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "SCREEN-02",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "SCREEN-03",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "TRANS-01",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "TRANS-02",
+      "grade": "F",
+      "faithfulness": 0.25,
+      "context_recall": 0.0
+    },
+    {
+      "id": "TRANS-03",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EXTRACT-01",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EXTRACT-02",
+      "grade": "F",
+      "faithfulness": 0.5,
+      "context_recall": 0.0
+    },
+    {
+      "id": "EXTRACT-03",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EXTRACT-04",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "EXTRACT-05",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CONV-01",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CONV-02",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 0.5
+    },
+    {
+      "id": "CONV-03",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CONV-04",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 0.5
+    },
+    {
+      "id": "CS-01",
+      "grade": "B",
+      "faithfulness": 0.75,
+      "context_recall": 0.5
+    },
+    {
+      "id": "CS-02",
+      "grade": "A",
+      "faithfulness": 0.75,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CS-03",
+      "grade": "F",
+      "faithfulness": 0.75,
+      "context_recall": 0.0
+    },
+    {
+      "id": "CS-04",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "CS-05",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "VIZ-01",
+      "grade": "A",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "VIZ-02",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "VIZ-03",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "VIZ-04",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    },
+    {
+      "id": "VIZ-05",
+      "grade": "B",
+      "faithfulness": 0.5,
+      "context_recall": 1.0
+    }
+  ]
+}

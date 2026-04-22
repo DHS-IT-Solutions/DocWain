@@ -473,7 +473,7 @@ async def get_document_status(document_id: str):
 
     return {
         "document_id": record.get("document_id"),
-        "pipeline_status": record.get("pipeline_status"),
+        "status": record.get("status"),
         "extraction": {
             "status": record.get("extraction", {}).get("status"),
             "summary": record.get("extraction", {}).get("summary"),
@@ -528,21 +528,18 @@ async def trigger_screening(document_id: str):
     if not record:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Accept either new pipeline_status or legacy status field
-    pipeline_status = record.get("pipeline_status", "")
-    legacy_status = record.get("status", "")
+    # Single-column status: read status only (per operator directive).
+    current_status = record.get("status", "")
     extraction_stage = record.get("extraction", {}).get("status", "")
     extraction_done = (
-        pipeline_status == PIPELINE_EXTRACTION_COMPLETED
-        or legacy_status == "EXTRACTION_COMPLETED"
+        current_status == PIPELINE_EXTRACTION_COMPLETED
         or extraction_stage == "COMPLETED"
     )
     if not extraction_done:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot screen: extraction not complete "
-                   f"(pipeline_status={pipeline_status}, status={legacy_status}, "
-                   f"extraction.status={extraction_stage})"
+                   f"(status={current_status}, extraction.status={extraction_stage})"
         )
 
     subscription_id = record["subscription_id"]
@@ -603,20 +600,18 @@ async def trigger_embedding(document_id: str):
     if not record:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Accept either new pipeline_status or legacy status field
-    pipeline_status = record.get("pipeline_status", "")
-    legacy_status = record.get("status", "")
+    # Single-column status: read status only.
+    current_status = record.get("status", "")
     screening_stage = record.get("screening", {}).get("status", "")
     screening_done = (
-        pipeline_status == PIPELINE_SCREENING_COMPLETED
-        or legacy_status == "SCREENING_COMPLETED"
+        current_status == PIPELINE_SCREENING_COMPLETED
         or screening_stage == "COMPLETED"
     )
     if not screening_done:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot embed: screening not complete "
-                   f"(pipeline_status={pipeline_status}, screening.status={screening_stage})"
+                   f"(status={current_status}, screening.status={screening_stage})"
         )
 
     subscription_id = record["subscription_id"]

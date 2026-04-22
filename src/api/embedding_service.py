@@ -490,22 +490,28 @@ def _fetch_document_ids_by_filters(
 
     filters: List[Dict[str, Any]] = [{"status": {"$in": [STATUS_SCREENING_COMPLETED]}}]
     if subscription_id:
+        sub_forms: List[Any] = [str(subscription_id)]
+        if ObjectId is not None and ObjectId.is_valid(str(subscription_id)):
+            sub_forms.append(ObjectId(str(subscription_id)))
         filters.append(
             {
                 "$or": [
-                    {"subscriptionId": subscription_id},
-                    {"subscription_id": subscription_id},
-                    {"subscription": subscription_id},
+                    {"subscriptionId":  {"$in": sub_forms}},
+                    {"subscription_id": {"$in": sub_forms}},
+                    {"subscription":    {"$in": sub_forms}},
                 ]
             }
         )
     if profile_id:
+        prof_forms: List[Any] = [str(profile_id)]
+        if ObjectId is not None and ObjectId.is_valid(str(profile_id)):
+            prof_forms.append(ObjectId(str(profile_id)))
         filters.append(
             {
                 "$or": [
-                    {"profileId": profile_id},
-                    {"profile_id": profile_id},
-                    {"profile": profile_id},
+                    {"profileId":  {"$in": prof_forms}},
+                    {"profile_id": {"$in": prof_forms}},
+                    {"profile":    {"$in": prof_forms}},
                 ]
             }
         )
@@ -541,22 +547,28 @@ def _fetch_document_ids_for_integrity(
     ]
     filters: List[Dict[str, Any]] = [{"status": {"$in": eligible_statuses}}]
     if subscription_id:
+        sub_forms: List[Any] = [str(subscription_id)]
+        if ObjectId is not None and ObjectId.is_valid(str(subscription_id)):
+            sub_forms.append(ObjectId(str(subscription_id)))
         filters.append(
             {
                 "$or": [
-                    {"subscriptionId": subscription_id},
-                    {"subscription_id": subscription_id},
-                    {"subscription": subscription_id},
+                    {"subscriptionId":  {"$in": sub_forms}},
+                    {"subscription_id": {"$in": sub_forms}},
+                    {"subscription":    {"$in": sub_forms}},
                 ]
             }
         )
     if profile_id:
+        prof_forms: List[Any] = [str(profile_id)]
+        if ObjectId is not None and ObjectId.is_valid(str(profile_id)):
+            prof_forms.append(ObjectId(str(profile_id)))
         filters.append(
             {
                 "$or": [
-                    {"profileId": profile_id},
-                    {"profile_id": profile_id},
-                    {"profile": profile_id},
+                    {"profileId":  {"$in": prof_forms}},
+                    {"profile_id": {"$in": prof_forms}},
+                    {"profile":    {"$in": prof_forms}},
                 ]
             }
         )

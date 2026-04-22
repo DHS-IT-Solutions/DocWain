@@ -8,6 +8,11 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Sequence, Union
 
+try:
+    from bson import ObjectId
+except Exception:  # noqa: BLE001
+    ObjectId = None  # type: ignore[assignment]
+
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field, conint, constr, field_validator
 from pymongo import UpdateOne
@@ -666,15 +671,23 @@ def run_screening(
     overall_status = "success"
 
     for profile_id in request.profile_ids:
+        prof_forms: List[Any] = [str(profile_id)]
+        if ObjectId is not None and ObjectId.is_valid(str(profile_id)):
+            prof_forms.append(ObjectId(str(profile_id)))
         query = {
             "$and": [
-                {"$or": [{"profile": profile_id}, {"profile_id": profile_id}, {"profileId": profile_id}]},
+                {"$or": [
+                    {"profile":    {"$in": prof_forms}},
+                    {"profile_id": {"$in": prof_forms}},
+                    {"profileId":  {"$in": prof_forms}},
+                ]},
                 {"status": STATUS_EXTRACTION_COMPLETED},
             ]
         }
         cursor = collection.find(
             query,
-            projection={"_id": 1, "subscription_id": 1, "profile_id": 1, "name": 1},
+            projection={"_id": 1, "subscription_id": 1, "subscription": 1,
+                        "profile_id": 1, "profile": 1, "name": 1},
         )
         if request.max_docs_per_profile:
             cursor = cursor.limit(int(request.max_docs_per_profile))
@@ -698,8 +711,8 @@ def run_screening(
             doc_id = _extract_doc_id(doc)
             if not doc_id:
                 continue
-            sub = str(doc.get("subscription_id") or "")
-            prof = str(doc.get("profile_id") or profile_id)
+            sub = str(doc.get("subscription_id") or doc.get("subscription") or "")
+            prof = str(doc.get("profile_id") or doc.get("profile") or profile_id)
             if not sub:
                 dispatch_failed += 1
                 continue

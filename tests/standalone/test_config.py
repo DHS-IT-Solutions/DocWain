@@ -21,7 +21,7 @@ def test_config_defaults():
 
         assert Config.PORT == 8400
         assert Config.VLLM_BASE_URL == "http://localhost:8100/v1"
-        assert Config.VLLM_MODEL_NAME == "docwain-fast"
+        assert Config.VLLM_MODEL_NAME == "docwain"
         assert Config.VLLM_TIMEOUT == 120
         assert Config.MONGODB_URI == "mongodb://localhost:27017"
         assert Config.MONGODB_DB == "docwain_standalone"

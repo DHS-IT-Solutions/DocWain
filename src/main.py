@@ -1217,11 +1217,11 @@ def trigger_extraction(
     ``subscription_id`` is provided (and not the sentinel "default"), the
     search is scoped to that subscription.
 
-    Responds immediately with the Mongo query result (doc list) and
-    enqueues the Celery .delay() calls via a FastAPI BackgroundTask. This
-    keeps the HTTP response well under Node-side fetch timeouts (Azure
-    Redis .delay() roundtrips serialize to ~500ms each, so N docs can push
-    the synchronous path past 5s on even small batches).
+    The endpoint returns immediately after the Mongo eligibility query.
+    The ``extract_document.delay()`` fan-out runs in a FastAPI background
+    task so that N calls to remote Azure Redis don't block the HTTP
+    response — critical because Node frontends often have fetch timeouts
+    well under the 1-2s/call the remote broker takes under load.
     """
     from src.tasks.extraction import extract_document
     from src.api.document_status import get_documents_collection
@@ -1259,10 +1259,9 @@ def trigger_extraction(
             "documents": [],
         }
 
-    # Build the response-visible list synchronously — no Celery roundtrips here.
     pending: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
-    eligible_for_dispatch: List[tuple[str, str, str]] = []  # (doc_id, sub, prof)
+    eligible: List[tuple] = []   # (doc_id, sub, prof) for background dispatch
     for d in docs:
         doc_id = str(d["_id"])
         sub = str(d.get("subscription_id") or d.get("subscription") or "")
@@ -1274,27 +1273,27 @@ def trigger_extraction(
                 "reason": "missing_subscription_or_profile",
             })
             continue
-        eligible_for_dispatch.append((doc_id, sub, prof))
+        eligible.append((doc_id, sub, prof))
         pending.append({
             "document_id": doc_id,
             "name": d.get("name", ""),
             "status": "QUEUED",
         })
 
-    def _async_dispatch(items: List[tuple[str, str, str]]) -> None:
-        """Fan out Celery .delay() calls off the request path."""
+    def _fan_out_delays(items: List[tuple]) -> None:
         for doc_id, sub, prof in items:
             try:
                 extract_document.delay(doc_id, sub, prof)
             except Exception as exc:  # noqa: BLE001
-                logging.error("Dispatch failed for doc %s: %s", doc_id, exc, exc_info=True)
+                logging.error(
+                    "Dispatch failed for doc %s: %s", doc_id, exc, exc_info=True
+                )
 
-    if background_tasks is not None and eligible_for_dispatch:
-        background_tasks.add_task(_async_dispatch, eligible_for_dispatch)
-    elif eligible_for_dispatch:
-        # Fallback: fire synchronously if DI didn't inject (shouldn't happen
-        # in FastAPI routes, but keep behavior correct for direct callers).
-        _async_dispatch(eligible_for_dispatch)
+    if background_tasks is not None and eligible:
+        background_tasks.add_task(_fan_out_delays, eligible)
+    elif eligible:
+        # Direct callers without DI (shouldn't happen via FastAPI routing)
+        _fan_out_delays(eligible)
 
     return {
         "status": "queued" if pending and not failed else ("partial" if pending else "failed"),

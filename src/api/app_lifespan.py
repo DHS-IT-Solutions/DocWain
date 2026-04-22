@@ -45,12 +45,13 @@ def initialize_app_state(app: FastAPI) -> AppState:
 
     embedding_model = None
     cross_encoder = None
+    sparse_encoder = None
     qdrant_client = None
     redis_client = None
     ollama_client = None
     rag_system = None
 
-    # Load embedding model + cross-encoder in parallel (they're CPU-bound and independent)
+    # Load embedding model + cross-encoder + sparse-encoder in parallel (CPU-bound, independent)
     def _load_embedding():
         nonlocal embedding_model
         try:
@@ -65,10 +66,20 @@ def initialize_app_state(app: FastAPI) -> AppState:
         except Exception as exc:  # noqa: BLE001
             logger.error("Reranker init failed: %s", exc)
 
+    def _load_sparse_encoder():
+        nonlocal sparse_encoder
+        try:
+            from src.embedding.sparse import SparseEncoder
+            sparse_encoder = SparseEncoder()  # lazy — model loads on first encode()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("SparseEncoder init failed: %s", exc)
+
     t_embed = threading.Thread(target=_load_embedding, daemon=True)
     t_rerank = threading.Thread(target=_load_cross_encoder, daemon=True)
+    t_sparse = threading.Thread(target=_load_sparse_encoder, daemon=True)
     t_embed.start()
     t_rerank.start()
+    t_sparse.start()
 
     # While models load, initialize clients (I/O bound, fast)
     try:
@@ -83,6 +94,7 @@ def initialize_app_state(app: FastAPI) -> AppState:
     # Wait for model loading to finish
     t_embed.join()
     t_rerank.join()
+    t_sparse.join()
     if redis_client and getattr(Config.Redis, "CLEAR_UNSAFE_ON_STARTUP", False):
         try:
             from src.utils.redis_startup import clear_unsafe_keys, parse_unsafe_patterns
@@ -232,6 +244,7 @@ def initialize_app_state(app: FastAPI) -> AppState:
         multi_agent_gateway=multi_agent_gateway,
         graph_augmenter=graph_augmenter,
         vllm_manager=vllm_manager,
+        sparse_encoder=sparse_encoder,
         qdrant_index_status=_bootstrap_qdrant_indexes(qdrant_client) if qdrant_client else {"__all__": {"status": "unhealthy", "error": "qdrant_unavailable"}},
     )
     register_instance_ids(state)
@@ -500,4 +513,28 @@ async def lifespan(app: FastAPI):
         logger.debug("Failed to stop background analyzer worker during shutdown", exc_info=True)
     logger.info("DocWain API shutting down")
 
-__all__ = ["initialize_app_state", "lifespan"]
+def get_clients_for_smoke():
+    """Build a minimal clients dict for the Batch-0 smoke test.
+
+    Called only by tests/batch0/test_canned_queries_smoke.py; reads from
+    the live app's AppState singleton. Falls back to None for anything
+    not available in the smoke environment.
+    """
+    from src.api.rag_state import get_app_state
+
+    clients = {}
+    try:
+        state = get_app_state()
+        if state:
+            clients["vllm_manager"] = getattr(state, "vllm_manager", None)
+            clients["llm_gateway"] = getattr(state, "llm_gateway", None)
+            clients["qdrant_client"] = getattr(state, "qdrant_client", None)
+            clients["neo4j_driver"] = None  # KG not required for basic smoke tests
+            clients["mongo_db"] = None  # MongoDB accessed via dataHandler, not needed here
+            clients["embedder"] = getattr(state, "embedding_model", None)
+    except Exception:
+        pass
+    return clients
+
+
+__all__ = ["initialize_app_state", "lifespan", "get_clients_for_smoke"]

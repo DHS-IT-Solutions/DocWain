@@ -2,8 +2,8 @@
 
 Usage::
 
-    PYTHONPATH=. python scripts/distill_from_claude.py --max-chunks 1000
-    PYTHONPATH=. python scripts/distill_from_claude.py --max-chunks 50 --skip-merge
+    PYTHONPATH=. python scripts/distill_from_teacher.py --max-chunks 1000
+    PYTHONPATH=. python scripts/distill_from_teacher.py --max-chunks 50 --skip-merge
 """
 
 from __future__ import annotations
@@ -221,8 +221,8 @@ def main() -> None:
 
     # Save teacher data
     log.info("=== Saving teacher data ===")
-    save_jsonl(sft_new, TEACHER_DIR / "claude_sft.jsonl")
-    save_jsonl(dpo_new, TEACHER_DIR / "claude_dpo.jsonl")
+    save_jsonl(sft_new, TEACHER_DIR / "teacher_sft.jsonl")
+    save_jsonl(dpo_new, TEACHER_DIR / "teacher_dpo.jsonl")
 
     # Merge
     if not args.skip_merge:

@@ -794,21 +794,7 @@ def _set_document_status(
     extra_fields: Optional[Dict[str, Any]] = None,
 ) -> None:
     fields: Dict[str, Any] = {"status": status, "updated_at": time.time()}
-    # Sync pipeline_status with legacy status for new pipeline compatibility
-    from src.api.statuses import (
-        STATUS_EXTRACTION_COMPLETED as _SEC, STATUS_SCREENING_COMPLETED as _SSC,
-        STATUS_TRAINING_SUCCEEDED as _STS, STATUS_TRAINING_FAILED as _STF,
-        PIPELINE_EXTRACTION_COMPLETED, PIPELINE_SCREENING_COMPLETED,
-        PIPELINE_TRAINING_COMPLETED, PIPELINE_EMBEDDING_FAILED,
-    )
-    _pipeline_map = {
-        _SEC: PIPELINE_EXTRACTION_COMPLETED,
-        _SSC: PIPELINE_SCREENING_COMPLETED,
-        _STS: PIPELINE_TRAINING_COMPLETED,
-        _STF: PIPELINE_EMBEDDING_FAILED,
-    }
-    if status in _pipeline_map:
-        fields["pipeline_status"] = _pipeline_map[status]
+    # Single-column status: legacy pipeline_status sync removed per operator directive.
     if error_msg:
         fields["training_error"] = error_msg
         fields["training_failed_at"] = time.time()
