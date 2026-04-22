@@ -280,14 +280,32 @@ def _build_prompt(user_query: str, schema_name: str, base_payload: Dict[str, Any
     compact = _compact_payload_for_prompt(base_payload)
     schema_json = json.dumps(compact, separators=(",", ":"))
     hint = _SCHEMA_OUTPUT_HINT.get(schema_name, _SCHEMA_OUTPUT_HINT["answer"])
+    n_docs = len(base_payload.get("target_document_ids") or [])
+    doc_summary = _build_doc_summary_hint(base_payload)
     answer_requirement = (
         '- The "answer" field MUST contain a natural-language answer '
         'to the user query (1-3 sentences), grounded in the evidence.\n'
+        '- When the user asks HOW MANY / COUNT of documents, the correct '
+        f'count is {n_docs} (the length of target_document_ids).\n'
+        '- When asked to LIST or NAME the documents, prefer the "name" '
+        'field (the human-readable filename) over the opaque "id".\n'
         if schema_name == "answer" else ""
     )
     return (
         "You are DocWain's synthesis engine. Answer the user's query using ONLY "
         "the provided evidence. Do not invent facts.\n\n"
+        "Evidence schema per document:\n"
+        '  id          — opaque document identifier (do not show to users)\n'
+        '  name        — human-readable filename (use this in answers)\n'
+        '  sections    — titles of sections; often the issuing organization/vendor\n'
+        '  identifiers — document numbers, invoice numbers, PO numbers, etc.\n'
+        '  entities    — named entities (product names, companies, monetary amounts)\n'
+        '  contacts    — phone/email/URL on the document\n'
+        '  dates       — document dates (issue, due, arrival)\n'
+        '  tables      — tabular content\n'
+        'Each leaf item is {v: value, snip: surrounding-text-snippet, p: page, sec: section title}.\n\n'
+        f"Profile summary: {n_docs} document(s) in scope.\n"
+        f"{doc_summary}\n"
         f"User query: {user_query}\n\n"
         "Evidence (compact JSON):\n"
         f"{schema_json}\n\n"
@@ -300,6 +318,28 @@ def _build_prompt(user_query: str, schema_name: str, base_payload: Dict[str, Any
         '- Do not add commentary, markdown, or text outside the JSON object.\n'
         f"{answer_requirement}"
     )
+
+
+def _build_doc_summary_hint(payload: Dict[str, Any]) -> str:
+    """Tiny per-doc index so the model can map ids to filenames easily."""
+    docs = payload.get("documents") or []
+    if not docs:
+        return ""
+    lines = []
+    for i, doc in enumerate(docs[:25], 1):
+        name = doc.get("source_name") or doc.get("document_id") or "?"
+        # Pick up to 2 section titles as a vendor/issuer hint.
+        sections = doc.get("sections") or []
+        section_hint = ""
+        if isinstance(sections, list) and sections:
+            titles = []
+            for s in sections[:2]:
+                if isinstance(s, dict) and s.get("value"):
+                    titles.append(str(s["value"])[:40])
+            if titles:
+                section_hint = f" — {'; '.join(titles)}"
+        lines.append(f"  {i}. {name}{section_hint}")
+    return "Documents:\n" + "\n".join(lines)
 
 
 _MAX_ITEMS_PER_FIELD = 10
