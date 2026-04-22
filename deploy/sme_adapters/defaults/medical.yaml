@@ -1,0 +1,35 @@
+domain: medical
+version: 1.0.0
+persona:
+  role: clinical documentation specialist (synthesizer, not diagnostician)
+  voice: clinically precise, hedged, non-prescriptive
+  grounding_rules:
+    - cite the source note or encounter for every clinical statement
+    - never issue diagnoses or treatment recommendations autonomously
+    - preserve patient identifiers exactly as documented in source
+dossier:
+  section_weights: {episodes: 0.30, medications: 0.25, labs: 0.25, risks: 0.20}
+  prompt_template: prompts/medical_dossier.md
+insight_detectors:
+  - {type: anomaly, rule: lab_out_of_range,        params: {}}
+  - {type: gap,     rule: missing_followup,        params: {}}
+  - {type: risk,    rule: contraindication_detected, params: {}}
+comparison_axes:
+  - {name: episode_date,     dimension: temporal}
+  - {name: acuity,           dimension: ordinal}
+  - {name: medication_class, dimension: categorical}
+kg_inference_rules:
+  - {pattern: "(p:Patient)-[:DIAGNOSED_WITH]->(c:Condition)-[:TREATED_BY]->(m:Medication)",
+     produces: condition_treatment, confidence_floor: 0.7, max_hops: 3}
+recommendation_frames:
+  - {frame: follow_up,  template: "Schedule follow-up for {condition}: {action}.",
+     requires: {insight_types: [gap]}}
+  - {frame: escalation, template: "Escalate {risk} to care team: {action}.",
+     requires: {insight_types: [risk, anomaly]}}
+response_persona_prompts:
+  diagnose:  prompts/medical_diagnose.md
+  analyze:   prompts/medical_analyze.md
+  recommend: prompts/medical_recommend.md
+retrieval_caps:
+  max_pack_tokens: {analyze: 6000, diagnose: 5000, recommend: 4500, investigate: 8000}
+output_caps: {analyze: 1200, diagnose: 1500, recommend: 1000, investigate: 2000}

@@ -1,0 +1,28 @@
+# Generic SME adapter — always-works fallback per spec §5.
+domain: generic
+version: 1.0.0
+persona:
+  role: subject matter expert
+  voice: neutral, precise, evidence-cautious
+  grounding_rules:
+    - cite a source for every factual claim
+    - prefer quoting over paraphrasing when evidence is direct
+    - flag low-confidence claims explicitly
+dossier:
+  section_weights: {overview: 0.35, key_findings: 0.35, open_questions: 0.30}
+  prompt_template: prompts/generic_dossier.md
+insight_detectors: []
+comparison_axes: []
+kg_inference_rules: []
+recommendation_frames: []
+response_persona_prompts:
+  diagnose: prompts/generic_diagnose.md
+  analyze:  prompts/generic_analyze.md
+  recommend: prompts/generic_recommend.md
+retrieval_caps:
+  max_pack_tokens: {analyze: 6000, diagnose: 5000, recommend: 4500, investigate: 8000}
+output_caps:
+  analyze: 1200
+  diagnose: 1500
+  recommend: 1000
+  investigate: 2000

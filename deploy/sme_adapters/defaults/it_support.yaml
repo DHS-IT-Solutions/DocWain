@@ -1,0 +1,35 @@
+domain: it_support
+version: 1.0.0
+persona:
+  role: senior support engineer
+  voice: pragmatic, triage-focused, root-cause oriented
+  grounding_rules:
+    - cite the ticket or incident for every symptom or fix cited
+    - distinguish workarounds from permanent fixes explicitly
+    - preserve severity and SLA context when stating impact
+dossier:
+  section_weights: {symptom_map: 0.25, root_causes: 0.25, workarounds: 0.25, permanent_fixes: 0.25}
+  prompt_template: prompts/it_support_dossier.md
+insight_detectors:
+  - {type: anomaly,     rule: error_rate_spike,    params: {window_hours: 1, threshold: 3.0}}
+  - {type: risk,        rule: recurrent_incident,  params: {min_count: 3, window_days: 30}}
+  - {type: opportunity, rule: process_fix,         params: {}}
+comparison_axes:
+  - {name: symptom,   dimension: categorical}
+  - {name: component, dimension: categorical}
+  - {name: severity,  dimension: ordinal}
+kg_inference_rules:
+  - {pattern: "(i:Incident)-[:CAUSED_BY]->(c:Component)-[:DEPENDS_ON]->(d:Component)",
+     produces: upstream_dependency, confidence_floor: 0.6, max_hops: 3}
+recommendation_frames:
+  - {frame: triage_ranked,  template: "Investigate {symptom} by: {action}.",
+     requires: {insight_types: [anomaly]}}
+  - {frame: permanent_fix,  template: "Replace workaround for {component} with: {action}.",
+     requires: {insight_types: [risk, opportunity]}}
+response_persona_prompts:
+  diagnose:  prompts/it_support_diagnose.md
+  analyze:   prompts/it_support_analyze.md
+  recommend: prompts/it_support_recommend.md
+retrieval_caps:
+  max_pack_tokens: {analyze: 6000, diagnose: 5000, recommend: 4500, investigate: 8000}
+output_caps: {analyze: 1200, diagnose: 1500, recommend: 1000, investigate: 2000}

@@ -15,12 +15,25 @@ from typing import Any, Dict, Generator, List, Optional, Set
 
 from src.agent.intent import IntentAnalyzer, QueryUnderstanding
 from src.agent.subagent import DynamicSubAgent
+from src.agent.url_case_selector import (
+    CaseSelection,
+    RetrievalSignal,
+    select_case,
+)
 from src.generation.composer import compose_response
 from src.generation.reasoner import Reasoner, ReasonerResult
 from src.retrieval.context_builder import build_context
+from src.retrieval.ephemeral_merge import merge_ephemeral
 from src.retrieval.reranker import rerank_chunks
 from src.retrieval.retriever import UnifiedRetriever
+from src.retrieval.types import RetrievalBundle
 from src.agent.domain_dispatch import DomainDispatcher
+from src.tools.url_ephemeral_source import (
+    EphemeralResult,
+    UrlEphemeralSource,
+)
+from src.tools.url_fetcher import DomainPolicy, FetcherConfig
+from src.tools.web_search import detect_urls_in_query
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +135,39 @@ _META_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4 — module-level wiring helpers (test-patchable seams)
+# ---------------------------------------------------------------------------
+
+
+async def _load_adapter(subscription_id: str, profile_domain: str):
+    """Thin wrapper around the module-level adapter loader.
+
+    Kept at module scope so tests can patch it without constructing a full
+    CoreAgent + AdapterLoader singleton. In production the singleton is
+    initialised at FastAPI lifespan; this helper routes through it.
+    """
+    from src.intelligence.sme.adapter_loader import get_adapter_loader
+    return get_adapter_loader().load(subscription_id, profile_domain)
+
+
+async def _is_rich_mode_enabled(subscription_id: str) -> bool:
+    """Delegates to the Phase 1 flag resolver (ERRATA §4).
+
+    Wrapped in a try/except so pre-Phase-1 deployments (where the resolver
+    singleton isn't initialised) degrade to compact without raising into
+    the hot path.
+    """
+    try:
+        from src.config.feature_flags import (
+            ENABLE_RICH_MODE,
+            get_flag_resolver,
+        )
+        return get_flag_resolver().is_enabled(subscription_id, ENABLE_RICH_MODE)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ---------------------------------------------------------------------------
 # CoreAgent
 # ---------------------------------------------------------------------------
 
@@ -140,9 +186,15 @@ class CoreAgent:
         mongodb: Any,
         kg_query_service: Any = None,
         cross_encoder: Any = None,
+        *,
+        sme_retriever: Any = None,
+        sme_kg_client: Any = None,
+        hybrid_searcher: Any = None,
+        redis_client: Any = None,
     ) -> None:
         self._llm = llm_gateway
         self._qdrant = qdrant_client
+        self._embedder = embedder
         self._mongodb = mongodb
         self._intent_analyzer = IntentAnalyzer(llm_gateway=llm_gateway)
         from src.api.rag_state import get_app_state
@@ -157,6 +209,469 @@ class CoreAgent:
         self.kg_query_service = kg_query_service
         self._cross_encoder = cross_encoder
         self._domain_dispatcher = DomainDispatcher(llm_gateway=llm_gateway)
+        # ------------------------------------------------------------------
+        # Phase 3 additions — SME 4-layer retrieval inputs. All optional so
+        # pre-Phase-3 callers keep working unchanged; the orchestrator
+        # returns Layer A only when these are not wired.
+        # ------------------------------------------------------------------
+        self._sme_retriever = sme_retriever  # src.retrieval.sme_retrieval.SMERetrieval
+        self._sme_kg_client = sme_kg_client  # src.retrieval.unified_retriever.UnifiedRetrieverKGClient
+        self._hybrid_searcher = hybrid_searcher  # Phase 1 HybridSearcher (optional)
+        self._redis_client_injected = redis_client  # Phase 3 QA fast-path
+        # Phase 3 Task 8/10 — retrieval cache bound to the injected redis
+        # client. Constructed lazily because we want the same instance
+        # across handle() calls within a CoreAgent lifetime but we don't
+        # want to pay the Redis lookup if the feature flag is off.
+        self._retrieval_cache_obj = None  # type: Any
+        # Phase 3 Task 9/10 — intent gate. Stateless; shared across calls.
+        self._intent_gate_obj = None  # type: Any
+        # Phase 5 — dedicated executor for URL fetch. Separate from the
+        # UNDERSTAND+RETRIEVE ThreadPoolExecutor because URL fetch must
+        # outlive that block (it may resolve during rerank or later) and
+        # must not block its `with`-exit. The executor is shared across
+        # calls; threads are daemons and the pool auto-shrinks on idle.
+        self._url_executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="docwain-url-fetch",
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 5 — URL-as-prompt helpers
+    # ------------------------------------------------------------------
+    def _build_fetcher_config(self, subscription_id: str) -> FetcherConfig:
+        """Construct a :class:`FetcherConfig` for a subscription.
+
+        Pulls optional allow/block domain lists from Config when present
+        (``Config.UrlFetcher.ALLOWED_DOMAINS``, ``BLOCKED_DOMAINS``). Safe
+        defaults otherwise. External I/O safety timeouts (fetch 15s,
+        extract 30s) come from the dataclass defaults — no internal
+        wall-clock timeouts are added on top.
+        """
+        allowed: tuple[str, ...] = ()
+        blocked: tuple[str, ...] = ()
+        try:
+            from src.api.config import Config
+            cfg_mod = getattr(Config, "UrlFetcher", None)
+            if cfg_mod is not None:
+                allowed = tuple(
+                    getattr(cfg_mod, "ALLOWED_DOMAINS", ()) or ()
+                )
+                blocked = tuple(
+                    getattr(cfg_mod, "BLOCKED_DOMAINS", ()) or ()
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        return FetcherConfig(
+            domain_policy=DomainPolicy(
+                allowed_domains=allowed,
+                blocked_domains=blocked,
+            ),
+        )
+
+    def _is_url_as_prompt_enabled(self, subscription_id: str) -> bool:
+        """Return True iff the Phase 5 flag is ON for *subscription_id*.
+
+        Fail-closed: any resolver failure (singleton uninitialised, store
+        error, etc.) returns False so the URL leg is a no-op.
+        """
+        try:
+            from src.config.feature_flags import (
+                ENABLE_URL_AS_PROMPT,
+                get_flag_resolver,
+            )
+            return bool(get_flag_resolver().is_enabled(
+                subscription_id, ENABLE_URL_AS_PROMPT,
+            ))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _kick_off_url_fetch(
+        self,
+        *,
+        urls: List[str],
+        subscription_id: str,
+        profile_id: str,
+        session_id: str,
+    ) -> Any:
+        """Submit the URL fetch to the dedicated executor and return the future.
+
+        Dispatch is deliberately isolated from the UNDERSTAND+RETRIEVE
+        executor — URL work may complete well after the profile leg, and we
+        must not let the with-exit of that block join on it. No internal
+        timeout is applied; external fetch/extract safety inside
+        :class:`UrlEphemeralSource` is the only timeout.
+        """
+        fetcher_cfg = self._build_fetcher_config(subscription_id)
+        ephemeral = UrlEphemeralSource(
+            embedder=self._embedder,
+            fetcher_config=fetcher_cfg,
+        )
+
+        def _run() -> EphemeralResult:
+            try:
+                return ephemeral.fetch_all(
+                    urls,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    session_id=session_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ephemeral url batch failed entirely: %s", exc,
+                    exc_info=True,
+                )
+                return EphemeralResult(
+                    chunks=[],
+                    warnings=[{
+                        "url": ",".join(urls),
+                        "error": f"{type(exc).__name__}: {exc}"[:300],
+                        "error_class": type(exc).__name__,
+                    }],
+                )
+
+        return self._url_executor.submit(_run)
+
+    # ------------------------------------------------------------------
+    # Phase 3 — four-layer SME retrieval orchestration
+    # ------------------------------------------------------------------
+
+    def _retrieve_four_layers(
+        self,
+        *,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        query_understanding: Dict[str, Any],
+    ) -> "RetrievalBundle":
+        """Dispatch the Phase 3 four-layer parallel retrieval and return
+        a :class:`RetrievalBundle`.
+
+        Layer A is the existing dense-or-hybrid chunk retrieval. Layer B
+        uses :class:`src.retrieval.unified_retriever.UnifiedRetriever`'s
+        :meth:`retrieve_layer_b` helper. Layer C calls the injected
+        :class:`SMERetrieval` (gated on ``ENABLE_SME_RETRIEVAL``). Layer D
+        is a no-op placeholder until Phase 5.
+
+        Layers B and C only run when the caller has wired them in via the
+        constructor — pre-Phase-3 deployments keep receiving an empty
+        bundle for those slots without error. Per ERRATA §11 a layer
+        failure degrades into ``bundle.degraded_layers`` (full name only,
+        single append); the remaining layers always return.
+        """
+        from src.retrieval.types import RetrievalBundle as _RB
+        from src.retrieval.unified_retriever import UnifiedRetriever as _SMEUnified
+        # Pluggable top-K defaults — Task 6 will tune these.
+        intent = (query_understanding or {}).get("intent") or (
+            query_understanding or {}
+        ).get("task_type", "lookup")
+
+        # Build the SME-side UnifiedRetriever lazily; it is cheap.
+        sme_unified = _SMEUnified(
+            qdrant_client=self._qdrant,
+            kg_client=self._sme_kg_client,
+            sme=self._sme_retriever,
+        )
+
+        # Default layer callables — fall through to empty when the
+        # dependency isn't wired so tests and pre-Phase-3 callers succeed.
+        def _layer_a_fn() -> List[Dict[str, Any]]:
+            try:
+                return sme_unified.retrieve_layer_a(
+                    query=query,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    query_understanding=query_understanding,
+                    top_k=10,
+                )
+            except Exception:  # noqa: BLE001
+                raise
+
+        def _layer_b_fn() -> List[Dict[str, Any]]:
+            if self._sme_kg_client is None:
+                return []
+            return sme_unified.retrieve_layer_b(
+                query=query,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                top_k=5,
+                entities=(query_understanding or {}).get("entities") or None,
+            )
+
+        def _layer_c_fn() -> List[Dict[str, Any]]:
+            if self._sme_retriever is None:
+                return []
+            from src.retrieval.unified_retriever import _sme_hit_to_dict
+            hits = self._sme_retriever.retrieve(
+                query=query,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                top_k=5,
+            )
+            return [_sme_hit_to_dict(h) for h in hits]
+
+        def _layer_d_fn() -> List[Dict[str, Any]]:
+            return []
+
+        # Phase 3 Task 9 — consult the shared intent gate so simple
+        # intents skip B/C entirely. Task 10 passes the same gate to the
+        # four-layer orchestrator so gated layers never hit their
+        # backing store.
+        gate = self._intent_gate()
+        bundle = sme_unified.retrieve_four_layers(
+            query=query,
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+            query_understanding=query_understanding,
+            layer_a_fn=_layer_a_fn,
+            layer_b_fn=_layer_b_fn,
+            layer_c_fn=_layer_c_fn,
+            layer_d_fn=_layer_d_fn,
+            gate=gate,
+        )
+        return bundle
+
+    # ------------------------------------------------------------------
+    # Phase 3 Task 10 — SME pack assembly + doc_context injection
+    # ------------------------------------------------------------------
+
+    def _intent_gate(self) -> Any:
+        """Lazily construct and return the shared :class:`IntentGate`."""
+        if self._intent_gate_obj is None:
+            from src.retrieval.intent_gating import IntentGate
+            self._intent_gate_obj = IntentGate()
+        return self._intent_gate_obj
+
+    def _retrieval_cache(self) -> Any:
+        """Lazily construct and return the shared :class:`RetrievalCache`.
+
+        Uses the injected Redis client if present, else the app-state
+        client. Returns a cache bound to ``None`` when Redis isn't
+        explicitly wired — important for unit tests that construct
+        :class:`CoreAgent` without a redis_client so Phase 3 doesn't
+        blocking-connect against a non-existent Redis. Production
+        deployments inject the app-state client at construction time.
+        """
+        if self._retrieval_cache_obj is None:
+            from src.retrieval.retrieval_cache import RetrievalCache
+            # Only prefer the app-state client when the env is set up —
+            # bare ``CoreAgent(...)`` constructions (tests) skip Redis.
+            client = self._redis_client_injected
+            if client is None:
+                try:
+                    from src.api.rag_state import get_app_state
+                    app_state = get_app_state()
+                    if app_state is not None and hasattr(
+                        app_state, "redis_client"
+                    ):
+                        client = app_state.redis_client
+                except Exception:  # noqa: BLE001
+                    client = None
+            self._retrieval_cache_obj = RetrievalCache(redis_client=client)
+        return self._retrieval_cache_obj
+
+    def _resolve_adapter(
+        self, subscription_id: str, profile_domain: str
+    ) -> Any:
+        """Resolve the domain adapter for pack assembly.
+
+        Returns a thin stub with the default ``retrieval_caps`` shape
+        when the :class:`AdapterLoader` singleton isn't initialized —
+        this happens in unit tests and in the pre-SME production
+        deployment. The stub always satisfies
+        :class:`PackAssembler` so Phase 3 wiring never explodes on
+        missing infrastructure.
+        """
+        try:
+            from src.intelligence.sme.adapter_loader import get_adapter_loader
+            return get_adapter_loader().load(subscription_id, profile_domain)
+        except Exception:  # noqa: BLE001
+            # Stub adapter — PackAssembler reads ``.retrieval_caps.max_pack_tokens``.
+            class _StubCaps:
+                max_pack_tokens = {"generic": 4000}
+            class _StubAdapter:
+                retrieval_caps = _StubCaps()
+            return _StubAdapter()
+
+    def _build_sme_pack(
+        self,
+        *,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        profile_domain: str,
+        intent: str,
+        query_understanding: Dict[str, Any],
+    ) -> List[Any]:
+        """Run the full Phase 3 SME retrieval + assembly pipeline.
+
+        Pipeline:
+
+        1. Retrieval-cache lookup keyed by
+           ``(sub, prof, query_fingerprint, flag_set_version)``. Cache
+           stores the raw :class:`RetrievalBundle`; a hit skips the four
+           layer dispatch entirely.
+        2. On miss — :meth:`_retrieve_four_layers` dispatches Layer
+           A/B/C/D in parallel, honouring the intent gate.
+        3. :func:`merge_layers` unions the four outputs and tags Layer
+           C + inferred Layer B as ``sme_backed=True``.
+        4. :func:`rerank_merged_candidates` applies the cross-encoder
+           blend + SME-intent bonus.
+        5. :func:`mmr_select` picks a diverse top-K (default 10 items).
+        6. :class:`PackAssembler` compresses Layer C and enforces the
+           adapter's per-intent token budget.
+
+        Returns a ``List[PackedItem]`` (frozen dataclasses) ready for
+        ``doc_context["sme_pack"]``. The assembled list is always
+        returned — even when retrieval fails every layer the empty list
+        is safe for the reasoner path.
+        """
+        from src.config.feature_flags import (
+            ENABLE_CROSS_ENCODER_RERANK,
+            get_flag_set_version,
+            get_flag_resolver,
+        )
+        from src.retrieval.merge import (
+            merge_layers,
+            mmr_select,
+            rerank_merged_candidates,
+        )
+        from src.retrieval.pack_assembler import PackAssembler
+        from src.retrieval.retrieval_cache import _query_fingerprint
+
+        fp = _query_fingerprint(query)
+        version = get_flag_set_version()
+        cache = self._retrieval_cache()
+        bundle = cache.get(
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+            query_fingerprint=fp,
+            flag_set_version=f"v{version}",
+        )
+        if bundle is None:
+            bundle = self._retrieve_four_layers(
+                query=query,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                query_understanding=query_understanding,
+            )
+            cache.set(
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                query_fingerprint=fp,
+                flag_set_version=f"v{version}",
+                bundle=bundle,
+            )
+
+        merged = merge_layers(bundle)
+        if not merged:
+            return []
+
+        # Cross-encoder rerank — gated per-subscription by
+        # ENABLE_CROSS_ENCODER_RERANK. When flag off, we still call
+        # rerank_merged_candidates so the score-sort path runs, but we
+        # pass enable_cross_encoder=False to skip the CE model call.
+        enable_ce = False
+        try:
+            resolver = get_flag_resolver()
+            enable_ce = bool(
+                resolver.is_enabled(subscription_id, ENABLE_CROSS_ENCODER_RERANK)
+            )
+        except Exception:  # noqa: BLE001
+            enable_ce = False
+
+        reranked = rerank_merged_candidates(
+            query=query,
+            candidates=merged,
+            cross_encoder=self._cross_encoder,
+            top_k=10,
+            intent=intent,
+            enable_cross_encoder=enable_ce,
+        )
+        diverse = mmr_select(items=reranked, top_k=10, lam=0.7)
+
+        adapter = self._resolve_adapter(subscription_id, profile_domain or "generic")
+        pack = PackAssembler(adapter).assemble(items=diverse, intent=intent)
+        return pack
+
+    # ------------------------------------------------------------------
+    # Phase 3 Task 7 — QA-cache fast path
+    # ------------------------------------------------------------------
+
+    def _qa_fast_path_lookup(
+        self,
+        *,
+        query: str,
+        subscription_id: str,
+        profile_id: str,
+        min_confidence: float = 0.85,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up ``qa_idx:{sub}:{prof}:{fingerprint}`` in Redis.
+
+        Returns an AnswerPayload-shaped dict when a hit exists at or above
+        ``min_confidence``; otherwise ``None`` so the caller falls through
+        to the full retrieve+reason flow. All Redis errors degrade to a
+        miss — the fast path must never raise into the hot path.
+
+        The fingerprint is computed via
+        :func:`src.intelligence.qa_generator.qa_index_fingerprint` so the
+        Phase 2 emission side (``emit_qa_index``) and this read side stay
+        in lock-step.
+        """
+        try:
+            from src.intelligence.qa_generator import qa_index_fingerprint
+        except Exception:  # noqa: BLE001
+            return None
+        redis_client = self._redis_client_injected or self._get_redis_client()
+        if redis_client is None:
+            return None
+        fingerprint = qa_index_fingerprint(query)
+        key = f"qa_idx:{subscription_id}:{profile_id}:{fingerprint}"
+        try:
+            raw = redis_client.get(key)
+        except Exception:  # noqa: BLE001
+            logger.debug("qa_fast_path redis.get failed", exc_info=True)
+            return None
+        if raw is None:
+            return None
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                raw = raw.decode("utf-8")
+            except Exception:  # noqa: BLE001
+                return None
+        try:
+            import json
+            data = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            logger.debug("qa_fast_path json decode failed", exc_info=True)
+            return None
+
+        answer = data.get("answer")
+        if not answer:
+            return None
+        metadata_block = data.get("metadata") or {}
+        confidence = metadata_block.get("confidence")
+        if confidence is None:
+            confidence = data.get("confidence")
+        if confidence is not None and float(confidence) < float(min_confidence):
+            return None
+
+        # Shape the payload to match the existing AnswerPayload dict so
+        # the caller treats the fast-path and the full pipeline
+        # identically. No Reasoner invocation happens on this path.
+        return {
+            "response": str(answer),
+            "sources": list(metadata_block.get("sources") or []),
+            "grounded": True,
+            "context_found": True,
+            "metadata": {
+                "task_type": metadata_block.get("task_type", "lookup"),
+                "engine": "docwain_core_agent_qa_fast_path",
+                "qa_id": data.get("qa_id") or metadata_block.get("qa_id", ""),
+                "qa_fast_path_hit": True,
+                "qa_confidence": confidence,
+                "qa_index_fingerprint": fingerprint,
+            },
+        }
 
     # ------------------------------------------------------------------
     # Public API
@@ -181,7 +696,56 @@ class CoreAgent:
         if not profile_id or not str(profile_id).strip():
             raise ValueError("profile_id is required")
 
+        # --- Phase 3 Task 7 — QA fast path ---
+        # Before spending UNDERSTAND+RETRIEVE+REASON budget, probe Redis
+        # for a pre-grounded Q&A pair at the query fingerprint. Hit →
+        # short-circuit to the cached answer immediately (Reasoner skipped).
+        _qa_t0 = time.monotonic()
+        _qa_hit = self._qa_fast_path_lookup(
+            query=query,
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+        )
+        if _qa_hit is not None:
+            _qa_hit.setdefault("metadata", {})["timing"] = {
+                "qa_fast_path_ms": round(
+                    (time.monotonic() - _qa_t0) * 1000, 1
+                ),
+            }
+            logger.info(
+                "[QA_FAST_PATH] hit profile=%s sub=%s fingerprint=%s",
+                profile_id,
+                subscription_id,
+                _qa_hit["metadata"].get("qa_index_fingerprint"),
+            )
+            return _qa_hit
+
         timing: Dict[str, float] = {}
+
+        # --- PHASE 5: URL-AS-PROMPT KICK-OFF ---
+        # When ENABLE_URL_AS_PROMPT is on for the subscription, detect any
+        # URLs in the query and kick off the fetch+extract+chunk+embed
+        # pipeline in parallel with UNDERSTAND and RETRIEVE. NO internal
+        # timeout — the external fetch/extract safety is the only guard.
+        url_list: List[str] = []
+        cleaned_query = query
+        url_case: CaseSelection = CaseSelection.NONE
+        _ephemeral_future = None
+        ephemeral_warnings: List[Dict[str, Any]] = []
+        ephemeral_chunks: List[Any] = []
+        if self._is_url_as_prompt_enabled(subscription_id):
+            url_list, cleaned_query = detect_urls_in_query(query)
+            if url_list:
+                _ephemeral_future = self._kick_off_url_fetch(
+                    urls=url_list,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    session_id=session_id,
+                )
+                logger.info(
+                    "[URL_AS_PROMPT] kicked off fetch of %d url(s) for sub=%s",
+                    len(url_list), subscription_id,
+                )
 
         # --- UNDERSTAND ---
         t0 = time.monotonic()
@@ -490,6 +1054,56 @@ class CoreAgent:
             len(reranked),
             len(set(c.document_id for c in reranked if c.document_id)),
         )
+
+        # --- PHASE 5: URL-AS-PROMPT CASE DISPATCH + MERGE ---
+        if _ephemeral_future is not None:
+            # Compute retrieval-signal strength off the reranked profile
+            # chunks. "High similarity" threshold is the same 0.5 rerank
+            # score floor used in the spec.
+            _high_sim = sum(
+                1 for c in reranked if getattr(c, "score", 0.0) >= 0.5
+            )
+            _sme_artifact_count = sum(
+                1 for c in reranked
+                if isinstance(getattr(c, "metadata", {}), dict)
+                and (c.metadata or {}).get("provenance") == "sme_artifact"
+            )
+            signal = RetrievalSignal(
+                sme_artifact_count=_sme_artifact_count,
+                high_sim_chunk_count=_high_sim,
+            )
+            url_case = select_case(
+                cleaned_query=cleaned_query,
+                url_count=len(url_list),
+                signal=signal,
+            )
+            try:
+                # External safety lives inside UrlEphemeralSource; no
+                # internal .result(timeout=...) is added here — per the
+                # Phase 5 rule.
+                ephemeral_result: EphemeralResult = _ephemeral_future.result()
+                ephemeral_chunks = list(ephemeral_result.chunks)
+                ephemeral_warnings = list(ephemeral_result.warnings)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ephemeral url fetch future failed: %s", exc,
+                    exc_info=True,
+                )
+                ephemeral_chunks = []
+                ephemeral_warnings = [{
+                    "url": ",".join(url_list),
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                    "error_class": type(exc).__name__,
+                }]
+            if url_case in (CaseSelection.PRIMARY, CaseSelection.SUPPLEMENTARY):
+                reranked = merge_ephemeral(
+                    reranked, ephemeral_chunks, case=url_case,
+                )
+                logger.info(
+                    "[URL_AS_PROMPT] merged %d ephemeral chunk(s) case=%s",
+                    len(ephemeral_chunks), url_case.value,
+                )
+
         evidence, doc_context = build_context(reranked, doc_intelligence_dict)
         logger.info("[RAG_DEBUG] evidence items: %d", len(evidence))
 
@@ -631,6 +1245,92 @@ class CoreAgent:
                 else:
                     doc_context["doc_intelligence_summaries"] = doc_intelligence_entries
 
+        # --- PHASE 3 TASK 10 — SME pack assembly ---
+        # Run the four-layer SME retrieval + merge + rerank + MMR +
+        # pack-assembly pipeline when ENABLE_SME_RETRIEVAL is on for the
+        # subscription. The assembled pack lands in
+        # ``doc_context["sme_pack"]`` as a list[PackedItem] for the
+        # rich-mode consumer to read in Phase 4. Phase 3 does NOT modify
+        # the prompt surface — the reasoner stays unchanged.
+        try:
+            from src.config.feature_flags import (
+                ENABLE_SME_RETRIEVAL,
+                get_flag_resolver,
+            )
+            _sme_on = False
+            try:
+                _sme_on = get_flag_resolver().is_enabled(
+                    subscription_id, ENABLE_SME_RETRIEVAL
+                )
+            except Exception:  # noqa: BLE001
+                _sme_on = False
+            if _sme_on:
+                _sme_t0 = time.monotonic()
+                sme_pack = self._build_sme_pack(
+                    query=understanding.resolved_query,
+                    subscription_id=subscription_id,
+                    profile_id=profile_id,
+                    profile_domain=(
+                        doc_context.get("profile_domain") or "generic"
+                    ) if doc_context else "generic",
+                    intent=understanding.task_type,
+                    query_understanding={
+                        "intent": understanding.task_type,
+                        "entities": list(getattr(understanding, "entities", []) or []),
+                    },
+                )
+                if doc_context is None:
+                    doc_context = {}
+                doc_context["sme_pack"] = sme_pack
+                timing["sme_pack_ms"] = round(
+                    (time.monotonic() - _sme_t0) * 1000, 1
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug("SME pack assembly skipped (non-fatal)", exc_info=True)
+
+        # --- PHASE 4 — rich-mode pack summary + adapter resolution ---
+        # Computes PackSummary + persona + shape decision BEFORE the reasoner
+        # runs. Stored on ``doc_context`` so the reasoner (or a downstream
+        # rewrite pass) can consume it. Gated behind ENABLE_RICH_MODE; when
+        # OFF this block is a no-op and the reasoner sees today's compact
+        # path unchanged.
+        sme_pack_summary = None
+        sme_response_shape = None
+        try:
+            from src.config.feature_flags import (
+                ENABLE_RICH_MODE,
+                get_flag_resolver,
+            )
+            from src.generation.pack_summary import PackSummary
+            from src.generation.prompts import (
+                resolve_response_shape,
+            )
+            from src.serving.model_router import FormatHint
+
+            _rich_on = False
+            try:
+                _rich_on = get_flag_resolver().is_enabled(
+                    subscription_id, ENABLE_RICH_MODE
+                )
+            except Exception:  # noqa: BLE001
+                _rich_on = False
+
+            if _rich_on:
+                _pack_items = (doc_context or {}).get("sme_pack") or []
+                sme_pack_summary = PackSummary.from_packed_items(_pack_items)
+                sme_response_shape = resolve_response_shape(
+                    intent=understanding.task_type,
+                    format_hint=FormatHint.AUTO,
+                    pack=sme_pack_summary,
+                    enable_rich_mode=True,
+                )
+                if doc_context is None:
+                    doc_context = {}
+                doc_context["sme_pack_summary"] = sme_pack_summary
+                doc_context["sme_response_shape"] = sme_response_shape.value
+        except Exception:  # noqa: BLE001
+            logger.debug("Rich-mode pack summary skipped (non-fatal)", exc_info=True)
+
         # --- REASON ---
         t0 = time.monotonic()
         # Enable thinking for cloud backends — adds reasoning depth.
@@ -670,12 +1370,50 @@ class CoreAgent:
         )
         timing["reason_ms"] = round((time.monotonic() - t0) * 1000, 1)
 
+        # --- PHASE 4 — recommendation grounding post-pass ---
+        # For recommend-intent rich responses, strip any claim that doesn't
+        # trace to a Recommendation Bank entry or an inline [doc_id:chunk_id]
+        # citation. Preserves the 0.0 hallucination invariant. The post-pass
+        # is a no-op for any other intent or when shape is not RICH.
+        try:
+            from src.generation.prompts import ResponseShape
+            from src.generation.recommendation_grounding import (
+                enforce_recommendation_grounding,
+            )
+
+            if (
+                understanding.task_type == "recommend"
+                and sme_response_shape is ResponseShape.RICH
+                and sme_pack_summary is not None
+            ):
+                rewritten, _report = enforce_recommendation_grounding(
+                    reason_result.text,
+                    bank_entries=list(sme_pack_summary.bank_entries),
+                )
+                reason_result.text = rewritten
+                logger.info(
+                    "[PHASE4_GROUNDING] intent=recommend kept=%d dropped=%d",
+                    _report.kept_count, _report.dropped_count,
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "Recommendation grounding post-pass skipped (non-fatal)",
+                exc_info=True,
+            )
+
         # --- COMPOSE ---
         metadata = {
             "usage": reason_result.usage,
             "timing": timing,
             "profiles_searched": retrieval_result.profiles_searched,
         }
+        # Phase 5 — thread URL-case metadata into the response so callers
+        # see provenance warnings, the selected case, and the source URLs.
+        if url_list:
+            metadata["url_case"] = url_case.value
+            metadata["url_sources"] = list(url_list)
+            if ephemeral_warnings:
+                metadata["url_warnings"] = ephemeral_warnings
         result = compose_response(
             text=reason_result.text,
             evidence=evidence,
@@ -1193,3 +1931,218 @@ class CoreAgent:
         except Exception:
             logger.exception("Failed to load doc intelligence for subscription=%s", subscription_id)
             return []
+
+    # ------------------------------------------------------------------
+    # Phase 4 — rich-mode prompt building (test seam + production path)
+    # ------------------------------------------------------------------
+
+    async def _resolve_profile_domain(
+        self, subscription_id: str, profile_id: str
+    ) -> str:
+        """Resolve ``profile_domain`` for adapter lookup.
+
+        The production path reads from the profile record in MongoDB (the
+        Phase 1 ingest writes the domain there). Tests patch this method.
+        Falls back to ``"generic"`` on any error so rich-mode wiring never
+        blows up a request.
+        """
+        try:
+            from src.api.document_status import get_profile_record
+            rec = get_profile_record(subscription_id, profile_id)
+            if rec:
+                return rec.get("profile_domain") or "generic"
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "profile_domain lookup failed for sub=%s prof=%s",
+                subscription_id, profile_id, exc_info=True,
+            )
+        return "generic"
+
+    @staticmethod
+    def _build_compact_prompt(classified: Any, pack_summary: Any) -> str:
+        """Legacy-compact prompt — a no-op stand-in for the pre-Phase-4 path.
+
+        The real compact reasoner path is driven by
+        :func:`src.generation.prompts.build_reason_prompt`; the Phase 4
+        wiring test only needs a distinct return value so tests can prove
+        the resolver chose the compact branch without invoking the full
+        reasoner pipeline.
+        """
+        return f"COMPACT:{getattr(classified, 'query_text', '')}"
+
+    async def _build_prompt_for_test(
+        self,
+        *,
+        classified: Any,
+        pack_summary: Any,
+        subscription_id: str,
+        profile_id: str,
+    ) -> str:
+        """Rich-mode wiring seam used by tests.
+
+        Production's :meth:`handle` embeds the same resolver → adapter →
+        template dispatch inline. This method exists so the wiring can be
+        exercised in isolation without booting the full pipeline.
+
+        Logic:
+
+        1. Flag OFF or explicit compact override → compact prompt.
+        2. Analytical / borderline intent + thin pack → honest-compact.
+        3. Rich-shaped intent → load adapter, build persona, dispatch to
+           the rich template for ``analyze`` / ``diagnose`` / ``recommend``.
+           ``investigate`` / ``overview`` route through the analyze template
+           per spec §8.
+        """
+        from src.generation.prompts import (
+            AnalyzePromptInputs,
+            DiagnosePromptInputs,
+            RecommendPromptInputs,
+            ResponseShape,
+            build_analyze_rich_prompt,
+            build_diagnose_rich_prompt,
+            build_honest_compact_prompt,
+            build_recommend_rich_prompt,
+            persona_bundle_from_adapter,
+            resolve_response_shape,
+        )
+
+        enable_rich = await _is_rich_mode_enabled(subscription_id)
+        shape = resolve_response_shape(
+            intent=classified.intent,
+            format_hint=classified.format_hint,
+            pack=pack_summary,
+            enable_rich_mode=enable_rich,
+        )
+
+        if shape is ResponseShape.COMPACT:
+            return self._build_compact_prompt(classified, pack_summary)
+
+        domain = await self._resolve_profile_domain(subscription_id, profile_id)
+        adapter = await _load_adapter(subscription_id, domain)
+
+        if shape is ResponseShape.HONEST_COMPACT:
+            return build_honest_compact_prompt(
+                query_text=classified.query_text,
+                pack_summary=pack_summary,
+            )
+
+        # Investigate / overview route through the analyze template (spec §8).
+        template_intent = (
+            "analyze"
+            if classified.intent in ("investigate", "overview")
+            else classified.intent
+        )
+
+        # Rich shape for a borderline intent (compare / summarize / etc.)
+        # falls back to compact — they don't have dedicated rich templates.
+        if template_intent not in ("analyze", "diagnose", "recommend"):
+            return self._build_compact_prompt(classified, pack_summary)
+
+        persona = persona_bundle_from_adapter(adapter, intent=template_intent)
+        cap = getattr(adapter.output_caps, template_intent, 1200) or 1200
+        pack_tokens = (
+            adapter.retrieval_caps.max_pack_tokens.get(template_intent, 6000)
+            if hasattr(adapter.retrieval_caps, "max_pack_tokens")
+            else 6000
+        )
+
+        # Build evidence / insights / bank entries directly off PackSummary
+        # per ERRATA §10 — no private helper methods required.
+        evidence = []
+        for item in pack_summary.evidence_items:
+            if not item.provenance:
+                continue
+            doc_id, chunk_id = item.provenance[0]
+            evidence.append(
+                {"doc_id": doc_id, "chunk_id": chunk_id, "text": item.text}
+            )
+        insights = [
+            {
+                "type": (item.metadata or {}).get("insight_type", "insight"),
+                "narrative": item.text,
+            }
+            for item in pack_summary.insights
+        ]
+
+        if template_intent == "analyze":
+            return build_analyze_rich_prompt(
+                AnalyzePromptInputs(
+                    query_text=classified.query_text,
+                    persona_role=persona.role,
+                    persona_voice=persona.voice,
+                    grounding_rules=persona.grounding_rules,
+                    pack_tokens=pack_tokens,
+                    output_cap_tokens=cap,
+                    evidence_items=evidence,
+                    insight_refs=insights,
+                    domain=domain,
+                )
+            )
+        if template_intent == "diagnose":
+            hits = [
+                {
+                    "symptom": (item.metadata or {}).get(
+                        "symptom", item.text[:120]
+                    ),
+                    "doc_id": item.provenance[0][0] if item.provenance else "",
+                    "chunk_id": item.provenance[0][1] if item.provenance else "",
+                    "rank": i + 1,
+                }
+                for i, item in enumerate(pack_summary.insights)
+            ]
+            return build_diagnose_rich_prompt(
+                DiagnosePromptInputs(
+                    query_text=classified.query_text,
+                    persona_role=persona.role,
+                    persona_voice=persona.voice,
+                    grounding_rules=persona.grounding_rules,
+                    pack_tokens=pack_tokens,
+                    output_cap_tokens=cap,
+                    evidence_items=evidence,
+                    diagnostic_hits=hits,
+                    domain=domain,
+                )
+            )
+        if template_intent == "recommend":
+            return build_recommend_rich_prompt(
+                RecommendPromptInputs(
+                    query_text=classified.query_text,
+                    persona_role=persona.role,
+                    persona_voice=persona.voice,
+                    grounding_rules=persona.grounding_rules,
+                    pack_tokens=pack_tokens,
+                    output_cap_tokens=cap,
+                    evidence_items=evidence,
+                    bank_entries=list(pack_summary.bank_entries),
+                    domain=domain,
+                )
+            )
+        return self._build_compact_prompt(classified, pack_summary)
+
+    async def _apply_recommend_grounding(
+        self,
+        *,
+        response_text: str,
+        classified: Any,
+        shape: Any,
+        pack_summary: Any,
+    ) -> str:
+        """Run the recommendation post-pass for recommend-intent rich output.
+
+        Called from the production streaming / non-streaming response path
+        once the LLM has produced final text. A no-op for any other intent
+        or shape so the caller can invoke it unconditionally.
+        """
+        from src.generation.prompts import ResponseShape
+        from src.generation.recommendation_grounding import (
+            enforce_recommendation_grounding,
+        )
+
+        intent = getattr(classified, "intent", "")
+        if intent != "recommend" or shape is not ResponseShape.RICH:
+            return response_text
+        rewritten, _report = enforce_recommendation_grounding(
+            response_text,
+            bank_entries=list(getattr(pack_summary, "bank_entries", ()) or ()),
+        )
+        return rewritten

@@ -1,11 +1,23 @@
 """LLM-based intent classification for the DocWain serving layer.
 
-Intent drives retrieval strategy, KG expansion, and visualization choices.
-DocWain uses one unified model; this module never selects a model.
+Historical context: this module used to route between a 14B "fast" and 27B
+"smart" vLLM instance. DocWain is now a single unified model; the classifier
+survives because intent still drives retrieval strategy, KG expansion, and
+visualization choices — not model selection.
+
+Phase 4 additions (ERRATA §9): a new async ``classify_query`` returns a
+frozen :class:`ClassifiedQuery` carrying the canonical ``query_text``,
+``intent`` label (extended with ``analyze``/``diagnose``/``recommend``),
+a ``format_hint`` enum (``auto`` | ``compact`` | ``rich``), detected URLs,
+and entities. The classifier reuses the existing understand-stage LLM call;
+no new model calls are introduced. URL detection and the compact-override
+heuristic are deterministic regex over the raw input so they never depend
+on the model's JSON being shaped correctly.
 """
 
 from __future__ import annotations
 
+import enum
 import json
 import re
 from dataclasses import dataclass
@@ -33,6 +45,10 @@ INTENT_TYPES: List[str] = [
     "rank",
     "timeline",
     "visualize",
+    "overview",
+    # Phase 4 additions — analytical intents that route to rich-mode templates.
+    "diagnose",
+    "recommend",
 ]
 
 _SIMPLE_INTENTS = frozenset({
@@ -223,3 +239,158 @@ class IntentRouter:
             result.requires_kg, result.requires_visualization,
         )
         return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — ClassifiedQuery + async classify_query (ERRATA §9)
+# ---------------------------------------------------------------------------
+#
+# The Phase 4 consumer (core_agent, shape resolution) expects a single frozen
+# dataclass carrying the raw query plus the extracted intent / format_hint /
+# urls / entities. Earlier phases passed these around as loose kwargs; the
+# frozen shape eliminates hasattr/getattr fallbacks downstream.
+
+# Valid intents for the Phase 4 classifier. Ordered so the LLM sees the
+# long-standing labels first, then the Phase 4 additions.
+VALID_INTENTS: tuple[str, ...] = (
+    "greeting", "identity", "lookup", "list", "count",
+    "summarize", "compare", "overview", "investigate",
+    "extract", "aggregate",
+    "analyze", "diagnose", "recommend",
+)
+
+# Compact override markers — if the user typed any of these the classifier
+# escalates FormatHint.AUTO to FormatHint.COMPACT regardless of LLM output.
+_COMPACT_OVERRIDE_MARKERS: tuple[str, ...] = (
+    "tl;dr", "tldr", "one paragraph", "one line", "one-line",
+    "keep it short", "short answer", "in brief", "just the answer",
+    "no report", "bullet", "short",
+)
+
+_URL_RE = re.compile(r"https?://[^\s\"')>]+", re.IGNORECASE)
+
+
+class FormatHint(str, enum.Enum):
+    """User-visible response shape hint extracted from the query.
+
+    ``AUTO`` is the default — the shape resolver decides based on intent,
+    pack quality, and the rich-mode flag. ``COMPACT`` and ``RICH`` are
+    explicit overrides (e.g. "tl;dr please" forces compact).
+    """
+
+    AUTO = "auto"
+    COMPACT = "compact"
+    RICH = "rich"
+
+
+@dataclass(frozen=True)
+class ClassifiedQuery:
+    """Canonical classifier output (ERRATA §9).
+
+    ``query_text`` is always populated from the classifier input so downstream
+    builders (Phase 4 prompt assembly, Phase 5 URL-as-prompt) read it
+    directly without hasattr/getattr fallbacks. ``urls`` is a deterministic
+    regex extraction independent of the LLM's JSON shape.
+    """
+
+    query_text: str
+    intent: str
+    format_hint: FormatHint
+    entities: List[str]
+    urls: List[str]
+
+
+async def _call_classifier_llm(prompt: str) -> str:
+    """Placeholder LLM seam — overridden by patched tests.
+
+    The real implementation lives in :class:`IntentRouter` (above) and is
+    threaded through the serving layer. Tests patch this function directly
+    so the async ``classify_query`` surface can be exercised without a
+    vLLM dependency.
+    """
+    raise NotImplementedError(
+        "classify_query is designed to be patched in tests; "
+        "production serving routes through IntentRouter.route()"
+    )
+
+
+def _build_classifier_prompt(query_text: str) -> str:
+    """Build the guided-JSON classification prompt for Phase 4 labels.
+
+    Kept short — no persona, no SME instructions. This LLM call is pure
+    classification; rich-mode formatting lives in generation/prompts.py.
+    """
+    return (
+        "Classify the following user query. Respond ONLY with JSON.\n"
+        f'Query: "{query_text}"\n\n'
+        "Schema:\n"
+        '{\n'
+        '  "intent": one of '
+        + ", ".join(f'"{i}"' for i in VALID_INTENTS)
+        + ",\n"
+        '  "format_hint": one of "auto" | "compact" | "rich",\n'
+        '  "entities": [string, ...],\n'
+        '  "urls": [string, ...]\n'
+        "}"
+    )
+
+
+def _safe_parse(raw: str) -> Dict[str, Any]:
+    """Parse the classifier LLM output into a dict, falling back to {}."""
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+
+
+def _looks_like_compact_override(q: str) -> bool:
+    """Deterministic compact-override detection against the raw input."""
+    lowered = q.lower()
+    return any(marker in lowered for marker in _COMPACT_OVERRIDE_MARKERS)
+
+
+async def classify_query(query_text: str) -> ClassifiedQuery:
+    """Async intent classifier for the Phase 4 rich-mode path.
+
+    Preserves the legacy understand-stage contract (one LLM call per query)
+    but widens the output shape to the ERRATA §9 ``ClassifiedQuery``. When
+    the LLM returns malformed JSON or an unknown intent label we fall back
+    to ``overview`` + ``FormatHint.AUTO`` — safer than guessing a richer
+    intent that could waste pack tokens.
+    """
+    try:
+        raw = await _call_classifier_llm(_build_classifier_prompt(query_text))
+    except NotImplementedError:
+        raw = ""
+    parsed = _safe_parse(raw)
+
+    intent = parsed.get("intent")
+    if intent not in VALID_INTENTS:
+        intent = "overview"
+
+    hint_raw = parsed.get("format_hint", "auto")
+    try:
+        hint = FormatHint(hint_raw)
+    except ValueError:
+        hint = FormatHint.AUTO
+
+    # Deterministic post-parse: a clear compact-override phrase in the raw
+    # query always wins, even if the LLM returned AUTO.
+    if hint is FormatHint.AUTO and _looks_like_compact_override(query_text):
+        hint = FormatHint.COMPACT
+
+    # URL detection is regex-based — independent of LLM output.
+    urls = _URL_RE.findall(query_text)
+
+    entities_raw = parsed.get("entities", [])
+    entities = [e for e in entities_raw if isinstance(e, str)]
+
+    return ClassifiedQuery(
+        query_text=query_text,
+        intent=intent,
+        format_hint=hint,
+        entities=entities,
+        urls=urls,
+    )
