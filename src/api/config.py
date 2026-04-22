@@ -357,7 +357,10 @@ class Config:
         API_KEY = _secret("VLLM_API_KEY", "")
         TIMEOUT = float(os.getenv("VLLM_TIMEOUT", "30"))
         URL = os.getenv("VLLM_URL", "http://localhost:8100")
-        MODEL = os.getenv("VLLM_MODEL", "docwain")
+        # docwain-fast is the --served-model-name the vLLM systemd unit
+        # advertises. The old "docwain" default 404'd at vLLM because no
+        # such served name exists.
+        MODEL = os.getenv("VLLM_MODEL", "docwain-fast")
         GPU_MODE_FILE = os.getenv("DOCWAIN_GPU_MODE_FILE", "/tmp/docwain-gpu-mode.json")
 
     class DocumentProfiler:
