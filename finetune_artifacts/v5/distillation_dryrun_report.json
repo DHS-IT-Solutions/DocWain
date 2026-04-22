@@ -1,0 +1,124 @@
+{
+  "teacher_path": "models/DocWain-14B-v2",
+  "student_path": "Qwen/Qwen3-8B",
+  "student_path_note": "Spec requested Qwen/Qwen3-7B-Instruct but that repo does not exist on Hugging Face (404). Qwen3's smallest dense Instruct variant is Qwen3-8B, which shares the Qwen3 tokenizer (vocab 151936) with Qwen3-14B and DocWain-14B-v2 — so KL is valid. The CLI default in distillation.py still reads 'Qwen/Qwen3-7B-Instruct' per spec; the dry-run used Qwen3-8B explicitly.",
+  "corpus": "finetune_artifacts/v5/sft_reused.jsonl",
+  "corpus_size": 31011,
+  "vocab_size": 151936,
+  "vocab_match": true,
+  "dry_run": true,
+  "dry_run_completed_steps": 10,
+  "update_steps_run": 1,
+  "elapsed_sec": 11.598613500595093,
+  "mean_step_sec": 1.0142690896987916,
+  "teacher_vram_mb": 28168.83,
+  "student_vram_mb": 15624.61,
+  "combined_peak_vram_mb": 64261.99,
+  "optimizer": "PagedAdamW8bit (bitsandbytes 0.49.0)",
+  "max_seq_length_dry_run": 2048,
+  "alpha": 0.5,
+  "temperature": 2.0,
+  "learning_rate": 1e-05,
+  "batch_size": 2,
+  "grad_accum": 8,
+  "loss_trajectory": [
+    {
+      "micro_step": 1,
+      "update_step": 0,
+      "sft_loss": 2.515625,
+      "kl_loss": 14.677764892578125,
+      "total_loss": 8.596694946289062,
+      "step_time_s": 1.6487839221954346,
+      "lr": 0.0
+    },
+    {
+      "micro_step": 2,
+      "update_step": 0,
+      "sft_loss": 3.4375,
+      "kl_loss": 19.811803817749023,
+      "total_loss": 11.624651908874512,
+      "step_time_s": 0.26205992698669434,
+      "lr": 0.0
+    },
+    {
+      "micro_step": 3,
+      "update_step": 0,
+      "sft_loss": 1.625,
+      "kl_loss": 22.77359962463379,
+      "total_loss": 12.199299812316895,
+      "step_time_s": 1.0382683277130127,
+      "lr": 0.0
+    },
+    {
+      "micro_step": 4,
+      "update_step": 0,
+      "sft_loss": 1.8828125,
+      "kl_loss": 16.454166412353516,
+      "total_loss": 9.168489456176758,
+      "step_time_s": 0.620729923248291,
+      "lr": 0.0
+    },
+    {
+      "micro_step": 5,
+      "update_step": 0,
+      "sft_loss": 1.375,
+      "kl_loss": 30.646085739135742,
+      "total_loss": 16.010543823242188,
+      "step_time_s": 0.4035007953643799,
+      "lr": 0.0
+    },
+    {
+      "micro_step": 6,
+      "update_step": 0,
+      "sft_loss": 1.890625,
+      "kl_loss": 22.320087432861328,
+      "total_loss": 12.105356216430664,
+      "step_time_s": 0.32227540016174316,
+      "lr": 0.0
+    },
+    {
+      "micro_step": 7,
+      "update_step": 0,
+      "sft_loss": 1.328125,
+      "kl_loss": 27.722457885742188,
+      "total_loss": 14.525291442871094,
+      "step_time_s": 0.633101224899292,
+      "lr": 0.0
+    },
+    {
+      "micro_step": 8,
+      "update_step": 1,
+      "sft_loss": 1.3203125,
+      "kl_loss": 24.71786117553711,
+      "total_loss": 13.019086837768555,
+      "step_time_s": 4.554119110107422,
+      "lr": 1e-05
+    },
+    {
+      "micro_step": 9,
+      "update_step": 1,
+      "sft_loss": 1.3359375,
+      "kl_loss": 24.583227157592773,
+      "total_loss": 12.959582328796387,
+      "step_time_s": 0.3131904602050781,
+      "lr": 1e-05
+    },
+    {
+      "micro_step": 10,
+      "update_step": 1,
+      "sft_loss": 1.1953125,
+      "kl_loss": 28.630884170532227,
+      "total_loss": 14.913098335266113,
+      "step_time_s": 0.3466618061065674,
+      "lr": 1e-05
+    }
+  ],
+  "green_light_for_real_run": true,
+  "green_light_reasoning": "All 10 micro-steps completed with finite loss values; vocab aligned; optimizer step succeeded at micro-step 8 (first completed grad-accum cycle); peak VRAM 64.3 GB fits the A100-80GB with ~15 GB headroom. Ready for the real 18h run once models/DocWain-14B-v5 is available after Layer 3 (DPO) completes.",
+  "notes_for_real_run": [
+    "Use max_seq_length=4096 per spec (dry-run used 2048 to leave headroom). With bf16 grad checkpointing + 8-bit AdamW this should still fit.",
+    "Teacher cache auto-populates on first epoch. With 31K rows at ~1.1s per miss, first-epoch budget ≈ 9.5 h; subsequent reads are from disk (~ms). Plan: cache warming may dominate the 18h window if corpus exceeds 60K rows — consider warming cache in advance.",
+    "Swap Qwen3-8B → whichever Qwen3 small-dense Qwen ships that has vocab 151936; CLI default stays 'Qwen/Qwen3-7B-Instruct' per spec.",
+    "Checkpoint cadence: every 4 h by default, under models/DocWain-7B-v5/checkpoints/t_<unix>/. Final save overwrites models/DocWain-7B-v5/ itself."
+  ]
+}

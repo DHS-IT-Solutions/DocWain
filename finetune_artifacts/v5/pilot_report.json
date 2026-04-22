@@ -1,0 +1,838 @@
+{
+  "summary": {
+    "total_rows": 20,
+    "accepted": 13,
+    "quarantined": 7,
+    "acceptance_rate": 0.65,
+    "nemotron_tiebreak_rate": 0.65,
+    "by_capability": {
+      "entity_extraction": {
+        "accepted": 2,
+        "quarantine": 1,
+        "total": 3
+      },
+      "domain_recognition": {
+        "accepted": 4,
+        "quarantine": 0,
+        "total": 4
+      },
+      "doctype_classification": {
+        "accepted": 1,
+        "quarantine": 0,
+        "total": 1
+      },
+      "grounded_refusal": {
+        "accepted": 2,
+        "quarantine": 0,
+        "total": 2
+      },
+      "schema_adherence": {
+        "accepted": 1,
+        "quarantine": 0,
+        "total": 1
+      },
+      "identity_in_weights": {
+        "accepted": 0,
+        "quarantine": 2,
+        "total": 2
+      },
+      "intent_understanding": {
+        "accepted": 0,
+        "quarantine": 1,
+        "total": 1
+      },
+      "context_dependence": {
+        "accepted": 2,
+        "quarantine": 0,
+        "total": 2
+      },
+      "cross_doc_reasoning": {
+        "accepted": 0,
+        "quarantine": 1,
+        "total": 1
+      },
+      "layout_understanding": {
+        "accepted": 0,
+        "quarantine": 1,
+        "total": 1
+      },
+      "tool_calling": {
+        "accepted": 1,
+        "quarantine": 0,
+        "total": 1
+      },
+      "citation_discipline": {
+        "accepted": 0,
+        "quarantine": 1,
+        "total": 1
+      }
+    },
+    "capabilities_with_zero_accepted": [
+      "identity_in_weights",
+      "intent_understanding",
+      "cross_doc_reasoning",
+      "layout_understanding",
+      "citation_discipline"
+    ],
+    "total_elapsed_s": 122.0,
+    "pilot_gate_passed": false
+  },
+  "results": [
+    {
+      "row_id": 1,
+      "capability": "entity_extraction",
+      "prompt_preview": "Extract the invoice number and total as JSON with keys 'invoice_number' and 'total' (include currenc",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": {
+        "invoice_number": "INV-2025-050",
+        "total": "\u00a36,000"
+      },
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": {
+            "invoice_number": "INV-2025-050",
+            "total": "\u00a36,000"
+          },
+          "error": null,
+          "latency_s": 0.64
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": {
+            "invoice_number": "INV-2025-050",
+            "total": "\u00a36,000"
+          },
+          "error": null,
+          "latency_s": 5.0
+        }
+      ]
+    },
+    {
+      "row_id": 2,
+      "capability": "entity_extraction",
+      "prompt_preview": "Extract vendor_name and po_number as JSON.\n\nAQUARIUS MARKETING\nPurchase Order No. PO508084\nBilled to",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": {
+        "vendor_name": "AQUARIUS MARKETING",
+        "po_number": "PO508084"
+      },
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": {
+            "vendor_name": "AQUARIUS MARKETING",
+            "po_number": "PO508084"
+          },
+          "error": null,
+          "latency_s": 0.69
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 1.37
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": {
+            "vendor_name": "AQUARIUS MARKETING",
+            "po_number": "PO508084"
+          },
+          "error": null,
+          "latency_s": 2.28
+        }
+      ]
+    },
+    {
+      "row_id": 3,
+      "capability": "entity_extraction",
+      "prompt_preview": "Extract {\"effective_date\":..., \"parties\":[...], \"term_months\":...} as JSON.\n\nThis MASTER SERVICES AG",
+      "accepted": false,
+      "confidence": "quarantine",
+      "agreement": 1,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": false,
+      "reason": "insufficient agreement",
+      "consensus": null,
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": {
+            "effective_date": "April 6, 2023",
+            "parties": [
+              {
+                "name": "Horizon Biotech",
+                "role": "Service Provider"
+              },
+              {
+                "name": "Pinnacle Dynamics",
+                "role": "Client"
+              }
+            ],
+            "term_months": 36
+          },
+          "error": null,
+          "latency_s": 1.58
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": {
+            "effective_date": "2023-04-06",
+            "parties": [
+              "Horizon Biotech",
+              "Pinnacle Dynamics"
+            ],
+            "term_months": 36
+          },
+          "error": null,
+          "latency_s": 2.41
+        }
+      ]
+    },
+    {
+      "row_id": 4,
+      "capability": "domain_recognition",
+      "prompt_preview": "INVOICE No. INV-2025-050. Billed to Assurity Ltd. Subtotal \u00a35,000. Tax \u00a31,000. Total \u00a36,000.",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "invoice",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "invoice",
+          "error": null,
+          "latency_s": 0.13
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "invoice",
+          "error": null,
+          "latency_s": 1.16
+        }
+      ]
+    },
+    {
+      "row_id": 5,
+      "capability": "domain_recognition",
+      "prompt_preview": "MASTER SERVICES AGREEMENT between Horizon Biotech and Pinnacle Dynamics, effective April 6 2023, ter",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "contract",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "contract",
+          "error": null,
+          "latency_s": 0.13
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.93
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "contract",
+          "error": null,
+          "latency_s": 4.78
+        }
+      ]
+    },
+    {
+      "row_id": 6,
+      "capability": "domain_recognition",
+      "prompt_preview": "QUOTATION No. QUT-25-032 valid for 30 days. Prepared for Assurity Ltd. Marketing and brand developme",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "quote",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "quote",
+          "error": null,
+          "latency_s": 0.13
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.89
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "quote",
+          "error": null,
+          "latency_s": 2.81
+        }
+      ]
+    },
+    {
+      "row_id": 7,
+      "capability": "doctype_classification",
+      "prompt_preview": "PROFORMA INVOICE \u2014 not for payment. Items to be shipped: 10 units @ $100.",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "proforma_invoice",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "proforma_invoice",
+          "error": null,
+          "latency_s": 0.17
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "proforma_invoice",
+          "error": null,
+          "latency_s": 5.01
+        }
+      ]
+    },
+    {
+      "row_id": 8,
+      "capability": "grounded_refusal",
+      "prompt_preview": "What is the vendor's tax identification number?\n\nINVOICE No. INV-2025-050. Billed to Assurity Ltd. T",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "not_in_document",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "not_in_document",
+          "error": null,
+          "latency_s": 0.17
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.87
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "not_in_document",
+          "error": null,
+          "latency_s": 4.67
+        }
+      ]
+    },
+    {
+      "row_id": 9,
+      "capability": "grounded_refusal",
+      "prompt_preview": "When was this invoice paid?\n\nINVOICE No. INV-25-062 issued 22 Dec 2025. Total \u00a36,000 due.",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "not_in_document",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "not_in_document",
+          "error": null,
+          "latency_s": 0.17
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.89
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "not_in_document",
+          "error": null,
+          "latency_s": 3.51
+        }
+      ]
+    },
+    {
+      "row_id": 10,
+      "capability": "schema_adherence",
+      "prompt_preview": "INVOICE No. INV-25-054. Date: 22 October 2025. Subtotal \u00a35,000. Tax \u00a31,000. Total \u00a36,000.",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": {
+        "invoice": {
+          "number": "INV-25-054",
+          "date": "22 October 2025",
+          "total": "\u00a36,000"
+        }
+      },
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": {
+            "invoice": {
+              "number": "INV-25-054",
+              "date": "22 October 2025",
+              "total": "\u00a36,000"
+            }
+          },
+          "error": null,
+          "latency_s": 1.05
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.89
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": {
+            "invoice": {
+              "number": "INV-25-054",
+              "date": "22 October 2025",
+              "total": "\u00a36,000"
+            }
+          },
+          "error": null,
+          "latency_s": 7.32
+        }
+      ]
+    },
+    {
+      "row_id": 11,
+      "capability": "identity_in_weights",
+      "prompt_preview": "Who are you? Answer in one sentence.",
+      "accepted": false,
+      "confidence": "quarantine",
+      "agreement": 1,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": false,
+      "reason": "insufficient agreement",
+      "consensus": null,
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "i am qwen, a large-scale language model developed by alibaba cloud.",
+          "error": null,
+          "latency_s": 0.4
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "i am nemotron 3 super, a language model created by nvidia.",
+          "error": null,
+          "latency_s": 2.42
+        }
+      ]
+    },
+    {
+      "row_id": 12,
+      "capability": "identity_in_weights",
+      "prompt_preview": "What kind of documents can you work with?",
+      "accepted": false,
+      "confidence": "quarantine",
+      "agreement": 1,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": false,
+      "reason": "insufficient agreement",
+      "consensus": null,
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "i can work with a wide variety of document types, including: - **text documents:** essays, articles, reports, stories, and other prose. - **technical documents:** user manuals, white papers, research papers, and technical specifications. - **business documents:** emails, meeting notes, presentations, proposals, and contracts. - **tabular data:** i can read and understand tables and extract information from them. - **code files:** i can read and understand code (though i cannot execute it). for the best results, provide the document content directly or describe what you need help with \u2014 i'll assist you accordingly.",
+          "error": null,
+          "latency_s": 2.5
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.94
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "i can work with **text-based content** derived from documents, but i **cannot directly access, upload, or process files** (like pdfs, word docs, or images) myself. here's a clear breakdown to set expectations: ### \u2705 what i *can* work with (if you provide the text): if you **copy and paste the text content** from a document into our chat, i can analyze, summarize, extract information, answer questions, rephrase, translate, or help with tasks like: - **text-based formats**: plain text (.txt), markdown, email bodies, chat logs. - **converted document text**: text extracted from pdfs, word (.doc/.docx), google docs, powerpoint (.pptx), or excel (.csv/.xlsx) files *if you first convert them to readable text* (e.g., via copy-paste, ocr tools for scanned pdfs, or export functions). - **structured data**: csv tables, json snippets, or simple lists (as text). - **code**: snippets in python, javascript, html, etc. ### \ud83d\udcc4 examples of tasks i can help with (using pasted text): | document type | what i can do (with pasted text) | |---------------------|--------------------------------------------------------------------------------------------------| | **research paper** | summarize key findings, explain methodology, identify limitations, suggest related topics. | | **business report** | extract kpis, summarize trends, draft executive summaries, compare sections. | | **legal contract** | explain clauses in plain language, highlight obligations/risk points (not legal advice!). | | **meeting notes** | identify action items, decisions made, summarize discussion points. | | **email thread** | summarize key requests, timeline, or unresolved issues. | | **book chapter** | explain concepts, create study guides, compare arguments across sections. | | **resume/cv** | suggest improvements for clarity/impact, tailor to job descriptions (based on pasted text). | ### \u26a0\ufe0f important limitations: - **no file uploads**: i cannot open attachments or access your local/cloud storage. - **scanned pdfs/images**: if a document is a scan (image-only pdf), you **must first use ocr** (e.g., adobe acrobat, google drive, or free tools like onlineocr) to convert it to selectable text *before* pasting. - **complex visuals**: i cannot interpret charts, graphs, or diagrams *unless you describe them in text* (e.g., \"the bar chart shows q3 sales increased 20% yoy\"). - **token limits**: very long documents (e.g., 100+ pages) may need to be pasted in chunks due to context limits (i can handle ~50k words per interaction, but shorter chunks work better for accuracy). - **no external access**: i can\u2019t browse the web or access live databases unless you paste the relevant info. ### \ud83d\udca1 how to get the best results: 1. **extract the text** from your document (copy-paste or ocr). 2. **paste it directly into our chat**. 3. **specify your goal**: *\"summarize this 3-page policy update in 3 bullet points,\"* *\"explain section 4.2 of this contract like i\u2019m new to this topic,\"* *\"what are the top 3 risks mentioned in this financial report?\"* ### \ud83c\udf1f example workflow: > **you**: [paste text from a 2-page meeting transcript] > **me**: *\"based on your notes, here are the key action items: [list]. the main disagreement was about [topic], resolved by [decision]. next steps: [summary].\"* if you share the **text content** of your document, i\u2019m ready to help! just paste it here and let me know what you need\u2014whether it\u2019s a summary, analysis, translation, or something else. \ud83d\ude0a *(if you\u2019re unsure how to extract text from your specific file type, i can guide you through that too!)*",
+          "error": null,
+          "latency_s": 13.57
+        }
+      ]
+    },
+    {
+      "row_id": 13,
+      "capability": "intent_understanding",
+      "prompt_preview": "INVOICE No. INV-2025-050\nDate: 22 July 2025\nBilled to Assurity Ltd. Subtotal \u00a35,000. Tax \u00a31,000. Tot",
+      "accepted": false,
+      "confidence": "quarantine",
+      "agreement": 1,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": false,
+      "reason": "insufficient agreement",
+      "consensus": null,
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "an invoice for \u00a36,000 was issued to assurity ltd. on 22 july 2025 for services or goods provided by the invoicing company.",
+          "error": null,
+          "latency_s": 0.82
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "this invoice bills assurity ltd. for \u00a35,000 of goods or services plus \u00a31,000 tax, for a total of \u00a36,000 payable to briard bank, account 103\u2011854\u20113586.",
+          "error": null,
+          "latency_s": 7.04
+        }
+      ]
+    },
+    {
+      "row_id": 14,
+      "capability": "context_dependence",
+      "prompt_preview": "What is the total?\n\nINVOICE INV-25-050. Subtotal \u00a35,000. Total \u00a36,000.",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "\u00a36,000",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "\u00a36,000",
+          "error": null,
+          "latency_s": 0.23
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.9
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "\u00a36,000",
+          "error": null,
+          "latency_s": 4.05
+        }
+      ]
+    },
+    {
+      "row_id": 15,
+      "capability": "context_dependence",
+      "prompt_preview": "What is the total?\n\nINVOICE INV-25-054. Subtotal \u00a35,000. Total \u00a38,400.",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "\u00a38,400",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "\u00a38,400",
+          "error": null,
+          "latency_s": 0.23
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "\u00a38,400",
+          "error": null,
+          "latency_s": 2.74
+        }
+      ]
+    },
+    {
+      "row_id": 16,
+      "capability": "cross_doc_reasoning",
+      "prompt_preview": "PO508084: 12 months brand services @ \u00a35,000/month. Total \u00a360,000.\nINV-25-050: 1 month brand services",
+      "accepted": false,
+      "confidence": "quarantine",
+      "agreement": 1,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": false,
+      "reason": "insufficient agreement",
+      "consensus": null,
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "**no** \u2014 the invoice covers 1 month (\u00a36,000) but the po covers 12 months (\u00a360,000).",
+          "error": null,
+          "latency_s": 0.74
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.89
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "no \u2013 the invoice covers only one month at \u00a36,000, whereas the po specifies twelve months of service at \u00a35,000 per month (\u00a360,000 total).",
+          "error": null,
+          "latency_s": 5.9
+        }
+      ]
+    },
+    {
+      "row_id": 17,
+      "capability": "layout_understanding",
+      "prompt_preview": "PAYMENT INFORMATION\nBriard Bank\nAccount Name: AquariusTeam\nAccount No.: 103-854-3586",
+      "accepted": false,
+      "confidence": "quarantine",
+      "agreement": 1,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": false,
+      "reason": "insufficient agreement",
+      "consensus": null,
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "**body**",
+          "error": null,
+          "latency_s": 0.17
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.92
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "header",
+          "error": null,
+          "latency_s": 3.39
+        }
+      ]
+    },
+    {
+      "row_id": 18,
+      "capability": "tool_calling",
+      "prompt_preview": "Find chunks about payment terms in profile 69e260f3.",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "{ \"name\": \"retrieve_chunks\", \"arguments\": { \"query\": \"payment terms\", \"profile_id\": \"69e260f3\" } }",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "{ \"name\": \"retrieve_chunks\", \"arguments\": { \"query\": \"payment terms\", \"profile_id\": \"69e260f3\" } }",
+          "error": null,
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.88
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "{ \"name\": \"retrieve_chunks\", \"arguments\": { \"query\": \"payment terms\", \"profile_id\": \"69e260f3\" } }",
+          "error": null,
+          "latency_s": 5.88
+        }
+      ]
+    },
+    {
+      "row_id": 19,
+      "capability": "citation_discipline",
+      "prompt_preview": "What is the total on this invoice?\n\ndoc_id=DOC123: INVOICE INV-25-050. Subtotal \u00a35,000. Total \u00a36,000",
+      "accepted": false,
+      "confidence": "quarantine",
+      "agreement": 1,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": false,
+      "reason": "insufficient agreement",
+      "consensus": null,
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "the total on this invoice is \u00a36,000 [source: doc123].",
+          "error": null,
+          "latency_s": 0.5
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.91
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "\u00a36,000 [source: doc123]",
+          "error": null,
+          "latency_s": 4.5
+        }
+      ]
+    },
+    {
+      "row_id": 20,
+      "capability": "domain_recognition",
+      "prompt_preview": "STATEMENT of ACCOUNT \u2014 as of 31 Mar 2026. Opening balance \u00a35,000. Payments \u00a33,000. Closing balance \u00a3",
+      "accepted": true,
+      "confidence": "medium",
+      "agreement": 2,
+      "primary_voices_present": 1,
+      "nemotron_tiebreak": true,
+      "reason": "1 primary voice + Nemotron agree (others failed to respond)",
+      "consensus": "statement",
+      "teacher_responses": [
+        {
+          "teacher": "v3_vllm",
+          "ok": true,
+          "parsed": "statement",
+          "error": null,
+          "latency_s": 0.13
+        },
+        {
+          "teacher": "ollama_docwain",
+          "ok": false,
+          "parsed": null,
+          "error": "HTTP Error 500: Internal Server Error",
+          "latency_s": 0.9
+        },
+        {
+          "teacher": "nemotron",
+          "ok": true,
+          "parsed": "statement",
+          "error": null,
+          "latency_s": 3.78
+        }
+      ]
+    }
+  ]
+}

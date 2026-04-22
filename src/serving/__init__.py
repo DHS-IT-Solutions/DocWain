@@ -10,7 +10,7 @@ from src.serving.config import (
 )
 from src.serving.vllm_manager import VLLMManager
 from src.serving.model_router import IntentRouter, RouterResult
-from src.serving.fast_path import FastPathHandler
+from src.serving.intelligence_handler import IntelligenceHandler
 from src.serving.metrics import record_request, get_metrics, reset_metrics
 
 __all__ = [
@@ -23,7 +23,7 @@ __all__ = [
     "VLLMManager",
     "IntentRouter",
     "RouterResult",
-    "FastPathHandler",
+    "IntelligenceHandler",
     "record_request",
     "get_metrics",
     "reset_metrics",

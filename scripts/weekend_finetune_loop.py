@@ -882,7 +882,7 @@ def phase_test(state: LoopState):
             for i, ex in enumerate(test_bank[:50]):  # First 50 for speed
                 try:
                     payload = json.dumps({
-                        "model": "docwain-fast",
+                        "model": "docwain",
                         "messages": [
                             {"role": "system", "content": "You are DocWain, an intelligent document analysis assistant."},
                             {"role": "user", "content": ex["prompt"]},

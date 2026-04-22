@@ -205,7 +205,7 @@ class PlanExecutor:
             payload = hit.payload or {}
             results.append({
                 "content": payload.get("text", ""),
-                "source": payload.get("source_file", payload.get("file_name", "")),
+                "source": payload.get("source_name") or payload.get("source_file") or payload.get("file_name") or "",
                 "relevance_score": round(float(hit.score), 4),
                 "page": payload.get("page"),
                 "document_id": payload.get("document_id", ""),

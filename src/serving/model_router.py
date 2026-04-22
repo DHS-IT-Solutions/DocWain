@@ -1,9 +1,7 @@
-"""LLM-based intent classification for the unified DocWain serving layer.
+"""LLM-based intent classification for the DocWain serving layer.
 
-Historical context: this module used to route between a 14B "fast" and 27B
-"smart" vLLM instance. DocWain is now a single unified model; the classifier
-survives because intent still drives retrieval strategy, KG expansion, and
-visualization choices — not model selection.
+Intent drives retrieval strategy, KG expansion, and visualization choices.
+DocWain uses one unified model; this module never selects a model.
 """
 
 from __future__ import annotations

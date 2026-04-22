@@ -1,0 +1,149 @@
+{
+  "summary": {
+    "mode": "test_batch",
+    "test_batch_size": 8,
+    "capabilities": [
+      "grounded_refusal"
+    ],
+    "budgets": {
+      "grounded_refusal": 8
+    },
+    "per_capability": {
+      "grounded_refusal": {
+        "attempted": 9,
+        "sft_accepted": 8,
+        "dpo_written": 0,
+        "quarantine": 1,
+        "seed": 0,
+        "judge_accepted": 8,
+        "ensemble_accepted": 0
+      }
+    },
+    "totals": {
+      "sft_accepted": 8,
+      "dpo_written": 0,
+      "quarantine": 1,
+      "attempted": 9
+    },
+    "acceptance_rate": 0.889,
+    "elapsed_s": 43.1,
+    "sft_output": "finetune_artifacts/v5/sft_generated.jsonl",
+    "dpo_output": "finetune_artifacts/v5/dpo_generated.jsonl",
+    "teacher_health": {
+      "v3_vllm_up": true,
+      "ollama_up": true
+    }
+  },
+  "sample": [
+    {
+      "capability": "grounded_refusal",
+      "attempt": 1,
+      "accepted": true,
+      "source": "v5_nemotron_authoritative",
+      "prompt_preview": "When was this invoice paid?\n\nINVOICE No. INV-2025-260\nDate: 24 January 2026\nVendor: Assurity Ltd\nBilled to: Summit Medic",
+      "assistant_preview": "NOT_IN_DOCUMENT The invoice does not include a payment date.",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true
+      }
+    },
+    {
+      "capability": "grounded_refusal",
+      "attempt": 2,
+      "accepted": true,
+      "source": "v5_nemotron_authoritative",
+      "prompt_preview": "When was this invoice reviewed by accounts payable?\n\nINVOICE No. INV-2024-233\nDate: 20 January 2026\nVendor: Horizon Biot",
+      "assistant_preview": "NOT_IN_DOCUMENT The document does not include the accounts payable review date.",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true
+      }
+    },
+    {
+      "capability": "grounded_refusal",
+      "attempt": 3,
+      "accepted": true,
+      "source": "v5_nemotron_authoritative",
+      "prompt_preview": "What discount was applied?\n\nINVOICE No. INV-2025-613\nDate: 28 January 2024\nVendor: Acme Trading Co\nBilled to: Aquarius M",
+      "assistant_preview": "NOT_IN_DOCUMENT The invoice does not mention any discount.",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true
+      }
+    },
+    {
+      "capability": "grounded_refusal",
+      "attempt": 4,
+      "accepted": true,
+      "source": "v5_nemotron_authoritative",
+      "prompt_preview": "What is the buyer's VAT number?\n\nINVOICE No. INV-2025-114\nDate: 4 July 2025\nVendor: Glacier Insurance\nBilled to: Acme Tr",
+      "assistant_preview": "NOT_IN_DOCUMENT \u2013 The invoice does not include the buyer's VAT number.",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true
+      }
+    },
+    {
+      "capability": "grounded_refusal",
+      "attempt": 5,
+      "accepted": true,
+      "source": "v5_nemotron_authoritative",
+      "prompt_preview": "What is the buyer's tax ID?\n\nPURCHASE ORDER No. PO2194235\nBuyer: Briard Bank\nVendor: Blueprint Architects\nTotal: $21,156",
+      "assistant_preview": "NOT_IN_DOCUMENT The buyer's tax ID is not provided.",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true
+      }
+    },
+    {
+      "capability": "grounded_refusal",
+      "attempt": 6,
+      "accepted": true,
+      "source": "v5_nemotron_authoritative",
+      "prompt_preview": "What was the actual delivery date?\n\nPURCHASE ORDER No. PO3326067\nBuyer: Leica Microsystems\nVendor: Zenith Logistics\nTota",
+      "assistant_preview": "NOT_IN_DOCUMENT The purchase order does not include an actual delivery date.",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true
+      }
+    },
+    {
+      "capability": "grounded_refusal",
+      "attempt": 7,
+      "accepted": true,
+      "source": "v5_nemotron_authoritative",
+      "prompt_preview": "Who authorised this payment?\n\nINVOICE No. INV-2024-897\nDate: 9 October 2026\nVendor: Leica Microsystems\nBilled to: Horizo",
+      "assistant_preview": "NOT_IN_DOCUMENT The invoice does not indicate who authorised the payment.",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true
+      }
+    },
+    {
+      "capability": "grounded_refusal",
+      "attempt": 8,
+      "accepted": false,
+      "source": null,
+      "prompt_preview": "When was this invoice first sent?\n\nINVOICE No. INV-2025-728\nDate: 3 December 2026\nVendor: Glacier Insurance\nBilled to: Z",
+      "assistant_preview": "",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true,
+        "reason": "nemotron_did_not_refuse",
+        "sample": "3 December 2026"
+      }
+    },
+    {
+      "capability": "grounded_refusal",
+      "attempt": 9,
+      "accepted": true,
+      "source": "v5_nemotron_authoritative",
+      "prompt_preview": "When was this PO signed?\n\nPURCHASE ORDER No. PO6466205\nBuyer: Briard Bank\nVendor: Apex Consulting Group\nTotal: $243,085\n",
+      "assistant_preview": "NOT_IN_DOCUMENT The document does not include a date or signing date for the purchase order.",
+      "diag": {
+        "path": "nemotron_authoritative",
+        "nemotron_ok": true
+      }
+    }
+  ]
+}

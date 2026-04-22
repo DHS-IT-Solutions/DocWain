@@ -45,7 +45,6 @@ from src.embedding.pipeline.chunk_integrity import is_valid_chunk_text
 from src.embedding.pipeline.embed_pipeline import ChunkPrepStats, prepare_embedding_chunks, normalize_chunk_chain
 from src.embedding.pipeline.payload_normalizer import build_qdrant_payload, normalize_chunk_metadata
 from src.embedding.pipeline.schema_normalizer import EMBED_PIPELINE_VERSION
-from src.kg.ingest import build_graph_payload, get_graph_ingest_queue
 from src.embedding.model_loader import encode_with_fallback as model_encode_with_fallback, get_embedding_model
 from src.embedding.chunking.section_chunker import SectionChunker, normalize_text
 from src.metrics.ai_metrics import get_metrics_store
@@ -1694,17 +1693,21 @@ def save_embeddings_to_qdrant(
                 logger.debug("Redis client initialization failed: %s", exc)
                 redis_client = None
 
-        graph_payload = build_graph_payload(
-            embeddings_payload=embeddings,
+        # KG ingest via the shared trigger — one source of truth across
+        # all extraction paths. Synchronous here because this function
+        # already runs in its own thread context upstream; wrapping in
+        # another thread would just add overhead.
+        from src.kg.trigger import enqueue_from_embeddings
+        enqueue_from_embeddings(
+            document_id=doctag,
             subscription_id=subscription_id,
             profile_id=profile_id,
-            document_id=doctag,
             doc_name=filename or source_filename,
+            embeddings_payload=embeddings,
             doc_metadata=doc_metadata,
+            async_=False,
+            redis_client=redis_client,
         )
-        if graph_payload:
-            queue = get_graph_ingest_queue(redis_client)
-            queue.enqueue(graph_payload)
 
         try:
             from src.intelligence.facts_store import FactsStore
@@ -1886,8 +1889,6 @@ def save_embeddings_to_qdrant(
 # CRITICAL FIX for train_on_document() in dataHandler.py
 
 # Replace your existing train_on_document function with this:
-
-from src.api.enhanced_retrieval import chunk_text_for_embedding
 
 def _safe_basename(value: Optional[str]) -> str:
     if not value:
@@ -3227,23 +3228,22 @@ def train_on_document(text, subscription_id, profile_id, doc_tag, doc_name, devi
             doc_metadata = _fetch_document_metadata(doc_tag, doc_name, None)
             doc_type = doc_metadata.get("doc_type")
 
+            # One chunking contract (impact #2): SectionChunker is the only
+            # chunker. The previous sliding-window fallback produced chunks
+            # with a different metadata shape (chunk_id / prev_chunk_id /
+            # next_chunk_id) than SectionChunker (section_title / page_start
+            # / page_end), and any fallback run would poison Qdrant with
+            # inconsistent payloads. Fail loud instead — the SectionChunker
+            # itself handles malformed inputs defensively.
             chunking_mode = "section_aware"
-            try:
-                chunks, chunk_metadata, _ = _chunk_with_section_chunker(
-                    text,
-                    doc_tag=doc_tag,
-                    doc_name=doc_name,
-                    doc_type=doc_type,
-                    doc_ocr_confidence=None,
-                    chunking_mode=chunking_mode,
-                )
-            except Exception as exc:  # noqa: BLE001
-                # Fallback to the legacy chunker to avoid total failure on edge cases.
-                logger.warning("Section chunking failed for %s: %s; falling back", doc_name, exc)
-                chunks_with_meta = chunk_text_for_embedding(text, doc_name, document_id=doc_tag)
-                chunks = [chunk_text for chunk_text, _meta in chunks_with_meta if (chunk_text or "").strip()]
-                chunk_metadata = [meta for chunk_text, meta in chunks_with_meta if (chunk_text or "").strip()]
-                chunking_mode = "sliding_window_fallback"
+            chunks, chunk_metadata, _ = _chunk_with_section_chunker(
+                text,
+                doc_tag=doc_tag,
+                doc_name=doc_name,
+                doc_type=doc_type,
+                doc_ocr_confidence=None,
+                chunking_mode=chunking_mode,
+            )
 
             if not chunks:
                 raise ValueError(f"No valid chunks in {doc_name}")

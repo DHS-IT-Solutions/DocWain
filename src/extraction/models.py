@@ -84,6 +84,15 @@ class ExtractionResult:
     relationships: list
     tables: list
     metadata: dict
+    # Layer 1 deterministic extraction (see src/extraction/deterministic.py).
+    # Optional / default None for backward compat with callers that construct
+    # ExtractionResult directly without wiring the deterministic stage.
+    raw_extraction: Optional[dict] = None
+    # Layer 2 semantic fields — flat {key: value} from V2 (e.g., vendor,
+    # invoice_number, total, due_date). Carried separately from entities so
+    # downstream KG ingest can attach them to the Document node as labeled
+    # properties rather than free-text entity mentions.
+    fields: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """Serialize to dict for Azure Blob storage."""
@@ -96,7 +105,9 @@ class ExtractionResult:
             "entities": [vars(e) if hasattr(e, '__dict__') else e for e in self.entities],
             "relationships": [vars(r) if hasattr(r, '__dict__') else r for r in self.relationships],
             "tables": [vars(t) if hasattr(t, '__dict__') else t for t in self.tables],
-            "metadata": self.metadata
+            "metadata": self.metadata,
+            "raw_extraction": self.raw_extraction,
+            "fields": self.fields,
         }
 
     def to_summary(self) -> dict:

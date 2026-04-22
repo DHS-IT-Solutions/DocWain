@@ -3,6 +3,7 @@
 import hashlib
 import json
 import time
+from typing import List
 
 from celery.exceptions import SoftTimeLimitExceeded
 from src.celery_app import app
@@ -106,6 +107,73 @@ def _get_kg_node_ids(document_id: str) -> list:
         return []
 
 
+def _update_section_kg(
+    *,
+    document_id: str,
+    subscription_id: str,
+    profile_id: str,
+    source_filename: str,
+    doc_domain: str,
+    chunk_dicts: list,
+    screening_summary: dict,
+) -> None:
+    """Write Sections / Chunks / ABOUT edges from chunker output.
+
+    Single entry point — both the legacy ``dataHandler.py`` section
+    writer and the Celery embed path now converge here. Derives the
+    section list from the SectionChunker chunk metadata (one Section
+    node per distinct ``section.id``) and forwards entity facts from
+    the screening summary when available.
+    """
+    from src.intelligence.kg_updater import KGUpdater
+
+    # Deduplicate sections by section_id preserving first-seen order
+    seen_section_ids: set = set()
+    sections_payload: list = []
+    chunk_metadata_payload: list = []
+    for idx, c in enumerate(chunk_dicts):
+        section_meta = c.get("section") or {}
+        section_id = section_meta.get("id") or f"section_{idx}"
+        section_title = section_meta.get("title") or ""
+        if section_id not in seen_section_ids:
+            sections_payload.append({
+                "section_id": section_id,
+                "section_title": section_title,
+                "section_kind": "text",
+            })
+            seen_section_ids.add(section_id)
+        chunk_id = f"{document_id}_chunk_{idx}"
+        chunk_metadata_payload.append({
+            "chunk_id": chunk_id,
+            "section_id": section_id,
+            "chunk_kind": c.get("type") or "text",
+        })
+
+    # Section facts: prefer the section-intelligence output from the
+    # screening summary when it's available. When absent (most common
+    # today), we pass an empty list — sections/chunks still get nodes
+    # and HAS_CHUNK edges; ABOUT edges come later from the
+    # build_knowledge_graph task using extraction entities.
+    section_facts = (screening_summary or {}).get("section_facts") or []
+
+    updater = KGUpdater()
+    counts = updater.update(
+        subscription_id=str(subscription_id),
+        profile_id=str(profile_id),
+        document_id=str(document_id),
+        source_name=str(source_filename),
+        doc_domain=str(doc_domain or "generic"),
+        sections=sections_payload,
+        chunk_metadata=chunk_metadata_payload,
+        section_facts=section_facts,
+    )
+    logger.info(
+        "Section KG write for %s: sections=%d chunks=%d entities=%d mentions=%d",
+        document_id, counts.get("sections", 0), counts.get("chunks", 0),
+        counts.get("entities", 0), counts.get("mentions", 0),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main task
 # ---------------------------------------------------------------------------
@@ -199,10 +267,57 @@ def embed_document(self, document_id: str, subscription_id: str,
         if not chunk_dicts:
             raise ValueError(f"No chunks remaining after dedup for {document_id}")
 
-        # ── 7. Generate dense vectors ───────────────────────────────────
+        # ── 6b. Contextual Retrieval (optional) ─────────────────────────
+        # Generate a per-chunk retrieval context so the embedding vector
+        # carries identifiers (invoice/PO numbers, dates, parties) that
+        # may not be lexically present in the chunk body itself. This is
+        # the same helper that runs on the non-Celery ingest path; it's
+        # a no-op when Config.ContextualRetrieval.ENABLED is off or vLLM
+        # is unreachable. Context text is also persisted on the payload
+        # for traceability.
+        contexts: List[str] = ["" for _ in chunk_dicts]
+        try:
+            from src.api.config import Config as _Config
+            cr_enabled = bool(getattr(getattr(_Config, "ContextualRetrieval", None), "ENABLED", False))
+        except Exception:
+            cr_enabled = False
+        if cr_enabled and chunk_dicts:
+            try:
+                from src.serving.vllm_manager import VLLMManager
+                from src.embedding.pipeline.contextual_embedding import generate_context_for_chunk
+                vllm = VLLMManager()
+                if vllm.health_check():
+                    doc_text = "\n\n".join(c.get("text", "") for c in chunk_dicts if c.get("text"))
+                    doc_name = source_filename or document_id
+                    doc_type = record.get("doc_domain") or record.get("doc_type") or "document"
+                    t0_ctx = time.monotonic()
+                    for idx, c in enumerate(chunk_dicts):
+                        ctx = generate_context_for_chunk(
+                            vllm,
+                            doc_name=doc_name,
+                            doc_type=doc_type,
+                            doc_text=doc_text,
+                            chunk_text=c.get("text", ""),
+                            chunk_index=idx,
+                        )
+                        contexts[idx] = ctx
+                    logger.info(
+                        "Contextual Retrieval: enriched %d chunk(s) for %s in %.1fs",
+                        sum(1 for c in contexts if c), document_id,
+                        time.monotonic() - t0_ctx,
+                    )
+                else:
+                    logger.info("Contextual Retrieval: vLLM unreachable, skipping for %s", document_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Contextual Retrieval skipped for %s: %s", document_id, exc)
+
+        # ── 7. Generate dense vectors (context-prepended when available) ──
         from src.embedding.model_loader import encode_with_fallback
 
-        texts = [c["text"] for c in chunk_dicts]
+        texts = [
+            (f"{ctx}\n\n{c['text']}" if ctx else c["text"])
+            for c, ctx in zip(chunk_dicts, contexts)
+        ]
         vectors = encode_with_fallback(
             texts,
             convert_to_numpy=True,
@@ -235,7 +350,13 @@ def embed_document(self, document_id: str, subscription_id: str,
                 screening_summary=screening_summary,
                 kg_node_ids=kg_node_ids if kg_ready else [],
                 quality_grade=grade,
+                source_name=source_filename,
+                doc_domain=str(record.get("doc_domain") or "generic"),
             )
+            if contexts[idx]:
+                payload["chunk_context"] = contexts[idx]
+                payload["embedding_text"] = texts[idx]
+                payload["contextualized"] = True
             payloads.append(payload)
 
         avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0.0
@@ -272,6 +393,46 @@ def embed_document(self, document_id: str, subscription_id: str,
         logger.info("Upserted %d records to Qdrant collection %s for %s",
                      upserted, collection_name, document_id)
 
+        # ── 9b. Section-level KG write (impact #3) ──────────────────────
+        # Populate Sections + HAS_CHUNK + ABOUT edges in Neo4j so the
+        # intelligence / retrieval layers see a consistent graph. Before
+        # this, the only section-level writer was dataHandler.py's sync
+        # path — now retired by the UI-to-Celery routing — so section
+        # structure went missing on every new upload. Runs after the
+        # Qdrant upsert so chunk_ids match between both stores.
+        try:
+            _update_section_kg(
+                document_id=document_id,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                source_filename=source_filename,
+                doc_domain=record.get("doc_domain") or "generic",
+                chunk_dicts=chunk_dicts,
+                screening_summary=screening_summary,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Never block the embed flow on KG write errors — the
+            # document-level KG (Entities, MENTIONS) is still written
+            # by the async build_knowledge_graph Celery task.
+            logger.warning("Section-level KG update skipped for %s: %s", document_id, exc)
+
+        # ── 9c. Consistency check (impact #5) ───────────────────────────
+        # Verify chunk_id parity across the three stores. Writes a
+        # consistency_check report to the Mongo document; never raises
+        # so a flaky external store can't fail the whole embed.
+        try:
+            from src.tasks.consistency_check import verify as _verify_consistency
+            _consistency = _verify_consistency(
+                document_id=document_id,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                expected_chunk_ids=[r.chunk_id for r in records if r.chunk_id],
+            )
+            _consistency_severity = _consistency.get("severity", "ok")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("consistency-check skipped for %s: %s", document_id, exc)
+            _consistency_severity = "skipped"
+
         # ── 10. Update MongoDB: COMPLETED ────────────────────────────────
         embedding_summary = {
             "chunk_count": len(chunk_dicts),
@@ -280,6 +441,7 @@ def embed_document(self, document_id: str, subscription_id: str,
             "avg_quality_score": round(avg_quality, 3),
             "vector_dim": vector_dim,
             "collection": collection_name,
+            "consistency": _consistency_severity,
         }
         update_stage(document_id, "embedding", status=STAGE_COMPLETED,
                      summary=embedding_summary, error=None)

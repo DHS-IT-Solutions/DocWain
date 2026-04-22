@@ -1,0 +1,30 @@
+{"prompt": "IN THE HIGH COURT OF JUSTICE — Case No. 2021/8749. Between Acme Trading Co (Claimant) and Glacier Insurance (Defendant). Particulars of Claim: breach of contract.", "expected": "legal"}
+{"prompt": "CLINICAL REPORT — Patient ID PT9056.\nDiagnosis: hypertension. Medications prescribed: ramipril 5mg once daily.\nFollow-up in 3 months.", "expected": "clinical"}
+{"prompt": "MASTER SERVICES AGREEMENT between Horizon Biotech and Delta Freight Services, effective January 17 2025, term 36 months.", "expected": "contract"}
+{"prompt": "STATEMENT of ACCOUNT — as of 20 Dec 2025. Opening balance £29,780. Closing balance £9,149.", "expected": "statement"}
+{"prompt": "STATEMENT of ACCOUNT — as of 3 Jan 2026. Opening balance £39,933. Closing balance £34,231.", "expected": "statement"}
+{"prompt": "INVOICE No. INV-2026-080\nDate: 25 January 2024\nVendor: Zenith Logistics\nBilled to: Aquarius Marketing, Singapore\nSubtotal €11,053\nTax (20%) €2,210\nTotal €13,263\n", "expected": "invoice"}
+{"prompt": "Mia Torres\nHorsham, UK | Senior Engineer\nEXPERIENCE: 11 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS", "expected": "resume"}
+{"prompt": "STATEMENT of ACCOUNT — as of 24 Dec 2025. Opening balance £39,242. Closing balance £27,175.", "expected": "statement"}
+{"prompt": "Robert Callahan\nLondon | Senior Engineer\nEXPERIENCE: 16 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS", "expected": "resume"}
+{"prompt": "PURCHASE ORDER No. PO2461510\nBuyer: Horizon Biotech\nVendor: Blueprint Architects\nTotal: £225,980\nShipping: FedEx Ground\nPayment terms: Net 30", "expected": "purchase_order"}
+{"prompt": "QUOTATION No. QUT-772 valid for 30 days. Prepared for Delta Freight Services. Marketing services £99,000.", "expected": "quote"}
+{"prompt": "MASTER SERVICES AGREEMENT between Horizon Biotech and Pinnacle Dynamics, effective July 22 2024, term 36 months.", "expected": "contract"}
+{"prompt": "INVOICE No. INV-2025-249\nDate: 11 December 2026\nVendor: Redwood Enterprises\nBilled to: Leica Microsystems, Horsham, UK\nSubtotal €151,523\nTax (20%) €30,304\nTotal €181,827\n", "expected": "invoice"}
+{"prompt": "Installation Manual — Model XR750.\nSection 3.2: Connect the power cable to the AC inlet. Ensure ground is secure.\nTorque specification: 4 Nm.", "expected": "technical"}
+{"prompt": "PURCHASE ORDER No. PO4996624\nBuyer: Briard Bank\nVendor: Redwood Enterprises\nTotal: €185,419\nShipping: FedEx Ground\nPayment terms: Net 30", "expected": "purchase_order"}
+{"prompt": "CLINICAL REPORT — Patient ID PT4470.\nDiagnosis: hypertension. Medications prescribed: ramipril 5mg once daily.\nFollow-up in 3 months.", "expected": "clinical"}
+{"prompt": "INVOICE No. INV-2026-230\nDate: 15 July 2024\nVendor: Pinnacle Dynamics\nBilled to: Summit Medical, Horsham, UK\nSubtotal $110,556\nTax (20%) $22,111\nTotal $132,667\n", "expected": "invoice"}
+{"prompt": "STATEMENT of ACCOUNT — as of 20 Jul 2026. Opening balance £1,665. Closing balance £34,857.", "expected": "statement"}
+{"prompt": "PURCHASE ORDER No. PO5788907\nBuyer: Apex Consulting Group\nVendor: Summit Medical\nTotal: €246,639\nShipping: FedEx Ground\nPayment terms: Net 30", "expected": "purchase_order"}
+{"prompt": "QUOTATION No. QUT-458 valid for 30 days. Prepared for Leica Microsystems. Consulting services €179,000.", "expected": "quote"}
+{"prompt": "Mia Torres\nToronto | Senior Engineer\nEXPERIENCE: 6 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS", "expected": "resume"}
+{"prompt": "MASTER SERVICES AGREEMENT between Horizon Biotech and Aquarius Marketing, effective July 11 2025, term 24 months.", "expected": "contract"}
+{"prompt": "IN THE HIGH COURT OF JUSTICE — Case No. 2024/7173. Between Praxis Engineering (Claimant) and Apex Consulting Group (Defendant). Particulars of Claim: breach of contract.", "expected": "legal"}
+{"prompt": "PURCHASE ORDER No. PO7006258\nBuyer: Glacier Insurance\nVendor: Apex Consulting Group\nTotal: €130,384\nShipping: FedEx Ground\nPayment terms: Net 30", "expected": "purchase_order"}
+{"prompt": "PURCHASE ORDER No. PO5548705\nBuyer: Assurity Ltd\nVendor: Summit Medical\nTotal: £210,561\nShipping: FedEx Ground\nPayment terms: Net 30", "expected": "purchase_order"}
+{"prompt": "Installation Manual — Model M530.\nSection 3.2: Connect the power cable to the AC inlet. Ensure ground is secure.\nTorque specification: 4 Nm.", "expected": "technical"}
+{"prompt": "Mia Torres\nAmsterdam | Senior Engineer\nEXPERIENCE: 19 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS", "expected": "resume"}
+{"prompt": "Robert Callahan\nSingapore | Senior Engineer\nEXPERIENCE: 6 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS", "expected": "resume"}
+{"prompt": "Aisha Patel\nAmsterdam | Senior Engineer\nEXPERIENCE: 20 years\nSKILLS: Python, Kafka, Kubernetes, ML, AWS", "expected": "resume"}
+{"prompt": "QUOTATION No. QUT-936 valid for 30 days. Prepared for Glacier Insurance. Consulting services £74,000.", "expected": "quote"}

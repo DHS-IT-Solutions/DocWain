@@ -1,0 +1,325 @@
+{
+  "HR Invoice_2.jpeg": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [
+      "OCR confidence mean=95.2"
+    ],
+    "summary": "HR Invoice_2.jpeg [jpeg]  dims=1700x4400  ocr_words=114  text=786ch  blocks=36  tables=0",
+    "extraction": {
+      "file_format": "jpeg",
+      "text_char_count": 786,
+      "block_count": 36,
+      "table_count": 0,
+      "metadata": {
+        "pixel_dimensions": "1700x4400",
+        "mode": "RGB",
+        "ocr_confidence_mean": 95.2,
+        "ocr_confidence_min": 83,
+        "ocr_confidence_max": 96,
+        "ocr_word_count": 114,
+        "ocr_line_count": 36
+      },
+      "warnings": []
+    }
+  },
+  "HR Quote v2.xlsx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [],
+    "summary": "HR Quote v2.xlsx [xlsx]  sheets=1  text=1254ch  blocks=83  tables=1",
+    "extraction": {
+      "file_format": "xlsx",
+      "text_char_count": 1254,
+      "block_count": 83,
+      "table_count": 1,
+      "metadata": {
+        "sheet_names": [
+          "Quote"
+        ],
+        "sheet_count": 1
+      },
+      "warnings": []
+    }
+  },
+  "Office Clean Invoice1.docx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [],
+    "summary": "Office Clean Invoice1.docx [docx]  paragraphs=0  images_inline=1  text=852ch  blocks=0  tables=5",
+    "extraction": {
+      "file_format": "docx",
+      "text_char_count": 852,
+      "block_count": 0,
+      "table_count": 5,
+      "metadata": {
+        "headers": [],
+        "footers": [],
+        "watermarks": [],
+        "inline_image_count": 1,
+        "paragraph_count": 0
+      },
+      "warnings": []
+    }
+  },
+  "Office Clean Invoice1.pdf": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [],
+    "summary": "Office Clean Invoice1.pdf [pdf]  pages=2  images_embedded=2  text=995ch  blocks=2  tables=3",
+    "extraction": {
+      "file_format": "pdf",
+      "text_char_count": 995,
+      "block_count": 2,
+      "table_count": 3,
+      "metadata": {
+        "pdf_metadata": {
+          "format": "PDF 1.7",
+          "title": "",
+          "author": "",
+          "subject": "",
+          "keywords": "",
+          "creator": "Microsoft® Word for Microsoft 365",
+          "producer": "Microsoft® Word for Microsoft 365",
+          "creationDate": "D:20260411150211+01'00'",
+          "modDate": "D:20260411150211+01'00'",
+          "trapped": "",
+          "encryption": null
+        },
+        "page_count": 2,
+        "is_encrypted": false,
+        "embedded_image_count": 2
+      },
+      "warnings": []
+    }
+  },
+  "Office Clean_PO520512_QTE-2026-01844_watermark.docx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [
+      "watermarks detected: ['Purchase Order']"
+    ],
+    "summary": "Office Clean_PO520512_QTE-2026-01844_watermark.docx [docx]  paragraphs=5  images_inline=0  text=1093ch  blocks=6  tables=4",
+    "extraction": {
+      "file_format": "docx",
+      "text_char_count": 1093,
+      "block_count": 6,
+      "table_count": 4,
+      "metadata": {
+        "headers": [],
+        "footers": [],
+        "watermarks": [
+          "Purchase Order"
+        ],
+        "inline_image_count": 0,
+        "paragraph_count": 5
+      },
+      "warnings": []
+    }
+  },
+  "PO5205561_watermark_less Items_no vat_duplicate .docx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [
+      "watermarks detected: ['Purchase Order']"
+    ],
+    "summary": "PO5205561_watermark_less Items_no vat_duplicate .docx [docx]  paragraphs=10  images_inline=0  text=1161ch  blocks=11  tables=2",
+    "extraction": {
+      "file_format": "docx",
+      "text_char_count": 1161,
+      "block_count": 11,
+      "table_count": 2,
+      "metadata": {
+        "headers": [],
+        "footers": [],
+        "watermarks": [
+          "Purchase Order"
+        ],
+        "inline_image_count": 0,
+        "paragraph_count": 10
+      },
+      "warnings": []
+    }
+  },
+  "PO520556_QTE-2026-01521_HRInvoice2.docx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [
+      "watermarks detected: ['Purchase Order']"
+    ],
+    "summary": "PO520556_QTE-2026-01521_HRInvoice2.docx [docx]  paragraphs=6  images_inline=0  text=1222ch  blocks=7  tables=4",
+    "extraction": {
+      "file_format": "docx",
+      "text_char_count": 1222,
+      "block_count": 7,
+      "table_count": 4,
+      "metadata": {
+        "headers": [],
+        "footers": [],
+        "watermarks": [
+          "Purchase Order"
+        ],
+        "inline_image_count": 0,
+        "paragraph_count": 6
+      },
+      "warnings": []
+    }
+  },
+  "PO520556_QTE-2026-01521_watermark.docx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [
+      "watermarks detected: ['Purchase Order']"
+    ],
+    "summary": "PO520556_QTE-2026-01521_watermark.docx [docx]  paragraphs=6  images_inline=0  text=1222ch  blocks=7  tables=4",
+    "extraction": {
+      "file_format": "docx",
+      "text_char_count": 1222,
+      "block_count": 7,
+      "table_count": 4,
+      "metadata": {
+        "headers": [],
+        "footers": [],
+        "watermarks": [
+          "Purchase Order"
+        ],
+        "inline_image_count": 0,
+        "paragraph_count": 6
+      },
+      "warnings": []
+    }
+  },
+  "QUOTE_WSG100024_watermark_split tables.docx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [
+      "watermarks detected: ['Purchase Order']"
+    ],
+    "summary": "QUOTE_WSG100024_watermark_split tables.docx [docx]  paragraphs=10  images_inline=0  text=1093ch  blocks=11  tables=2",
+    "extraction": {
+      "file_format": "docx",
+      "text_char_count": 1093,
+      "block_count": 11,
+      "table_count": 2,
+      "metadata": {
+        "headers": [],
+        "footers": [],
+        "watermarks": [
+          "Purchase Order"
+        ],
+        "inline_image_count": 0,
+        "paragraph_count": 10
+      },
+      "warnings": []
+    }
+  },
+  "QUOTE_WSG100025_watermark_split tables.pdf": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [
+      "stitched 1 cross-page table(s)"
+    ],
+    "summary": "QUOTE_WSG100025_watermark_split tables.pdf [pdf]  pages=2  images_embedded=2  text=1212ch  blocks=2  tables=1",
+    "extraction": {
+      "file_format": "pdf",
+      "text_char_count": 1212,
+      "block_count": 2,
+      "table_count": 1,
+      "metadata": {
+        "pdf_metadata": {
+          "format": "PDF 1.7",
+          "title": "",
+          "author": "Nicholas Geelen",
+          "subject": "",
+          "keywords": "",
+          "creator": "Microsoft® Word for Microsoft 365",
+          "producer": "Microsoft® Word for Microsoft 365",
+          "creationDate": "D:20260409215136+01'00'",
+          "modDate": "D:20260409215136+01'00'",
+          "trapped": "",
+          "encryption": null
+        },
+        "page_count": 2,
+        "is_encrypted": false,
+        "embedded_image_count": 2
+      },
+      "warnings": []
+    }
+  },
+  "quote_scenario_1.xlsx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [],
+    "summary": "quote_scenario_1.xlsx [xlsx]  sheets=1  text=4447ch  blocks=133  tables=1",
+    "extraction": {
+      "file_format": "xlsx",
+      "text_char_count": 4447,
+      "block_count": 133,
+      "table_count": 1,
+      "metadata": {
+        "sheet_names": [
+          "Quote 1"
+        ],
+        "sheet_count": 1
+      },
+      "warnings": []
+    }
+  },
+  "quote_scenario_2.xlsx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [],
+    "summary": "quote_scenario_2.xlsx [xlsx]  sheets=1  text=3284ch  blocks=119  tables=1",
+    "extraction": {
+      "file_format": "xlsx",
+      "text_char_count": 3284,
+      "block_count": 119,
+      "table_count": 1,
+      "metadata": {
+        "sheet_names": [
+          "Quote 2"
+        ],
+        "sheet_count": 1
+      },
+      "warnings": []
+    }
+  },
+  "quote_scenario_3.xlsx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [],
+    "summary": "quote_scenario_3.xlsx [xlsx]  sheets=1  text=3375ch  blocks=120  tables=1",
+    "extraction": {
+      "file_format": "xlsx",
+      "text_char_count": 3375,
+      "block_count": 120,
+      "table_count": 1,
+      "metadata": {
+        "sheet_names": [
+          "Quote 3"
+        ],
+        "sheet_count": 1
+      },
+      "warnings": []
+    }
+  },
+  "quote_scenario_4.xlsx": {
+    "passed": true,
+    "failed_gates": [],
+    "advisories": [],
+    "summary": "quote_scenario_4.xlsx [xlsx]  sheets=1  text=5178ch  blocks=152  tables=1",
+    "extraction": {
+      "file_format": "xlsx",
+      "text_char_count": 5178,
+      "block_count": 152,
+      "table_count": 1,
+      "metadata": {
+        "sheet_names": [
+          "Quote 4"
+        ],
+        "sheet_count": 1
+      },
+      "warnings": []
+    }
+  }
+}

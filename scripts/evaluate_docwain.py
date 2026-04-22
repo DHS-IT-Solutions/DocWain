@@ -36,8 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-name",
-        default="docwain-fast",
-        help="Model alias/name to send in the request payload (default: docwain-fast)",
+        default="docwain",
+        help="Model alias/name to send in the request payload (default: docwain)",
     )
     parser.add_argument(
         "--judge",
@@ -54,8 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--judge-model",
-        default="docwain-fast",
-        help="Judge model alias (default: docwain-fast)",
+        default="docwain",
+        help="Judge model alias (default: docwain)",
     )
     parser.add_argument(
         "--max-examples",

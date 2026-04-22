@@ -357,12 +357,24 @@ class Config:
         API_KEY = _secret("VLLM_API_KEY", "")
         TIMEOUT = float(os.getenv("VLLM_TIMEOUT", "30"))
         URL = os.getenv("VLLM_URL", "http://localhost:8100")
-        MODEL = os.getenv("VLLM_MODEL", "docwain-fast")
+        MODEL = os.getenv("VLLM_MODEL", "docwain")
         GPU_MODE_FILE = os.getenv("DOCWAIN_GPU_MODE_FILE", "/tmp/docwain-gpu-mode.json")
 
     class DocumentProfiler:
         """Ingestion-time document profiling via LLM."""
         ENABLED = os.getenv("DOC_PROFILER_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
+    class ContextualRetrieval:
+        """Anthropic-style Contextual Retrieval.
+
+        For every chunk, an LLM generates a retrieval context sentence
+        that names the identifiers (invoice/PO numbers, dates, parties)
+        a query is likely to use, and prepends it to the chunk before
+        embedding. Validated on homogeneous invoice corpora where it
+        lifted R@5 6/9 → 7/9 and moved INV-25-062 / PO508084 from rank
+        14/11 to rank 1.
+        """
+        ENABLED = os.getenv("CONTEXTUAL_RETRIEVAL_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
     class TaskRouting:
         ENABLED = os.getenv("TASK_ROUTING_ENABLED", "true").lower() in {"1", "true", "yes", "on"}

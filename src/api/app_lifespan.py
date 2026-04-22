@@ -513,4 +513,28 @@ async def lifespan(app: FastAPI):
         logger.debug("Failed to stop background analyzer worker during shutdown", exc_info=True)
     logger.info("DocWain API shutting down")
 
-__all__ = ["initialize_app_state", "lifespan"]
+def get_clients_for_smoke():
+    """Build a minimal clients dict for the Batch-0 smoke test.
+
+    Called only by tests/batch0/test_canned_queries_smoke.py; reads from
+    the live app's AppState singleton. Falls back to None for anything
+    not available in the smoke environment.
+    """
+    from src.api.rag_state import get_app_state
+
+    clients = {}
+    try:
+        state = get_app_state()
+        if state:
+            clients["vllm_manager"] = getattr(state, "vllm_manager", None)
+            clients["llm_gateway"] = getattr(state, "llm_gateway", None)
+            clients["qdrant_client"] = getattr(state, "qdrant_client", None)
+            clients["neo4j_driver"] = None  # KG not required for basic smoke tests
+            clients["mongo_db"] = None  # MongoDB accessed via dataHandler, not needed here
+            clients["embedder"] = getattr(state, "embedding_model", None)
+    except Exception:
+        pass
+    return clients
+
+
+__all__ = ["initialize_app_state", "lifespan", "get_clients_for_smoke"]

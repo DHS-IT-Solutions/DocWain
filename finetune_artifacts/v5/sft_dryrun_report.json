@@ -1,0 +1,70 @@
+{
+  "base_model": "models/DocWain-14B-v2",
+  "output_dir": "models/DocWain-14B-v5-sft",
+  "dry_run_steps": 10,
+  "wall_time_s": 90.29684495925903,
+  "steps": 10,
+  "peak_mem_mb": 39734.9287109375,
+  "loss_trajectory": [
+    {
+      "step": 1,
+      "epoch": 0.1,
+      "loss": 1.2793
+    },
+    {
+      "step": 2,
+      "epoch": 0.2,
+      "loss": 1.2367
+    },
+    {
+      "step": 3,
+      "epoch": 0.3,
+      "loss": 1.1228
+    },
+    {
+      "step": 4,
+      "epoch": 0.4,
+      "loss": 1.0988
+    },
+    {
+      "step": 5,
+      "epoch": 0.5,
+      "loss": 1.469
+    },
+    {
+      "step": 6,
+      "epoch": 0.6,
+      "loss": 1.077
+    },
+    {
+      "step": 7,
+      "epoch": 0.7,
+      "loss": 1.1013
+    },
+    {
+      "step": 8,
+      "epoch": 0.8,
+      "loss": 1.6715
+    },
+    {
+      "step": 9,
+      "epoch": 0.9,
+      "loss": 1.6396
+    },
+    {
+      "step": 10,
+      "epoch": 1.0,
+      "loss": 1.389
+    }
+  ],
+  "device": {
+    "device": "cuda:0",
+    "name": "NVIDIA A100-SXM4-80GB",
+    "total_mem_mb": 81037.75,
+    "bf16": true
+  },
+  "batch_size": 1,
+  "grad_accum": 16,
+  "lora_rank_initial": 128,
+  "dry_run": true
+}

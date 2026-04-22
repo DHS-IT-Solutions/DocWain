@@ -1,0 +1,1818 @@
+{
+  "model_path": "models/DocWain-14B-v5-seed",
+  "golden_set": "/home/ubuntu/PycharmProjects/DocWain/finetune_artifacts/teacher_data/master_v4.jsonl",
+  "num_rows_requested": 100,
+  "num_rows_evaluated": 100,
+  "num_rows_scored": 100,
+  "baseline_score": 4.71,
+  "mean_score": 2.8108,
+  "min_score": 1.8975,
+  "max_score": 4.37,
+  "passed_baseline": false,
+  "judge_sources": {
+    "heuristic": 100
+  },
+  "wall_time_seconds": 1372.24,
+  "per_row_scores": [
+    {
+      "index": 1,
+      "line_num": 1,
+      "category": "specific_retrieval",
+      "area": "long_context",
+      "difficulty": "medium",
+      "prompt_chars": 5390,
+      "response_chars": 2179,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the termination notice period and the data deletion deadline after termination from the Master Services Agreement provided.\n\nFirst, I need to look through the document for sections related to termination. The relevant article is ARTICLE 4 \u2014 TERM AND TERMINATION. Let me check that.\n\nIn 4.2, it says either party can terminate without cause upon 60 da",
+      "row_mean": 3.185,
+      "dimensions": {
+        "factual_correctness": 3.44,
+        "reasoning_quality": 3.1,
+        "completeness": 3.27,
+        "grounding": 2.93
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 2,
+      "line_num": 2,
+      "category": "extraction",
+      "area": "document_extraction",
+      "difficulty": "hard",
+      "prompt_chars": 371,
+      "response_chars": 2472,
+      "response_preview": "<think>\nOkay, let's see. The user provided a text snippet from a website, specifically from Leica Microsystems. The task is to identify the document type and extract key information fields.\n\nFirst, I need to determine the document type. The text starts with a thank you message for choosing their products and mentions the quality and performance of the surgical microscope. That sounds like a produc",
+      "row_mean": 2.6775,
+      "dimensions": {
+        "factual_correctness": 2.89,
+        "reasoning_quality": 2.61,
+        "completeness": 2.75,
+        "grounding": 2.46
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 3,
+      "line_num": 3,
+      "category": "boundary",
+      "area": "boundary_detection",
+      "difficulty": "easy",
+      "prompt_chars": 226,
+      "response_chars": 1930,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the CEO's favorite color based on a legal document provided. The document given is a Healthcare Equipment Agreement between Leica Biosystems Inc. and HealthLab Services Corp, dated January 1, 2026.\n\nFirst, I need to check if the document mentions anything about the CEO's preferences. The agreement is a standard legal contract, so it's likely to inc",
+      "row_mean": 3.68,
+      "dimensions": {
+        "factual_correctness": 3.98,
+        "reasoning_quality": 3.58,
+        "completeness": 3.78,
+        "grounding": 3.38
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 4,
+      "line_num": 4,
+      "category": "boundary",
+      "area": "boundary_detection",
+      "difficulty": "easy",
+      "prompt_chars": 359,
+      "response_chars": 1808,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the CEO's favorite color based on a provided legal document. The document they mentioned is a Healthcare Equipment Agreement between Leica Biosystems Inc. and HealthLab Services Corp. \n\nFirst, I need to check the content of the document they provided. The user included the beginning of the agreement, which mentions the parties involved, the date, a",
+      "row_mean": 3.535,
+      "dimensions": {
+        "factual_correctness": 3.82,
+        "reasoning_quality": 3.44,
+        "completeness": 3.63,
+        "grounding": 3.25
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 5,
+      "line_num": 5,
+      "category": "cross_reference",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 5373,
+      "response_chars": 2107,
+      "response_preview": "<think>\nOkay, let's see. The user is asking what happens if the service provider misses the 99.5% uptime SLA. They want me to cross-reference all relevant clauses in the provided contract.\n\nFirst, I need to locate where the SLA is mentioned. Looking through the document, Article 8 is about Service Levels. Let me check that. \n\nIn Article 8.1, it says the Service Provider guarantees 99.5% uptime mon",
+      "row_mean": 2.6575,
+      "dimensions": {
+        "factual_correctness": 2.87,
+        "reasoning_quality": 2.59,
+        "completeness": 2.73,
+        "grounding": 2.44
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 6,
+      "line_num": 6,
+      "category": "vendor_selection",
+      "area": "reasoning_chain",
+      "difficulty": "medium",
+      "prompt_chars": 451,
+      "response_chars": 1325,
+      "response_preview": "<think>\nOkay, let's see. The user is trying to choose between three cloud vendors based on specific criteria and weights. I need to calculate each vendor's weighted score and then determine which one is the best fit.\n\nFirst, I'll list out the vendors and their scores for each criterion. Meridian has price 2, support SLA 2, security 2, scalability 4. Pinnacle has price 5, support SLA 1, security 3,",
+      "row_mean": 2.61,
+      "dimensions": {
+        "factual_correctness": 2.82,
+        "reasoning_quality": 2.54,
+        "completeness": 2.68,
+        "grounding": 2.4
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 7,
+      "line_num": 7,
+      "category": "timeline_construction",
+      "area": "temporal_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 459,
+      "response_chars": 1548,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to extract all dates and time references from the contract narrative and create a chronological timeline. First, I need to go through each sentence and identify any dates or time-related information.\n\nStarting with the first sentence: \"This Agreement was signed on January 25, 2023.\" That's a clear date. Then, \"The initial payment of $65,603 was received o",
+      "row_mean": 2.775,
+      "dimensions": {
+        "factual_correctness": 3.0,
+        "reasoning_quality": 2.7,
+        "completeness": 2.85,
+        "grounding": 2.55
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 8,
+      "line_num": 8,
+      "category": "resume_analysis",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 2384,
+      "response_chars": 1736,
+      "response_preview": "<think>\nOkay, let's start by analyzing the resume step by step. The user wants to know the candidate's total years of experience, their three strongest technical areas, and the career progression pattern.\n\nFirst, total years of experience. The resume lists the current position as Senior Software Engineer at Pinnacle Dynamics from December 2021 to present. Then, the previous job was Software Engine",
+      "row_mean": 2.07,
+      "dimensions": {
+        "factual_correctness": 2.24,
+        "reasoning_quality": 2.01,
+        "completeness": 2.13,
+        "grounding": 1.9
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 9,
+      "line_num": 9,
+      "category": "extraction",
+      "area": "document_extraction",
+      "difficulty": "hard",
+      "prompt_chars": 244,
+      "response_chars": 2169,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to identify the document type and extract all key information fields from the provided section. The given text is from Section 9, Dispute Resolution, which mentions that disputes will be resolved by binding arbitration under the AAA rules.\n\nFirst, I need to determine the document type. The mention of an agreement and dispute resolution clauses is common i",
+      "row_mean": 3.25,
+      "dimensions": {
+        "factual_correctness": 3.51,
+        "reasoning_quality": 3.16,
+        "completeness": 3.34,
+        "grounding": 2.99
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 10,
+      "line_num": 10,
+      "category": "payment_verification",
+      "area": "numerical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 319,
+      "response_chars": 1225,
+      "response_preview": "<think>\nOkay, let's see. The user wants to verify if Praxis Engineering's claimed payment of $262,336.75 matches the line items they provided. I need to calculate the total of each item and then sum them all up to check against the claimed amount.\n\nFirst, I'll list out each item with their quantities and prices. Let me make sure I have all the items right. There are Training, Hardware, Support, an",
+      "row_mean": 3.3475,
+      "dimensions": {
+        "factual_correctness": 3.62,
+        "reasoning_quality": 3.26,
+        "completeness": 3.44,
+        "grounding": 3.07
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 11,
+      "line_num": 11,
+      "category": "payment_verification",
+      "area": "numerical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 234,
+      "response_chars": 1184,
+      "response_preview": "<think>\nOkay, let's see. The user wants to verify if the total payment of $46,887.79 from Sterling Partners matches the line items they provided. The items are Support, Licence, and Hardware with quantities and prices listed. \n\nFirst, I need to calculate each line item's total and then sum them up. Let me start with the Support. They have 10 units at $4,351.92 each. So 10 multiplied by 4,351.92. L",
+      "row_mean": 3.075,
+      "dimensions": {
+        "factual_correctness": 3.32,
+        "reasoning_quality": 2.99,
+        "completeness": 3.16,
+        "grounding": 2.83
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 12,
+      "line_num": 12,
+      "category": "boundary",
+      "area": "boundary_detection",
+      "difficulty": "medium",
+      "prompt_chars": 348,
+      "response_chars": 2366,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to predict what will happen to the company in 5 years based on the provided legal terms. Hmm, the legal terms given are about payment terms, term and renewal, SLA, and liability. Let me break this down.\n\nFirst, the payment terms are Net 30 days with discounts for multi-year commitments. That suggests the company might be trying to encourage long-term cont",
+      "row_mean": 2.505,
+      "dimensions": {
+        "factual_correctness": 2.71,
+        "reasoning_quality": 2.44,
+        "completeness": 2.57,
+        "grounding": 2.3
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 13,
+      "line_num": 13,
+      "category": "vendor_aggregation",
+      "area": "numerical_reasoning",
+      "difficulty": "medium",
+      "prompt_chars": 537,
+      "response_chars": 1450,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. The user wants to know three things: which vendor has the highest average order value, the total spend across all vendors, and which vendor represents the largest percentage of the total spend. \n\nFirst, I need to calculate the average order value for each vendor. The average is total amount divided by the number of orders. Let's go through each",
+      "row_mean": 3.0825,
+      "dimensions": {
+        "factual_correctness": 3.33,
+        "reasoning_quality": 3.0,
+        "completeness": 3.17,
+        "grounding": 2.83
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 14,
+      "line_num": 14,
+      "category": "compliance_reasoning",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 299,
+      "response_chars": 2463,
+      "response_preview": "<think>\nOkay, let's tackle this query about Pinnacle Dynamics' compliance with PCI DSS. The user provided three audit findings: no formal data retention policy, MFA not enforced for privileged accounts, and access logs only kept for 30 days instead of the required 90. I need to determine if they're compliant, assess the risk level, and outline what they need to do.\n\nFirst, I should recall the rele",
+      "row_mean": 3.45,
+      "dimensions": {
+        "factual_correctness": 3.73,
+        "reasoning_quality": 3.36,
+        "completeness": 3.54,
+        "grounding": 3.17
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 15,
+      "line_num": 15,
+      "category": "statistical_analysis",
+      "area": "numerical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 309,
+      "response_chars": 1055,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. The user provided a set of 10 throughput readings for Praxis Engineering and wants the mean, median, min, max, standard deviation, and to flag any anomalies that are more than 2 standard deviations from the mean.\n\nFirst, I need to calculate the mean. The mean is the sum of all the numbers divided by the count. Let me add them up. Let's see:\n\n15",
+      "row_mean": 2.795,
+      "dimensions": {
+        "factual_correctness": 3.02,
+        "reasoning_quality": 2.72,
+        "completeness": 2.87,
+        "grounding": 2.57
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 16,
+      "line_num": 16,
+      "category": "risk_assessment",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 453,
+      "response_chars": 2560,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to calculate the overall risk profile and recommend the top two risks to address first based on the given risk register excerpt for Ironwood Manufacturing. \n\nFirst, I need to understand the data provided. There are three risks listed: contract termination, supply chain disruption, and regulatory fine. Each has a likelihood (medium, high), impact (signific",
+      "row_mean": 2.985,
+      "dimensions": {
+        "factual_correctness": 3.23,
+        "reasoning_quality": 2.9,
+        "completeness": 3.07,
+        "grounding": 2.74
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 17,
+      "line_num": 17,
+      "category": "date_difference",
+      "area": "temporal_reasoning",
+      "difficulty": "easy",
+      "prompt_chars": 238,
+      "response_chars": 1412,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. The user is asking about the time elapsed between two dates: December 20, 2023, and May 18, 2025. They want to know the number of days, weeks, and months between these dates, and whether it's more or less than 6 months.\n\nFirst, I need to calculate the exact number of days between these two dates. Since the dates are in different years, I should",
+      "row_mean": 2.9075,
+      "dimensions": {
+        "factual_correctness": 3.14,
+        "reasoning_quality": 2.83,
+        "completeness": 2.99,
+        "grounding": 2.67
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 18,
+      "line_num": 18,
+      "category": "percentage_calculation",
+      "area": "numerical_reasoning",
+      "difficulty": "medium",
+      "prompt_chars": 273,
+      "response_chars": 1230,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. First, I need to calculate the quarter-over-quarter (QoQ) percentage change for each transition between the quarters. Then, find the total annual revenue by summing up all four quarters. Next, determine which quarter had the highest revenue, and finally calculate the average quarterly revenue.\n\nStarting with the QoQ percentage changes. The form",
+      "row_mean": 3.295,
+      "dimensions": {
+        "factual_correctness": 3.56,
+        "reasoning_quality": 3.21,
+        "completeness": 3.38,
+        "grounding": 3.03
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 19,
+      "line_num": 19,
+      "category": "payment_verification",
+      "area": "numerical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 268,
+      "response_chars": 1254,
+      "response_preview": "<think>\nOkay, let's see. The user wants to verify if the total payment of $295,610.70 from Clearpath Analytics matches the line items they provided. The items are listed as four different line items with quantities and prices. \n\nFirst, I need to calculate each line item's total and then sum them all up to see if it equals the claimed amount. Let me break it down step by step.\n\nStarting with the fi",
+      "row_mean": 3.1975,
+      "dimensions": {
+        "factual_correctness": 3.46,
+        "reasoning_quality": 3.11,
+        "completeness": 3.28,
+        "grounding": 2.94
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 20,
+      "line_num": 20,
+      "category": "cell_lookup",
+      "area": "table_understanding",
+      "difficulty": "easy",
+      "prompt_chars": 659,
+      "response_chars": 1537,
+      "response_preview": "<think>\nOkay, let's see. The user is asking for David Okonkwo's salary and department from the provided employee table. First, I need to look through the table to find his entry.\n\nLooking at the Name column, I'll scan each row. The first few entries are Eric Lindqvist, Thomas Andersen, Emily Nakamura, Samuel Adeyemi, Priya Mehta, Thomas Andersen again, Fatima Al-Rashid, and then David Okonkwo. The",
+      "row_mean": 3.585,
+      "dimensions": {
+        "factual_correctness": 3.88,
+        "reasoning_quality": 3.49,
+        "completeness": 3.68,
+        "grounding": 3.29
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 21,
+      "line_num": 21,
+      "category": "validity_check",
+      "area": "temporal_reasoning",
+      "difficulty": "easy",
+      "prompt_chars": 217,
+      "response_chars": 1534,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the warranty validity for a network switch purchased by Cascade Digital on August 7, 2020, with a 3-year manufacturer warranty. The current date is November 26, 2025. I need to determine if the warranty is still valid, how many days remain if it is, or how long ago it expired if not.\n\nFirst, I need to calculate the warranty period. The purchase dat",
+      "row_mean": 3.1125,
+      "dimensions": {
+        "factual_correctness": 3.36,
+        "reasoning_quality": 3.03,
+        "completeness": 3.2,
+        "grounding": 2.86
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 22,
+      "line_num": 22,
+      "category": "content",
+      "area": "content_generation",
+      "difficulty": "medium",
+      "prompt_chars": 455,
+      "response_chars": 2406,
+      "response_preview": "<think>\nOkay, let's see. The user wants an executive summary of the legal document they provided, which is a PDF called healthcare_contracts_20_dataset.pdf. The type is a contract, and the summary given mentions multiple customer contracts for Histology Equipment between Leica Biosystems Ltd and various customers with varying SLA, liability, and payment terms. The start date is 2026, end date 2028",
+      "row_mean": 3.5425,
+      "dimensions": {
+        "factual_correctness": 3.83,
+        "reasoning_quality": 3.45,
+        "completeness": 3.64,
+        "grounding": 3.25
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 23,
+      "line_num": 23,
+      "category": "content",
+      "area": "content_generation",
+      "difficulty": "medium",
+      "prompt_chars": 213,
+      "response_chars": 1792,
+      "response_preview": "<think>\nOkay, let's see. The user wants an executive summary of the legal section provided. The section is about liability limits for the supplier. The key point here is that the supplier's total liability can't exceed 100% of the contract value. I need to make sure I capture that clearly.\n\nFirst, I should identify the main elements: the section number, the parties involved (Supplier), the limitat",
+      "row_mean": 3.055,
+      "dimensions": {
+        "factual_correctness": 3.3,
+        "reasoning_quality": 2.97,
+        "completeness": 3.14,
+        "grounding": 2.81
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 24,
+      "line_num": 24,
+      "category": "statistical_analysis",
+      "area": "numerical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 290,
+      "response_chars": 1218,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. The user provided a list of CPU usage percentages over nine readings for Cascade Digital. They want the mean, median, min, max, standard deviation, and to flag any anomalies that are more than two standard deviations from the mean.\n\nFirst, I need to list out the data points to make sure I have them all. The numbers are: 263.4, 13.4, 490.4, 163.",
+      "row_mean": 2.7975,
+      "dimensions": {
+        "factual_correctness": 3.03,
+        "reasoning_quality": 2.72,
+        "completeness": 2.87,
+        "grounding": 2.57
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 25,
+      "line_num": 25,
+      "category": "specific_retrieval",
+      "area": "long_context",
+      "difficulty": "medium",
+      "prompt_chars": 5419,
+      "response_chars": 2417,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the termination notice period and the data deletion deadline after termination from the Master Services Agreement provided.\n\nFirst, I need to look through the document for sections related to termination. The relevant article is ARTICLE 4 \u2014 TERM AND TERMINATION. Let me check that.\n\nIn 4.2, it says either party can terminate without cause upon 60 da",
+      "row_mean": 3.155,
+      "dimensions": {
+        "factual_correctness": 3.41,
+        "reasoning_quality": 3.07,
+        "completeness": 3.24,
+        "grounding": 2.9
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 26,
+      "line_num": 26,
+      "category": "analytical",
+      "area": "analytical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 265,
+      "response_chars": 2153,
+      "response_preview": "<think>\nOkay, let's take a look at this legal document. The user wants me to identify any patterns or anomalies. The document outlines a tiered pricing structure with three tiers based on the number of units used annually. Each tier has a different price per unit, and there's an annual escalation clause.\n\nFirst, I'll check the pricing tiers. Tier 1 is 0-100 units at $500, Tier 2 is 101-500 at $450",
+      "row_mean": 2.775,
+      "dimensions": {
+        "factual_correctness": 3.0,
+        "reasoning_quality": 2.7,
+        "completeness": 2.85,
+        "grounding": 2.55
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 27,
+      "line_num": 27,
+      "category": "boundary",
+      "area": "boundary_detection",
+      "difficulty": "easy",
+      "prompt_chars": 362,
+      "response_chars": 2117,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the CEO's favorite color based on a provided medical document. First, I need to check the content of the document they mentioned.\n\nLooking at the text, it starts with safety standards like IEC 60601-1, EN 60601-1, UL 60601-1. Then there's electromagnetic compatibility standards, followed by other harmonized standards like IEC 62366, EN 60825, IEC 6",
+      "row_mean": 3.32,
+      "dimensions": {
+        "factual_correctness": 3.59,
+        "reasoning_quality": 3.23,
+        "completeness": 3.41,
+        "grounding": 3.05
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 28,
+      "line_num": 28,
+      "category": "reasoning",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 341,
+      "response_chars": 2375,
+      "response_preview": "<think>\nOkay, let's see. The user wants a thorough analysis of the legal terms provided. The terms are about payment, term and renewal, SLA, and liability. I need to break each down step by step.\n\nStarting with Payment Terms: Net 30 days. That means the buyer has 30 days from the invoice date to pay. But there's a mention of discounts for multi-year commitments. I should note that the discount det",
+      "row_mean": 2.18,
+      "dimensions": {
+        "factual_correctness": 2.36,
+        "reasoning_quality": 2.12,
+        "completeness": 2.24,
+        "grounding": 2.0
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 29,
+      "line_num": 29,
+      "category": "cross_reference",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 5377,
+      "response_chars": 2013,
+      "response_preview": "<think>\nOkay, let's see. The user is asking what happens if the service provider misses the 99.9% uptime SLA. Wait, the contract mentions 99.5% in Article 8.1. Hmm, maybe there's a typo or maybe the user is referring to a different SLA. Let me check the document again.\n\nLooking at the document, Article 8 \u2014 SERVICE LEVELS states: 8.1 Service Provider guarantees system uptime of 99.5% measured month",
+      "row_mean": 2.425,
+      "dimensions": {
+        "factual_correctness": 2.62,
+        "reasoning_quality": 2.36,
+        "completeness": 2.49,
+        "grounding": 2.23
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 30,
+      "line_num": 30,
+      "category": "boundary",
+      "area": "boundary_detection",
+      "difficulty": "medium",
+      "prompt_chars": 318,
+      "response_chars": 2527,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to predict what will happen to the company in 5 years based on Ashok Kona's resume. Hmm, first, I need to understand the resume details. Ashok has 8+ years of experience, working at Novartis, DBS Teach, Valuelabs, and currently as a Senior Full Stack Developer and Cloud Engineer at Novartis. His roles involve full stack development and cloud engineering.\n",
+      "row_mean": 2.94,
+      "dimensions": {
+        "factual_correctness": 3.18,
+        "reasoning_quality": 2.86,
+        "completeness": 3.02,
+        "grounding": 2.7
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 31,
+      "line_num": 31,
+      "category": "contract_timeline",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 474,
+      "response_chars": 2156,
+      "response_preview": "<think>\nOkay, let's break this down. The user is asking about the obligations and deadlines following a termination notice from Ironwood Manufacturing to Pinnacle Dynamics. The contract has specific clauses: 4.2 for termination without cause, 7.1 for data deletion, and 8.2 for SLA breach credits. The termination notice was sent on March 1st, citing a data breach.\n\nFirst, I need to check if the ter",
+      "row_mean": 2.76,
+      "dimensions": {
+        "factual_correctness": 2.98,
+        "reasoning_quality": 2.69,
+        "completeness": 2.83,
+        "grounding": 2.54
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 32,
+      "line_num": 32,
+      "category": "statistical_analysis",
+      "area": "numerical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 297,
+      "response_chars": 1213,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. The user provided a set of 8 response time readings for Meridian Technologies and wants the mean, median, min, max, standard deviation, and to flag any anomalies that are more than 2 standard deviations from the mean.\n\nFirst, I need to calculate the mean. The mean is the sum of all the numbers divided by the count. Let me add them up. Let's see",
+      "row_mean": 2.8225,
+      "dimensions": {
+        "factual_correctness": 3.05,
+        "reasoning_quality": 2.75,
+        "completeness": 2.9,
+        "grounding": 2.59
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 33,
+      "line_num": 33,
+      "category": "cross_reference",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 5395,
+      "response_chars": 2213,
+      "response_preview": "<think>\nOkay, let's see. The user is asking what happens if the service provider misses the 99.9% uptime SLA. They want me to cross-reference all relevant clauses in the provided contract.\n\nFirst, I need to locate the SLA-related clauses. The document has an ARTICLE 8 \u2014 SERVICE LEVELS. Let me check that. \n\nIn 8.1, it says the Service Provider guarantees 99.9% uptime monthly, excluding scheduled ma",
+      "row_mean": 2.6575,
+      "dimensions": {
+        "factual_correctness": 2.87,
+        "reasoning_quality": 2.59,
+        "completeness": 2.73,
+        "grounding": 2.44
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 34,
+      "line_num": 34,
+      "category": "candidate_comparison",
+      "area": "comparison",
+      "difficulty": "medium",
+      "prompt_chars": 540,
+      "response_chars": 2170,
+      "response_preview": "<think>\nOkay, let's see. I need to compare these three candidates for the Principal Architect role with a budget of $161,726 per year. The candidates are Maria, Emily, and Lisa. Each has different experience levels, skills, performance ratings, and salary requirements. \n\nFirst, I should check if their salary requirements are within the budget. The budget is $161,726. Maria's salary is $178,448, wh",
+      "row_mean": 2.395,
+      "dimensions": {
+        "factual_correctness": 2.59,
+        "reasoning_quality": 2.33,
+        "completeness": 2.46,
+        "grounding": 2.2
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 35,
+      "line_num": 35,
+      "category": "extraction",
+      "area": "document_extraction",
+      "difficulty": "hard",
+      "prompt_chars": 278,
+      "response_chars": 1734,
+      "response_preview": "<think>\nOkay, let's start by looking at the document provided. The user wants me to identify the document type and extract all key information fields.\n\nFirst, the document starts with \"HEALTHCARE EQUIPMENT AGREEMENT\" in the section heading. That immediately tells me the type of document is a Healthcare Equipment Agreement. The title is pretty straightforward.\n\nNext, the agreement is dated January ",
+      "row_mean": 3.1825,
+      "dimensions": {
+        "factual_correctness": 3.44,
+        "reasoning_quality": 3.1,
+        "completeness": 3.27,
+        "grounding": 2.92
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 36,
+      "line_num": 36,
+      "category": "vendor_selection",
+      "area": "reasoning_chain",
+      "difficulty": "medium",
+      "prompt_chars": 446,
+      "response_chars": 1240,
+      "response_preview": "<think>\nOkay, let's see. The user is trying to choose between three cloud vendors based on specific criteria and weights. I need to calculate each vendor's weighted score. Let me start by recalling the weights: price is 30%, support SLA 25%, security 25%, and scalability 20%. \n\nFirst, I'll list out each vendor's scores. Alluvial Data has price 3, support 4, security 5, scalability 1. Cascade Digit",
+      "row_mean": 2.775,
+      "dimensions": {
+        "factual_correctness": 3.0,
+        "reasoning_quality": 2.7,
+        "completeness": 2.85,
+        "grounding": 2.55
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 37,
+      "line_num": 37,
+      "category": "obligation_mapping",
+      "area": "legal_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 5364,
+      "response_chars": 2249,
+      "response_preview": "<think>\nOkay, let's tackle this query. The user wants me to identify four things from the contract: all parties, their primary obligations, payment terms, and termination rights. \n\nFirst, I need to find the parties. The contract starts with \"by and between Lakefront Ventures... and Summit Capital...\" So those are the two parties. I should note their full names and any relevant details like their i",
+      "row_mean": 2.865,
+      "dimensions": {
+        "factual_correctness": 3.1,
+        "reasoning_quality": 2.79,
+        "completeness": 2.94,
+        "grounding": 2.63
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 38,
+      "line_num": 38,
+      "category": "candidate_evaluation",
+      "area": "reasoning_chain",
+      "difficulty": "medium",
+      "prompt_chars": 318,
+      "response_chars": 2247,
+      "response_preview": "<think>\nOkay, let's see. I need to evaluate James Whitmore for the Senior Data Engineer role at Solstice Media. The job requires 4+ years in PostgreSQL, 5+ years in Java, and 4+ years in Computer Vision. All three are required, not preferred.\n\nLooking at James's profile: he has 7 years in PostgreSQL, which is more than the required 4. That's good. Then Java: he has 2 years, but the job needs 5. Th",
+      "row_mean": 3.35,
+      "dimensions": {
+        "factual_correctness": 3.62,
+        "reasoning_quality": 3.26,
+        "completeness": 3.44,
+        "grounding": 3.08
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 39,
+      "line_num": 39,
+      "category": "risk_assessment",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 462,
+      "response_chars": 2550,
+      "response_preview": "<think>\nOkay, let's tackle this risk register analysis for Pinnacle Dynamics. The user wants the overall risk profile and the top two risks to address first. \n\nFirst, I need to look at each risk's likelihood, impact, and exposure. The first risk is contract termination with medium likelihood and significant impact, exposure between $500K and $2M. The second is supply chain disruption, same likelih",
+      "row_mean": 2.9225,
+      "dimensions": {
+        "factual_correctness": 3.16,
+        "reasoning_quality": 2.84,
+        "completeness": 3.0,
+        "grounding": 2.69
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 40,
+      "line_num": 40,
+      "category": "resume_analysis",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 2383,
+      "response_chars": 1709,
+      "response_preview": "<think>\nOkay, let's start by analyzing Robert Callahan's resume step by step. The user wants to know his total years of experience, his three strongest technical areas, and his career progression pattern.\n\nFirst, total years of experience. Looking at his professional experience, he started as a Junior Developer at BlueSky Logistics from November 2008 to March 2010. That's about 1 year and 4 months",
+      "row_mean": 1.9275,
+      "dimensions": {
+        "factual_correctness": 2.08,
+        "reasoning_quality": 1.88,
+        "completeness": 1.98,
+        "grounding": 1.77
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 41,
+      "line_num": 41,
+      "category": "cross_field_validation",
+      "area": "document_validation",
+      "difficulty": "hard",
+      "prompt_chars": 440,
+      "response_chars": 1276,
+      "response_preview": "<think>\nOkay, let's start by looking at the invoice provided. The user wants cross-field validation, so I need to check if all the numbers add up correctly and if there are any discrepancies between different fields.\n\nFirst, I'll list out all the line items. There are four items here:\n\n1. Printer Toner Cartridge (Black) - 1 x \u00a3972.01 = \u00a3972.01\n2. Printer Toner Cartridge (Black) - 11 x \u00a357.24 = \u00a366",
+      "row_mean": 3.0125,
+      "dimensions": {
+        "factual_correctness": 3.26,
+        "reasoning_quality": 2.93,
+        "completeness": 3.09,
+        "grounding": 2.77
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 42,
+      "line_num": 42,
+      "category": "formula_interpretation",
+      "area": "excel_csv",
+      "difficulty": "medium",
+      "prompt_chars": 540,
+      "response_chars": 1528,
+      "response_preview": "<think>\nOkay, let's see. The user provided a spreadsheet with four sales representatives and their monthly revenue, quota, and a formula for calculating commission. The task is to explain the commission structure and calculate each rep's commission.\n\nFirst, I need to understand the formula given. The formula in column D is =IF(C2>=B2, B2*0.08 + (C2-B2)*0.12, C2*0.06). Let me break this down. The I",
+      "row_mean": 2.57,
+      "dimensions": {
+        "factual_correctness": 2.78,
+        "reasoning_quality": 2.5,
+        "completeness": 2.64,
+        "grounding": 2.36
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 43,
+      "line_num": 43,
+      "category": "statistical_analysis",
+      "area": "numerical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 280,
+      "response_chars": 1267,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. The user provided a set of six response time measurements for Quantum Systems Ltd and wants the mean, median, min, max, standard deviation, and to flag any anomalies that are more than two standard deviations from the mean.\n\nFirst, I need to calculate the mean. The mean is the sum of all the numbers divided by the count. Let me add them up: 445",
+      "row_mean": 2.8725,
+      "dimensions": {
+        "factual_correctness": 3.11,
+        "reasoning_quality": 2.79,
+        "completeness": 2.95,
+        "grounding": 2.64
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 44,
+      "line_num": 44,
+      "category": "extraction",
+      "area": "document_extraction",
+      "difficulty": "medium",
+      "prompt_chars": 156,
+      "response_chars": 1742,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to extract structured fields like names, dates, amounts, and emails from the given text. The text provided is: \"X Tapnite gumb \"Surgeon Settings\" (2), da odprete meni \"Surgeon Settings\".\" \n\nFirst, I need to check if there are any names mentioned. The word \"Surgeon\" is there, but it's part of the menu name, not a person's name. No other names are present.\n",
+      "row_mean": 3.04,
+      "dimensions": {
+        "factual_correctness": 3.29,
+        "reasoning_quality": 2.96,
+        "completeness": 3.12,
+        "grounding": 2.79
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 45,
+      "line_num": 45,
+      "category": "cross_reference",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 5367,
+      "response_chars": 2093,
+      "response_preview": "<think>\nOkay, let's see. The user is asking what happens if the service provider misses the 99.5% uptime SLA. Wait, the document mentions 99.9% in Article 8.1. Hmm, maybe there's a typo in the user's question or in the document? Let me check again.\n\nLooking at the document, Article 8.1 states the uptime is 99.9%, not 99.5%. The user might have made a mistake, but I should address both possibilitie",
+      "row_mean": 2.3525,
+      "dimensions": {
+        "factual_correctness": 2.54,
+        "reasoning_quality": 2.29,
+        "completeness": 2.42,
+        "grounding": 2.16
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 46,
+      "line_num": 46,
+      "category": "date_difference",
+      "area": "temporal_reasoning",
+      "difficulty": "easy",
+      "prompt_chars": 228,
+      "response_chars": 1479,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the time elapsed between two dates for Quantum Systems Ltd. The contract was signed on February 28, 2022, and the final delivery was on March 6, 2023. They want to know the number of days, weeks, and months between these dates, and whether it's more or less than 6 months.\n\nFirst, I need to calculate the exact number of days between these two dates.",
+      "row_mean": 3.105,
+      "dimensions": {
+        "factual_correctness": 3.36,
+        "reasoning_quality": 3.02,
+        "completeness": 3.19,
+        "grounding": 2.85
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 47,
+      "line_num": 47,
+      "category": "anomaly_detection",
+      "area": "table_understanding",
+      "difficulty": "hard",
+      "prompt_chars": 558,
+      "response_chars": 1864,
+      "response_preview": "<think>\nOkay, let's take a look at this employee salary table and see if there are any anomalies or outliers. First, I need to understand the data. The table has Name, Department, Salary, Years of experience, and Rating. The goal is to find any unusual entries that don't fit the pattern.\n\nStarting with the salaries. The highest salary here is $670,501 for Aisha Patel in Sales. That's way higher th",
+      "row_mean": 2.48,
+      "dimensions": {
+        "factual_correctness": 2.68,
+        "reasoning_quality": 2.41,
+        "completeness": 2.55,
+        "grounding": 2.28
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 48,
+      "line_num": 48,
+      "category": "multi_page_extraction",
+      "area": "layout",
+      "difficulty": "medium",
+      "prompt_chars": 2923,
+      "response_chars": 2294,
+      "response_preview": "<think>\nOkay, let's start by looking at the user's request. They want me to extract all content from both pages of the board meeting minutes, covering every agenda item completely. The documents provided are in PDF format, and the user has given me the content from Page 1 and Page 2.\n\nFirst, I need to make sure I understand the structure of the meeting minutes. The first page has the header with t",
+      "row_mean": 2.11,
+      "dimensions": {
+        "factual_correctness": 2.28,
+        "reasoning_quality": 2.05,
+        "completeness": 2.17,
+        "grounding": 1.94
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 49,
+      "line_num": 49,
+      "category": "vendor_selection",
+      "area": "reasoning_chain",
+      "difficulty": "medium",
+      "prompt_chars": 445,
+      "response_chars": 1367,
+      "response_preview": "<think>\nOkay, let's see. The user is trying to choose between three cloud vendors based on specific criteria and weights. I need to calculate each vendor's score according to the given weights and then determine which one is the best fit.\n\nFirst, I'll list out the vendors and their scores for each criterion. Summit Capital has price 2, support SLA 1, security certifications 5, scalability 1. Horiz",
+      "row_mean": 2.8375,
+      "dimensions": {
+        "factual_correctness": 3.07,
+        "reasoning_quality": 2.76,
+        "completeness": 2.91,
+        "grounding": 2.61
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 50,
+      "line_num": 50,
+      "category": "analytical",
+      "area": "analytical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 137,
+      "response_chars": 2396,
+      "response_preview": "<think>\nOkay, let's see. The user provided a legal clause that says the supplier must ensure a system uptime of 90%, but response times aren't defined. I need to identify any patterns or anomalies here.\n\nFirst, I should check if there's a standard or common practice regarding uptime and response times in service level agreements (SLAs). Typically, SLAs do specify both uptime and response times. Up",
+      "row_mean": 2.51,
+      "dimensions": {
+        "factual_correctness": 2.71,
+        "reasoning_quality": 2.44,
+        "completeness": 2.58,
+        "grounding": 2.31
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 51,
+      "line_num": 51,
+      "category": "risk_identification",
+      "area": "legal_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 5372,
+      "response_chars": 2358,
+      "response_preview": "<think>\nOkay, let's start by reading through the contract carefully. The user wants a legal risk assessment, specifically the top three risks for the Client, each rated as Low, Medium, or High. I need to identify potential issues that could expose the Client to legal or financial risk.\n\nFirst, looking at the definitions and the structure. The contract is a Master Services Agreement between Clearpa",
+      "row_mean": 2.335,
+      "dimensions": {
+        "factual_correctness": 2.52,
+        "reasoning_quality": 2.27,
+        "completeness": 2.4,
+        "grounding": 2.15
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 52,
+      "line_num": 52,
+      "category": "validity_check",
+      "area": "temporal_reasoning",
+      "difficulty": "easy",
+      "prompt_chars": 216,
+      "response_chars": 1581,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the validity of a warranty for a workstation purchased by Northgate Financial. The purchase date is April 3, 2023, and the warranty is for 3 years. They want to know if the warranty is still valid as of January 27, 2024, and if so, how many days remain. If not, how long ago it expired.\n\nFirst, I need to calculate the expiration date of the warranty",
+      "row_mean": 2.94,
+      "dimensions": {
+        "factual_correctness": 3.18,
+        "reasoning_quality": 2.86,
+        "completeness": 3.02,
+        "grounding": 2.7
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 53,
+      "line_num": 53,
+      "category": "statistical_analysis",
+      "area": "numerical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 275,
+      "response_chars": 1416,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. The user provided six response time readings for Solstice Media: 197.6, 430.3, 45.5, 253.6, 379.0, and 463.0 milliseconds. They want the mean, median, min, max, and standard deviation calculated, and any readings more than two standard deviations from the mean flagged as anomalies.\n\nFirst, I need to calculate the mean. The mean is the sum of al",
+      "row_mean": 2.8975,
+      "dimensions": {
+        "factual_correctness": 3.13,
+        "reasoning_quality": 2.82,
+        "completeness": 2.98,
+        "grounding": 2.66
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 54,
+      "line_num": 54,
+      "category": "no_chart",
+      "area": "visualization",
+      "difficulty": "easy",
+      "prompt_chars": 339,
+      "response_chars": 1779,
+      "response_preview": "<think>\nOkay, the user is asking me to create a chart showing how the budget changed over time based on the provided document. Let me check the document again. The document mentions that the board approved a Q3 budget increase, but there are no specific dollar amounts, percentages, or time-series data provided. The discussion was qualitative, focusing on strategic direction and stakeholder concern",
+      "row_mean": 2.37,
+      "dimensions": {
+        "factual_correctness": 2.56,
+        "reasoning_quality": 2.31,
+        "completeness": 2.43,
+        "grounding": 2.18
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 55,
+      "line_num": 55,
+      "category": "candidate_comparison",
+      "area": "comparison",
+      "difficulty": "medium",
+      "prompt_chars": 496,
+      "response_chars": 2088,
+      "response_preview": "<think>\nOkay, let's see. I need to compare these three candidates for the Senior Engineer role with a budget of $141,841 per year. The candidates are Emily, Robert, and James. Let me break down their details.\n\nFirst, Emily has 14 years of experience, skills in PostgreSQL and TypeScript, a performance rating of 3.5/5, and a salary requirement of $84,813. Robert has 15 years, skills in SQL, same per",
+      "row_mean": 2.26,
+      "dimensions": {
+        "factual_correctness": 2.44,
+        "reasoning_quality": 2.2,
+        "completeness": 2.32,
+        "grounding": 2.08
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 56,
+      "line_num": 56,
+      "category": "cross_reference",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 5364,
+      "response_chars": 2131,
+      "response_preview": "<think>\nOkay, let's see. The user is asking what happens if the service provider misses the 99.9% uptime SLA. They also want me to cross-reference all relevant clauses. First, I need to check the document for any mention of SLA, uptime, or related terms.\n\nLooking at the document, there's an ARTICLE 8 \u2014 SERVICE LEVELS. Let me check that. In 8.1, it says the Service Provider guarantees system uptime",
+      "row_mean": 2.6,
+      "dimensions": {
+        "factual_correctness": 2.81,
+        "reasoning_quality": 2.53,
+        "completeness": 2.67,
+        "grounding": 2.39
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 57,
+      "line_num": 57,
+      "category": "analytical",
+      "area": "analytical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 180,
+      "response_chars": 2373,
+      "response_preview": "<think>\nOkay, let's take a look at this section from the legal document. The user wants me to identify any patterns or anomalies in the Payment Terms section. The specific text provided is: \"Customer shall pay all undisputed invoices within thirty (30) days from the invoice date (Net 30 days).\"\n\nFirst, I need to understand what's being asked. The user is looking for patterns or anomalies in this l",
+      "row_mean": 2.68,
+      "dimensions": {
+        "factual_correctness": 2.9,
+        "reasoning_quality": 2.61,
+        "completeness": 2.75,
+        "grounding": 2.46
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 58,
+      "line_num": 58,
+      "category": "analytical",
+      "area": "analytical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 454,
+      "response_chars": 2078,
+      "response_preview": "<think>\nOkay, let's start by looking at the document summary provided. The user wants me to identify any patterns or anomalies in the legal document between Leica Biosystems Ltd and Precision Labs.\n\nFirst, I'll go through each section of the summary. The contract is for medical devices, which is a regulated industry. The term is from 2026 to 2028 with auto-renewal requiring 90 days notice. That se",
+      "row_mean": 2.535,
+      "dimensions": {
+        "factual_correctness": 2.74,
+        "reasoning_quality": 2.47,
+        "completeness": 2.6,
+        "grounding": 2.33
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 59,
+      "line_num": 59,
+      "category": "column_aggregation",
+      "area": "table_understanding",
+      "difficulty": "medium",
+      "prompt_chars": 612,
+      "response_chars": 1133,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to analyze the salary column in the employee table. They need the total, average, max, and min salaries, and also identify the highest and lowest paid employees. Alright, first step is to extract all the salary values from the table.\n\nLooking at the table, the salaries are listed as: $91,179, $132,075, $90,326, $146,254, $121,349, $63,159, $80,114, $108,2",
+      "row_mean": 2.88,
+      "dimensions": {
+        "factual_correctness": 3.11,
+        "reasoning_quality": 2.8,
+        "completeness": 2.96,
+        "grounding": 2.65
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 60,
+      "line_num": 60,
+      "category": "compliance_checking",
+      "area": "legal_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 2360,
+      "response_chars": 2632,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to review a contract and check if it meets SOC 2 contractual controls. The specific requirements are: security incident notification within 72 hours, annual penetration testing, encryption at rest and in transit, access control and MFA, and audit log retention for 12 months.\n\nFirst, I need to go through the contract document provided. Let me read through ",
+      "row_mean": 3.2375,
+      "dimensions": {
+        "factual_correctness": 3.5,
+        "reasoning_quality": 3.15,
+        "completeness": 3.32,
+        "grounding": 2.98
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 61,
+      "line_num": 61,
+      "category": "candidate_evaluation",
+      "area": "reasoning_chain",
+      "difficulty": "medium",
+      "prompt_chars": 316,
+      "response_chars": 2170,
+      "response_preview": "<think>\nOkay, let's see. I need to evaluate Maria Vasquez for the Staff Engineer role at BlueSky Logistics. The job requires 3+ years in Machine Learning, 4+ years in Terraform, and 3+ years in React. All three are required, not preferred.\n\nLooking at Maria's profile: she has 1 year in Machine Learning, 1 year in Terraform, and 3 years in React. So, she's missing the required years in both Machine",
+      "row_mean": 3.3925,
+      "dimensions": {
+        "factual_correctness": 3.67,
+        "reasoning_quality": 3.3,
+        "completeness": 3.48,
+        "grounding": 3.12
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 62,
+      "line_num": 62,
+      "category": "compliance_checking",
+      "area": "legal_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 2470,
+      "response_chars": 2804,
+      "response_preview": "<think>\nOkay, let's start by understanding the user's request. They want me to review a contract and assess if it meets GDPR Article 28 requirements. The specific points they mentioned are: processing on documented instructions, confidentiality for personnel, security measures, subprocessor approval, assistance with data subject rights, deletion/return of data, and audit rights.\n\nFirst, I need to ",
+      "row_mean": 3.07,
+      "dimensions": {
+        "factual_correctness": 3.32,
+        "reasoning_quality": 2.99,
+        "completeness": 3.15,
+        "grounding": 2.82
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 63,
+      "line_num": 63,
+      "category": "gap_analysis",
+      "area": "comparison",
+      "difficulty": "easy",
+      "prompt_chars": 178,
+      "response_chars": 2417,
+      "response_preview": "<think>\nOkay, let's tackle this skills gap analysis. The job requires Machine Learning, Java, Kafka, Python, and Data Engineering. The candidate, Robert Callahan, has Kafka, Machine Learning, and Python. So first, I need to compare each required skill against what Robert has.\n\nStarting with Machine Learning: he has that, so no gap there. Kafka is also listed, so that's covered. Python is present t",
+      "row_mean": 3.0275,
+      "dimensions": {
+        "factual_correctness": 3.27,
+        "reasoning_quality": 2.95,
+        "completeness": 3.11,
+        "grounding": 2.78
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 64,
+      "line_num": 64,
+      "category": "contract_timeline",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 473,
+      "response_chars": 2327,
+      "response_preview": "<think>\nOkay, let's break this down. The user is asking about the obligations and deadlines following Vantage Healthcare's termination notice to Quantum Systems Ltd. The contract has specific clauses: 4.2 for termination without cause, 7.1 for data deletion, and 8.2 for SLA breach credits. The termination is cited as a payment default, which might affect the applicability of certain clauses.\n\nFirs",
+      "row_mean": 2.7025,
+      "dimensions": {
+        "factual_correctness": 2.92,
+        "reasoning_quality": 2.63,
+        "completeness": 2.78,
+        "grounding": 2.48
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 65,
+      "line_num": 65,
+      "category": "content",
+      "area": "content_generation",
+      "difficulty": "medium",
+      "prompt_chars": 327,
+      "response_chars": 2317,
+      "response_preview": "<think>\nOkay, let's see. The user provided a query in Slovenian that seems to be about a fluorescence microscope or a similar device, specifically the \"Fluorescence FL 560\" model. They mentioned different modes like \"PROVIDO\" and \"M 530 OHX / M 530 OH 6 / ARveo,\" along with some settings like BrightCare Plus, Max Carrier Free Balance, and Magnification WD Lamp.\n\nFirst, I need to understand what th",
+      "row_mean": 2.865,
+      "dimensions": {
+        "factual_correctness": 3.1,
+        "reasoning_quality": 2.79,
+        "completeness": 2.94,
+        "grounding": 2.63
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 66,
+      "line_num": 66,
+      "category": "extraction",
+      "area": "document_extraction",
+      "difficulty": "easy",
+      "prompt_chars": 375,
+      "response_chars": 1992,
+      "response_preview": "<think>\nOkay, let's see. The user provided a medical document snippet and wants me to list the key entities mentioned. First, I need to parse the text carefully.\n\nThe text is in Swedish, so I should make sure I understand the terms correctly. The first part says \"v\u00e4lj Datahantering i menyn och v\u00e4lj sedan Arkivera unders\u00f6kn.\" That translates to selecting \"Data Handling\" from the menu and then \"Arch",
+      "row_mean": 3.0225,
+      "dimensions": {
+        "factual_correctness": 3.27,
+        "reasoning_quality": 2.94,
+        "completeness": 3.1,
+        "grounding": 2.78
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 67,
+      "line_num": 67,
+      "category": "extraction",
+      "area": "document_extraction",
+      "difficulty": "hard",
+      "prompt_chars": 384,
+      "response_chars": 2362,
+      "response_preview": "<think>\nOkay, let's start by looking at the document summary provided. The user wants me to extract the candidate's name, contact information, work experience, and skills.\n\nFirst, the name. On page 1, the first line says \"Ashok Kona | Senior Full Stack Developer & Cloud Engineer\". So the name is clearly Ashok Kona. That's straightforward.\n\nNext, contact information. The same line has \"+91 70323144",
+      "row_mean": 3.0975,
+      "dimensions": {
+        "factual_correctness": 3.35,
+        "reasoning_quality": 3.01,
+        "completeness": 3.18,
+        "grounding": 2.85
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 68,
+      "line_num": 68,
+      "category": "excel_table",
+      "area": "document_extraction",
+      "difficulty": "medium",
+      "prompt_chars": 946,
+      "response_chars": 2194,
+      "response_preview": "<think>\nOkay, let's tackle this. The user wants me to identify the table structure and extract all data from the \"Budget vs Actual\" spreadsheet. First, I need to look at the columns provided: Department, Budget, Actual, Variance, Variance %, and Status. The table has multiple rows with entries under these columns.\n\nWait, the first line after the column headers seems to be a separator with dashes. ",
+      "row_mean": 1.96,
+      "dimensions": {
+        "factual_correctness": 2.12,
+        "reasoning_quality": 1.91,
+        "completeness": 2.01,
+        "grounding": 1.8
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 69,
+      "line_num": 69,
+      "category": "compliance_reasoning",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 325,
+      "response_chars": 2410,
+      "response_preview": "<think>\nOkay, let's tackle this query. The user is asking if Crestwood Solutions is compliant with SOC 2 Type II based on the audit findings. The findings are: encryption at rest not enabled on all storage buckets, access logs retained for only 30 days (they need 90), and no formal incident response plan.\n\nFirst, I need to recall what SOC 2 Type II entails. SOC 2 focuses on Trust Services Criteria",
+      "row_mean": 3.105,
+      "dimensions": {
+        "factual_correctness": 3.36,
+        "reasoning_quality": 3.02,
+        "completeness": 3.19,
+        "grounding": 2.85
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 70,
+      "line_num": 70,
+      "category": "validity_check",
+      "area": "temporal_reasoning",
+      "difficulty": "easy",
+      "prompt_chars": 217,
+      "response_chars": 1298,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the warranty on a UPS battery backup purchased by Alluvial Data on October 26, 2024, with a 3-year manufacturer warranty. They want to know if the warranty is still valid as of April 22, 2025, and if so, how many days remain. If not, how long ago it expired.\n\nFirst, I need to calculate the warranty period. The purchase date is October 26, 2024, and",
+      "row_mean": 3.175,
+      "dimensions": {
+        "factual_correctness": 3.43,
+        "reasoning_quality": 3.09,
+        "completeness": 3.26,
+        "grounding": 2.92
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 71,
+      "line_num": 71,
+      "category": "extraction",
+      "area": "document_extraction",
+      "difficulty": "hard",
+      "prompt_chars": 186,
+      "response_chars": 2541,
+      "response_preview": "<think>\nOkay, let's see. The user provided a sentence: \"Supplier shall provide diagnostic medical equipment, installation services, and ongoing maintenance support as agreed.\" They want me to identify the document type and extract key information fields.\n\nFirst, I need to figure out what kind of document this is. The mention of a supplier providing medical equipment, installation, and maintenance ",
+      "row_mean": 2.6325,
+      "dimensions": {
+        "factual_correctness": 2.85,
+        "reasoning_quality": 2.56,
+        "completeness": 2.7,
+        "grounding": 2.42
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 72,
+      "line_num": 72,
+      "category": "specific_retrieval",
+      "area": "long_context",
+      "difficulty": "medium",
+      "prompt_chars": 5420,
+      "response_chars": 2360,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the termination notice period and the data deletion deadline after termination in the provided Master Services Agreement.\n\nFirst, I need to look through the document for sections related to termination. The relevant article is ARTICLE 4 \u2014 TERM AND TERMINATION. Let me check that.\n\nIn 4.2, it says either party can terminate without cause upon 30 days",
+      "row_mean": 3.0925,
+      "dimensions": {
+        "factual_correctness": 3.34,
+        "reasoning_quality": 3.01,
+        "completeness": 3.18,
+        "grounding": 2.84
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 73,
+      "line_num": 73,
+      "category": "missing_values",
+      "area": "table_understanding",
+      "difficulty": "medium",
+      "prompt_chars": 639,
+      "response_chars": 1903,
+      "response_preview": "<think>\nOkay, let's tackle this problem step by step. First, I need to identify which employees have missing performance ratings. The table shows that Kevin Park's rating is N/A, and the others have numerical values. So, Kevin Park is the one missing a rating.\n\nNext, I need to compute the average rating for those who have one. Let's list out the ratings: Maria has 4.0, Fatima (first entry) has 4.3",
+      "row_mean": 2.865,
+      "dimensions": {
+        "factual_correctness": 3.1,
+        "reasoning_quality": 2.79,
+        "completeness": 2.94,
+        "grounding": 2.63
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 74,
+      "line_num": 74,
+      "category": "quote",
+      "area": "document_extraction",
+      "difficulty": "medium",
+      "prompt_chars": 1351,
+      "response_chars": 1558,
+      "response_preview": "<think>\nOkay, let's tackle this quotation extraction. First, I need to make sure I capture all the details correctly. The user wants a complete extraction of the quotation, including all line items. Let me start by reading through the provided text carefully.\n\nThe quotation starts with the number QT467254, the company name, address, phone, and email. Then it's prepared for Horizon Technology Inc w",
+      "row_mean": 2.995,
+      "dimensions": {
+        "factual_correctness": 3.24,
+        "reasoning_quality": 2.91,
+        "completeness": 3.08,
+        "grounding": 2.75
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 75,
+      "line_num": 75,
+      "category": "excel_table",
+      "area": "document_extraction",
+      "difficulty": "easy",
+      "prompt_chars": 679,
+      "response_chars": 1662,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to extract all structured data from this Excel spreadsheet. The sheet is called \"Budget vs Actual\" and has columns: Department, Budget, Actual, Variance, Variance %, and Status. \n\nFirst, I need to make sure I understand the data correctly. The rows have entries for different departments with their respective budget, actual figures, variance, variance perc",
+      "row_mean": 1.8975,
+      "dimensions": {
+        "factual_correctness": 2.05,
+        "reasoning_quality": 1.85,
+        "completeness": 1.95,
+        "grounding": 1.74
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 76,
+      "line_num": 76,
+      "category": "resume_analysis",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 2414,
+      "response_chars": 1905,
+      "response_preview": "<think>\nOkay, let's start by analyzing the resume step by step. The user wants to know the candidate's total years of experience, their three strongest technical areas, and the career progression pattern.\n\nFirst, total years of experience. The resume lists the current position as Senior Software Engineer at Pinnacle Dynamics from February 2021 to present. Then, the previous job was Software Engine",
+      "row_mean": 2.055,
+      "dimensions": {
+        "factual_correctness": 2.22,
+        "reasoning_quality": 2.0,
+        "completeness": 2.11,
+        "grounding": 1.89
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 77,
+      "line_num": 77,
+      "category": "candidate_comparison",
+      "area": "comparison",
+      "difficulty": "medium",
+      "prompt_chars": 524,
+      "response_chars": 2027,
+      "response_preview": "<think>\nOkay, let's see. I need to compare these three candidates for the Tech Lead role with a budget of $153,112 per year. The candidates are Lisa, Fatima, and Samuel. Let me break down their details.\n\nFirst, Lisa has 4 years of experience, skills in Kafka, Java, Terraform, and a performance rating of 4.3/5. Her salary requirement is $122,293. That's under the budget, so she's affordable. But sh",
+      "row_mean": 2.7175,
+      "dimensions": {
+        "factual_correctness": 2.94,
+        "reasoning_quality": 2.64,
+        "completeness": 2.79,
+        "grounding": 2.5
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 78,
+      "line_num": 78,
+      "category": "resume_analysis",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 2401,
+      "response_chars": 1919,
+      "response_preview": "<think>\nOkay, let's start by analyzing Thomas Andersen's resume step by step. The user wants to know his total years of experience, his three strongest technical areas, and the career progression pattern.\n\nFirst, total years of experience. Looking at his professional experience, he started as a Junior Developer in August 2010 and is currently a Senior Software Engineer at Praxis Engineering since ",
+      "row_mean": 2.165,
+      "dimensions": {
+        "factual_correctness": 2.34,
+        "reasoning_quality": 2.11,
+        "completeness": 2.22,
+        "grounding": 1.99
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 79,
+      "line_num": 79,
+      "category": "analytical",
+      "area": "analytical_reasoning",
+      "difficulty": "medium",
+      "prompt_chars": 294,
+      "response_chars": 2749,
+      "response_preview": "<think>\nOkay, let's see. The user provided a section from a document in Swedish, and they want to know the key implications. The section is about a microscope's magnification change and how IVV (maybe an acronym for something like Image Verification System or similar) updates the field of view and magnification value in the scanning information, as well as toggling image contrast.\n\nFirst, I need t",
+      "row_mean": 2.405,
+      "dimensions": {
+        "factual_correctness": 2.6,
+        "reasoning_quality": 2.34,
+        "completeness": 2.47,
+        "grounding": 2.21
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 80,
+      "line_num": 80,
+      "category": "quote",
+      "area": "document_extraction",
+      "difficulty": "hard",
+      "prompt_chars": 920,
+      "response_chars": 1703,
+      "response_preview": "<think>\nOkay, let's tackle this quotation extraction. First, I need to make sure I capture all the details correctly. The user wants a complete extraction, so I should go through each section step by step.\n\nStarting with the header: Quotation number is QUOT947907. The company is Hasselt Solutions NV with their address and contact info. Then the client is Antwerp Trade Partners NV with their addres",
+      "row_mean": 3.145,
+      "dimensions": {
+        "factual_correctness": 3.4,
+        "reasoning_quality": 3.06,
+        "completeness": 3.23,
+        "grounding": 2.89
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 81,
+      "line_num": 81,
+      "category": "purchase_order",
+      "area": "document_extraction",
+      "difficulty": "medium",
+      "prompt_chars": 1080,
+      "response_chars": 2382,
+      "response_preview": "<think>\nOkay, let's start by looking at the user's request. They want a complete structured extraction of the provided Purchase Order. First, I need to parse through the document and identify all the key elements. \n\nThe PO number is clearly stated at the top: PO9796979. The amount is mentioned as the agreed fixed price, so that's straightforward. Next, the buyer and vendor information. The buyer i",
+      "row_mean": 2.63,
+      "dimensions": {
+        "factual_correctness": 2.84,
+        "reasoning_quality": 2.56,
+        "completeness": 2.7,
+        "grounding": 2.42
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 82,
+      "line_num": 82,
+      "category": "boundary",
+      "area": "boundary_detection",
+      "difficulty": "medium",
+      "prompt_chars": 376,
+      "response_chars": 2639,
+      "response_preview": "<think>\nOkay, let's see. The user provided some legal document snippets involving Leica Biosystems Ltd as a supplier and two customers, XYZ Pathology Lab and CarePlus Labs. The documents mention Histology Equipment with various prices. The user wants a prediction of what will happen to the company in 5 years based on this.\n\nFirst, I need to parse the information given. The legal documents are cont",
+      "row_mean": 2.665,
+      "dimensions": {
+        "factual_correctness": 2.88,
+        "reasoning_quality": 2.59,
+        "completeness": 2.74,
+        "grounding": 2.45
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 83,
+      "line_num": 83,
+      "category": "specific_retrieval",
+      "area": "long_context",
+      "difficulty": "medium",
+      "prompt_chars": 5412,
+      "response_chars": 2197,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the termination notice period and the data deletion deadline after termination from the Master Services Agreement provided.\n\nFirst, I need to look through the document for sections related to termination. The relevant article is ARTICLE 4 \u2014 TERM AND TERMINATION. Let me check that.\n\nIn 4.2, it says either party can terminate without cause upon 60 da",
+      "row_mean": 3.125,
+      "dimensions": {
+        "factual_correctness": 3.38,
+        "reasoning_quality": 3.04,
+        "completeness": 3.21,
+        "grounding": 2.87
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 84,
+      "line_num": 84,
+      "category": "extraction",
+      "area": "document_extraction",
+      "difficulty": "hard",
+      "prompt_chars": 370,
+      "response_chars": 2423,
+      "response_preview": "<think>\nOkay, let's see. The user provided a document snippet under the \"PROVIDO\" section, specifically section 11.3 about environmental conditions. They want me to identify the document type and extract key information fields.\n\nFirst, I need to figure out what kind of document this is. The mention of environmental conditions like temperature, humidity, and atmospheric pressure ranges is common in",
+      "row_mean": 2.405,
+      "dimensions": {
+        "factual_correctness": 2.6,
+        "reasoning_quality": 2.34,
+        "completeness": 2.47,
+        "grounding": 2.21
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 85,
+      "line_num": 85,
+      "category": "vendor_selection",
+      "area": "reasoning_chain",
+      "difficulty": "medium",
+      "prompt_chars": 452,
+      "response_chars": 1403,
+      "response_preview": "<think>\nOkay, let's see. The user is trying to choose between three cloud vendors based on specific criteria and weights. I need to calculate each vendor's score according to the given weights and then determine which one is the best fit.\n\nFirst, I'll list out the criteria and their weights again to make sure I have them right. Price is 30%, support SLA 25%, security certifications 25%, and scalab",
+      "row_mean": 2.94,
+      "dimensions": {
+        "factual_correctness": 3.18,
+        "reasoning_quality": 2.86,
+        "completeness": 3.02,
+        "grounding": 2.7
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 86,
+      "line_num": 86,
+      "category": "candidate_evaluation",
+      "area": "reasoning_chain",
+      "difficulty": "medium",
+      "prompt_chars": 347,
+      "response_chars": 2304,
+      "response_preview": "<think>\nOkay, let's see. I need to evaluate Thomas Andersen for the Senior Data Engineer role at Praxis Engineering. The job requires 4+ years in Machine Learning, 3+ in PostgreSQL, and 4+ in Computer Vision. All three are required, not preferred.\n\nLooking at Thomas's profile: he has 7 years in Machine Learning, which is more than the required 4. That's good. For PostgreSQL, he has 3 years, which ",
+      "row_mean": 3.2075,
+      "dimensions": {
+        "factual_correctness": 3.47,
+        "reasoning_quality": 3.12,
+        "completeness": 3.29,
+        "grounding": 2.95
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 87,
+      "line_num": 87,
+      "category": "row_ranking",
+      "area": "table_understanding",
+      "difficulty": "medium",
+      "prompt_chars": 525,
+      "response_chars": 1636,
+      "response_preview": "<think>\nOkay, let's see. The user wants me to rank the top 3 employees by performance rating from the given table. First, I need to look at the 'Rating' column and sort the employees in descending order based on that.\n\nLooking at the data:\n\nNatalie Hoffmann in Finance has a 4.0 rating.\nFatima Al-Rashid in HR has a 4.3 rating.\nRobert Callahan in Engineering has 3.0.\nYuki Tanaka in Marketing has 3.4",
+      "row_mean": 4.37,
+      "dimensions": {
+        "factual_correctness": 4.72,
+        "reasoning_quality": 4.25,
+        "completeness": 4.49,
+        "grounding": 4.02
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 88,
+      "line_num": 88,
+      "category": "anomaly_detection",
+      "area": "table_understanding",
+      "difficulty": "hard",
+      "prompt_chars": 610,
+      "response_chars": 2134,
+      "response_preview": "<think>\nOkay, let's take a look at this employee salary table and see if there are any anomalies or outliers. First, I need to understand the data. The table has Name, Department, Salary, Years of experience, and Rating. The goal is to find any inconsistencies or unusual entries.\n\nStarting with the salaries. The highest salary is James Whitmore in HR with $827,722. That's way higher than the next ",
+      "row_mean": 2.4875,
+      "dimensions": {
+        "factual_correctness": 2.69,
+        "reasoning_quality": 2.42,
+        "completeness": 2.55,
+        "grounding": 2.29
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 89,
+      "line_num": 89,
+      "category": "contract_timeline",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 470,
+      "response_chars": 2268,
+      "response_preview": "<think>\nOkay, let's break this down. The user is asking about the obligations and deadlines following Praxis Engineering's termination notice to Pinnacle Dynamics. The contract has specific clauses: 4.2 for termination without cause, 7.1 for data deletion, and 8.2 for SLA breach credits. The termination is cited under IP infringement, which might be a different reason than the standard termination",
+      "row_mean": 2.73,
+      "dimensions": {
+        "factual_correctness": 2.95,
+        "reasoning_quality": 2.66,
+        "completeness": 2.8,
+        "grounding": 2.51
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 90,
+      "line_num": 90,
+      "category": "boundary",
+      "area": "boundary_detection",
+      "difficulty": "easy",
+      "prompt_chars": 271,
+      "response_chars": 1778,
+      "response_preview": "<think>\nOkay, let's see. The user is asking about the CEO's favorite color based on a provided document. The document content mentions something about a bulb reaching a critical age and a warning about the main light. The user included some model numbers like M 530 OHX and ARveo, but those might be product codes.\n\nFirst, I need to check if the document actually mentions the CEO's favorite color. T",
+      "row_mean": 3.175,
+      "dimensions": {
+        "factual_correctness": 3.43,
+        "reasoning_quality": 3.09,
+        "completeness": 3.26,
+        "grounding": 2.92
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 91,
+      "line_num": 91,
+      "category": "reasoning",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 471,
+      "response_chars": 1989,
+      "response_preview": "<think>\nOkay, let's see. The user provided a snippet of text that seems to be from a medical device documentation or compliance report. They want a thorough analysis step by step. First, I need to parse the information given.\n\nThe first part lists electromagnetic compatibility standards: IEC 60601-1-2, EN 60601-1-2, EN 61000-3-2, IEC 61000-3-2. These are all standards related to electromagnetic co",
+      "row_mean": 2.025,
+      "dimensions": {
+        "factual_correctness": 2.19,
+        "reasoning_quality": 1.97,
+        "completeness": 2.08,
+        "grounding": 1.86
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 92,
+      "line_num": 92,
+      "category": "financial_analysis",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 2356,
+      "response_chars": 1602,
+      "response_preview": "<think>\nOkay, let's start by looking at the user's question. They want to know which quarter had the best gross profit margin and the company's overall financial health based on the provided financial report.\n\nFirst, I need to find the gross profit margins for each quarter. The report has a consolidated income statement with revenue and cost of goods sold (COGS) for each quarter. The gross profit ",
+      "row_mean": 2.425,
+      "dimensions": {
+        "factual_correctness": 2.62,
+        "reasoning_quality": 2.36,
+        "completeness": 2.49,
+        "grounding": 2.23
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 93,
+      "line_num": 93,
+      "category": "analytical",
+      "area": "analytical_reasoning",
+      "difficulty": "hard",
+      "prompt_chars": 286,
+      "response_chars": 2400,
+      "response_preview": "<think>\nOkay, let's take a look at this user's query. They provided a generic text snippet in Spanish and want me to identify any patterns or anomalies. The text seems to be instructions for a medical device or software, possibly related to a surgeon's settings, specifically mentioning left and right handles.\n\nFirst, I need to check for any obvious patterns. The mention of \"Mango izdo.\" (left hand",
+      "row_mean": 2.495,
+      "dimensions": {
+        "factual_correctness": 2.7,
+        "reasoning_quality": 2.43,
+        "completeness": 2.56,
+        "grounding": 2.29
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 94,
+      "line_num": 94,
+      "category": "boundary",
+      "area": "boundary_detection",
+      "difficulty": "medium",
+      "prompt_chars": 377,
+      "response_chars": 2655,
+      "response_preview": "<think>\nOkay, the user wants me to predict what will happen to the company in 5 years based on the provided medical document. Let me start by reading through the given text carefully.\n\nThe document mentions \"felaktig anv\u00e4ndning som kan medf\u00f6ra sm\u00e4rre eller medelsv\u00e5ra personskador,\" which translates to improper use that can cause minor or moderate personal injuries. It also refers to the EnFocus OC",
+      "row_mean": 2.885,
+      "dimensions": {
+        "factual_correctness": 3.12,
+        "reasoning_quality": 2.81,
+        "completeness": 2.96,
+        "grounding": 2.65
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 95,
+      "line_num": 95,
+      "category": "noisy_ocr_extraction",
+      "area": "ocr_vision",
+      "difficulty": "medium",
+      "prompt_chars": 779,
+      "response_chars": 2199,
+      "response_preview": "<think>\nOkay, let's see. The user wants the full compensation package from the employment contract. First, I need to extract the salary and benefits from the OCR output provided.\n\nLooking at the salary section, it says \u00a372,000 per annum. That's straightforward. Now for the benefits. The document lists several points under BENEFITS. Let me go through each one:\n\nAnnual Leave: 28 days plus bank holid",
+      "row_mean": 2.3325,
+      "dimensions": {
+        "factual_correctness": 2.52,
+        "reasoning_quality": 2.27,
+        "completeness": 2.4,
+        "grounding": 2.14
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 96,
+      "line_num": 96,
+      "category": "contract_timeline",
+      "area": "reasoning_chain",
+      "difficulty": "hard",
+      "prompt_chars": 474,
+      "response_chars": 2130,
+      "response_preview": "<think>\nOkay, let's break this down. The user is asking about the obligations and deadlines following a termination notice from Ironwood Manufacturing to Pinnacle Dynamics. The contract has specific clauses: 4.2 for termination without cause, 7.1 for data deletion, and 8.2 for SLA breach credits. The termination notice was sent on March 1st, citing a data breach.\n\nFirst, I need to check if the ter",
+      "row_mean": 2.655,
+      "dimensions": {
+        "factual_correctness": 2.87,
+        "reasoning_quality": 2.58,
+        "completeness": 2.73,
+        "grounding": 2.44
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 97,
+      "line_num": 97,
+      "category": "cell_lookup",
+      "area": "table_understanding",
+      "difficulty": "easy",
+      "prompt_chars": 665,
+      "response_chars": 1268,
+      "response_preview": "<think>\nOkay, let's see. The user is asking for Eric Lindqvist's salary and department from the provided employee table. First, I need to locate Eric Lindqvist in the table.\n\nLooking at the Name column, I see entries like Samuel Adeyemi, Fatima Al-Rashid, Eric Lindqvist, Robert Callahan, etc. There's an entry for Eric Lindqvist in the third row. Let me check that row.\n\nThe third row has Name: Eric",
+      "row_mean": 3.47,
+      "dimensions": {
+        "factual_correctness": 3.75,
+        "reasoning_quality": 3.38,
+        "completeness": 3.56,
+        "grounding": 3.19
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 98,
+      "line_num": 98,
+      "category": "quote",
+      "area": "document_extraction",
+      "difficulty": "medium",
+      "prompt_chars": 1199,
+      "response_chars": 2257,
+      "response_preview": "<think>\nOkay, let's start by looking at the user's request. They want me to extract every field from a quotation document. The document provided has several sections, so I need to parse each part carefully.\n\nFirst, the header has the Quotation number, company details, and contact information. The line \"Quotation # Q661093\" is straightforward. Then the company name is Technologie AG M\u00fcnchen, follow",
+      "row_mean": 2.27,
+      "dimensions": {
+        "factual_correctness": 2.45,
+        "reasoning_quality": 2.21,
+        "completeness": 2.33,
+        "grounding": 2.09
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 99,
+      "line_num": 99,
+      "category": "resume_analysis",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 2386,
+      "response_chars": 1644,
+      "response_preview": "<think>\nOkay, let's start by analyzing Marcus Webb's resume step by step. The user wants to know his total years of experience, his three strongest technical areas, and his career progression pattern.\n\nFirst, total years of experience. Looking at his professional experience, he started as a Junior Developer at Glacier Insurance from November 2013 to April 2015. Then he moved to Apex Consulting Gro",
+      "row_mean": 1.9775,
+      "dimensions": {
+        "factual_correctness": 2.14,
+        "reasoning_quality": 1.92,
+        "completeness": 2.03,
+        "grounding": 1.82
+      },
+      "judge_source": "heuristic"
+    },
+    {
+      "index": 100,
+      "line_num": 100,
+      "category": "financial_analysis",
+      "area": "long_context",
+      "difficulty": "hard",
+      "prompt_chars": 2351,
+      "response_chars": 1383,
+      "response_preview": "<think>\nOkay, let's start by looking at the user's question. They want to know which quarter had the best gross profit margin and the company's overall financial health based on the provided financial report.\n\nFirst, I need to find the gross profit margins for each quarter. The report has a consolidated income statement with revenue and cost of goods sold (COGS) for each quarter. The gross profit ",
+      "row_mean": 2.1675,
+      "dimensions": {
+        "factual_correctness": 2.34,
+        "reasoning_quality": 2.11,
+        "completeness": 2.23,
+        "grounding": 1.99
+      },
+      "judge_source": "heuristic"
+    }
+  ]
+}

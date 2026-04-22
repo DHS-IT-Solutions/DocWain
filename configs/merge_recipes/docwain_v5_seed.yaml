@@ -1,0 +1,94 @@
+# DocWain V5 Seed — TIES merge of V3 weights + Qwen3-14B
+# =================================================================
+#
+# Why TIES-Merging?
+#   TIES (Yadav et al., 2023) sparsifies task vectors per-model (density),
+#   resolves sign conflicts across models (sign consensus), then sums the
+#   cleaned vectors back onto the base. For our pair — V3 (domain-tuned on
+#   document intelligence) and Qwen3-14B (general instruction /
+#   tool-calling behaviour) — TIES keeps the dominant V3 task vector intact
+#   while grafting only the instruct directions that don't fight V3's
+#   domain adjustments. Linear / SLERP would blur V3's fine-grained
+#   extraction behaviour; DARE-TIES adds extra randomness we don't need
+#   for a two-model seed.
+#
+# Why these weights (V3=0.75, Instruct=0.25)?
+#   V3 is our quality floor (LLM-judge 4.71/5.0). We want it dominant so
+#   the merged seed can't regress below that floor on in-domain tasks,
+#   while the 0.25 Instruct contribution injects tool-call fluency and
+#   chain-of-thought cleanliness we've observed V3 lacks on off-distribution
+#   prompts. Density 0.7 retains the top-70% magnitude entries of each
+#   task vector — standard for TIES when one model is clearly primary.
+#
+# Why bf16?
+#   V3 was trained in bf16; Qwen3-14B is distributed in bf16.
+#   Merging in bf16 preserves the numeric range of task vectors without
+#   the fp16 overflow risk around RMSNorm scales and the attention
+#   softmax cap. Downstream vLLM/transformers paths all accept bf16
+#   natively on A100 and CPU-int8.
+#
+# Output path:
+#   mergekit-yaml will write the merged model to:
+#     /home/ubuntu/PycharmProjects/DocWain/models/DocWain-14B-v5-seed
+#
+# Execution (CPU-only, A100 held by training/serving):
+#   mergekit-yaml \
+#     configs/merge_recipes/docwain_v5_seed.yaml \
+#     /home/ubuntu/PycharmProjects/DocWain/models/DocWain-14B-v5-seed \
+#     --no-cuda \
+#     --lazy-unpickle \
+#     --low-cpu-memory \
+#     --allow-crimes \
+#     --copy-tokenizer \
+#     --out-shard-size 5B \
+#     --trust-remote-code
+#
+#   Flag notes (verified against arcee-ai/mergekit main, Apr 2026):
+#     --no-cuda         : force CPU math (A100 reserved for vLLM/training)
+#     --lazy-unpickle   : stream shards from disk; ~8 GB RAM floor per model
+#     --low-cpu-memory  : stage result tensors off-heap during merge
+#     --allow-crimes    : needed whenever the two models differ in any
+#                         architectural detail; safe here since both are
+#                         Qwen3-14B, but belt-and-braces for the vision graft
+#     --copy-tokenizer  : bundle tokenizer from base (see tokenizer_source)
+#     --trust-remote-code : V3 ships a custom modelling file (vision graft)
+#
+# Gate:
+#   scripts/evaluate_merge_seed.py must report mean_score >= 4.71 on the
+#   first 200 rows of finetune_artifacts/teacher_data/master_v4.jsonl,
+#   else we discard the seed and train V5 directly from V3.
+# =================================================================
+
+merge_method: ties
+base_model: /home/ubuntu/PycharmProjects/DocWain/models/DocWain-14B-v2
+
+models:
+  # V3 — domain-tuned DocWain (dominant task vector)
+  - model: /home/ubuntu/PycharmProjects/DocWain/models/DocWain-14B-v2
+    parameters:
+      weight: 0.75
+      density: 0.7
+
+  # Qwen3-14B — general instruction / tool-calling task vector
+  - model: Qwen/Qwen3-14B
+    parameters:
+      weight: 0.25
+      density: 0.7
+
+# Global TIES parameters
+parameters:
+  # normalize=true rescales the summed task vectors so their combined
+  # magnitude matches the base model's — prevents the merge from drifting
+  # off the well-conditioned region around the base weights.
+  normalize: true
+  # int8_mask=true stores the sign-consensus mask as int8 instead of bf16;
+  # cuts peak CPU RAM by ~15 GB on a 14B merge without changing the math.
+  int8_mask: true
+
+dtype: bfloat16
+
+# tokenizer_source: base — V3's tokenizer already contains our custom
+# DocWain chat template and special tokens; Qwen3-14B's tokenizer
+# would drop them. Combined with --copy-tokenizer on the CLI, the output
+# directory gets V3's tokenizer.json / tokenizer_config.json verbatim.
+tokenizer_source: base
