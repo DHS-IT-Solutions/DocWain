@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field, field_validator, root_validator
 
 
 IntentCategory = Literal[
@@ -57,6 +57,14 @@ class ScopeModel(BaseModel):
     profile_id: str = ""
     profile_name: str = ""
     document_filters: DocumentFilters = Field(default_factory=DocumentFilters)
+
+    @field_validator("subscription_id", "profile_id", "profile_name", mode="before")
+    @classmethod
+    def _none_to_empty_string(cls, v):
+        # resolve_profile_name() is Optional[str] — profiles with uploaded
+        # documents but no row in the profiles collection return None, which
+        # must not crash query routing.
+        return v if v is not None else ""
 
 
 class RetrievalFilter(BaseModel):
