@@ -10,6 +10,7 @@ datasets==4.3.0
 easyocr
 fastapi
 httpx
+jellyfish
 neo4j
 numpy
 ollama
