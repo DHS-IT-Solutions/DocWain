@@ -300,6 +300,15 @@ def _format_elapsed(seconds: Optional[float]) -> str:
 _PROGRESS_CACHE_TTL_MS = 1500
 _PROGRESS_CACHE_KEY = "dw:progress:extract:{profile_id}"
 
+# Statuses that mean the document is still in the active upload/extraction
+# flow. /api/extract/progress returns only these docs so the UI poller
+# tracks the current batch, not every historical document in the profile.
+_EXTRACT_PROGRESS_IN_FLIGHT_STATUSES = frozenset({
+    "UNDER_REVIEW",
+    "UPLOADED",
+    "EXTRACTION_IN_PROGRESS",
+})
+
 
 def _progress_cache_get(profile_id: str) -> Optional[Dict[str, Any]]:
     try:
@@ -397,11 +406,19 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
         doc_id = str(doc.get("document_id") or doc.get("_id"))
         status = doc.get("status", "UNKNOWN")
 
+        # Only in-flight docs contribute to the exposed progress/elapsed
+        # aggregates — otherwise historical completed docs push the overall
+        # percentage toward 100 and drag the elapsed clock back to whenever
+        # the oldest completed extraction started.
+        if status not in _EXTRACT_PROGRESS_IN_FLIGHT_STATUSES:
+            continue
+
         # Extraction-scoped: EXTRACTION_COMPLETED → 100% on this endpoint.
         progress = _compute_extraction_progress(status, progress_by_doc.get(doc_id))
         progress_sum += progress.get("progress", 0)
 
-        # Track earliest start and latest end for elapsed time
+        # Track earliest start and latest end for elapsed time, scoped to
+        # the in-flight batch only.
         extraction = doc.get("extraction") or {}
         embedding = doc.get("embedding") or {}
         start_at = extraction.get("started_at")
@@ -418,12 +435,8 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
             if latest_end is None or end_at > latest_end:
                 latest_end = end_at
 
-        # ``uploaded`` on this endpoint means "currently being extracted".
-        # Previously it counted every document that existed, which made it
-        # identical to ``total_documents`` and gave the UI no signal about
-        # how many extractions are actively in flight. We keep the field
-        # name unchanged (callers read ``uploaded``) but redefine its
-        # semantics to the in-flight extraction count.
+        # ``uploaded`` here means "currently being extracted" (the narrower
+        # sub-state of the in-flight set).
         if status == "EXTRACTION_IN_PROGRESS":
             uploaded_count += 1
 
