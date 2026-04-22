@@ -56,23 +56,36 @@ def generate_structured_answer(
             "structured_answer: llm returned len=%d preview=%r",
             len(text), text[:200] if text else "",
         )
-        payload = _extract_json(text)
-        if payload is None:
+        llm_payload = _extract_json(text)
+        if llm_payload is None:
             logger.warning("structured_answer: json extract FAILED; returning base_payload")
-        elif not isinstance(payload, dict):
+        elif not isinstance(llm_payload, dict):
             logger.warning(
                 "structured_answer: parsed payload not a dict (type=%s); returning base_payload",
-                type(payload).__name__,
-            )
-        elif not _has_top_level_required(payload, schema):
-            logger.warning(
-                "structured_answer: top-level required-field check FAILED; "
-                "required=%s got_keys=%s; returning base_payload",
-                schema.get("required_fields"), list(payload.keys()),
+                type(llm_payload).__name__,
             )
         else:
-            logger.info("structured_answer: LLM response accepted (keys=%s)", list(payload.keys()))
-            return json.dumps(payload, indent=2)
+            # Graft the LLM's narrative/result fields onto base_payload.
+            # The prompt tells the LLM NOT to echo `documents` (which would
+            # overflow max_tokens on a 12+ doc profile) — the server supplies
+            # that from base_payload. This way the LLM only produces the
+            # schema-specific narrative field (~100 tokens vs 5K+ echoed).
+            merged = dict(base_payload)
+            for narrative_key in ("answer", "items", "comparisons", "ranking"):
+                if narrative_key in llm_payload:
+                    merged[narrative_key] = llm_payload[narrative_key]
+            if _has_top_level_required(merged, schema):
+                logger.info(
+                    "structured_answer: LLM narrative grafted onto base_payload "
+                    "(llm_keys=%s)",
+                    list(llm_payload.keys()),
+                )
+                return json.dumps(merged, indent=2)
+            logger.warning(
+                "structured_answer: merged payload missing required fields; "
+                "required=%s got=%s; returning base_payload",
+                schema.get("required_fields"), list(merged.keys()),
+            )
     except Exception as exc:  # noqa: BLE001
         logger.exception("structured_answer: LLM path raised — returning base_payload")
     return json.dumps(base_payload, indent=2)
@@ -227,28 +240,23 @@ def _diff_values(doc: DocumentEvidence, other: DocumentEvidence) -> List[str]:
 _SCHEMA_OUTPUT_HINT: Dict[str, str] = {
     "answer": (
         '{"schema":"answer",'
-        '"answer":"<natural-language answer to the user query, 1-3 sentences>",'
-        '"documents":[<echo the evidence documents unchanged>]}'
+        '"answer":"<natural-language answer to the user query, 1-3 sentences>"}'
     ),
     "extract": (
-        '{"schema":"extract",'
-        '"documents":[<echo the evidence documents, preserving extracted fields>]}'
+        '{"schema":"extract"}'
     ),
     "list": (
         '{"schema":"list",'
-        '"items":[{"label":"<short label>","document_id":"<doc id>"}, ...],'
-        '"documents":[<echo the evidence documents unchanged>]}'
+        '"items":[{"label":"<short label>","document_id":"<doc id>"}, ...]}'
     ),
     "compare": (
         '{"schema":"compare",'
         '"comparisons":[{"document_a":"<id>","document_b":"<id>",'
-        '"similarities":["..."],"differences":["..."],"notes":"<short note>"}, ...],'
-        '"documents":[<echo the evidence documents unchanged>]}'
+        '"similarities":["..."],"differences":["..."],"notes":"<short note>"}, ...]}'
     ),
     "rank": (
         '{"schema":"rank",'
-        '"ranking":[{"rank":1,"document_id":"<id>","reason":"<short reason>"}, ...],'
-        '"documents":[<echo the evidence documents unchanged>]}'
+        '"ranking":[{"rank":1,"document_id":"<id>","reason":"<short reason>"}, ...]}'
     ),
 }
 
@@ -278,6 +286,8 @@ def _build_prompt(user_query: str, schema_name: str, base_payload: Dict[str, Any
         f"{hint}\n\n"
         "Requirements:\n"
         f'- The top-level "schema" field MUST be "{schema_name}".\n'
+        '- Do NOT include a "documents" field in your response; the server '
+        'will attach it from the evidence.\n'
         '- Do not add commentary, markdown, or text outside the JSON object.\n'
         f"{answer_requirement}"
     )
