@@ -361,7 +361,7 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     if collection is None:
         empty = {"documents": [], "common_data": {
             "Overall_live_logs": [], "overall_progress": 0,
-            "total_documents": 0, "uploaded": 0, "elapsed_time": "0s",
+            "total_documents": 0, "Extracted": 0, "elapsed_time": "0s",
         }}
         _progress_cache_set(profile_id, empty)
         return empty
@@ -464,7 +464,7 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
             "Overall_live_logs": live_logs,
             "overall_progress": overall_progress,
             "total_documents": total_docs,
-            "uploaded": uploaded_count,
+            "Extracted": uploaded_count,
             "elapsed_time": _format_elapsed(elapsed_seconds),
         },
     }
