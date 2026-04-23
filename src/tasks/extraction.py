@@ -133,32 +133,90 @@ def extract_document(self, document_id: str, subscription_id: str,
         except Exception as exc:
             raise RuntimeError(f"Failed to download document from blob: {exc}") from exc
 
-        # 3. Extract basic text using fileProcessor for the semantic pipeline
-        text_content = _extract_text_content(document_bytes, source_file,
-                                             content_type=content_type)
-        logger.info("Text extraction for %s: %d chars", document_id, len(text_content))
+        # --- Plan 1: native-first dispatch ---
+        try:
+            from dataclasses import asdict as _dc_asdict
+            from src.extraction.adapters.dispatcher import dispatch_native
+            from src.extraction.adapters.errors import NotNativePathError
+        except ImportError:
+            dispatch_native = None  # type: ignore
+            NotNativePathError = Exception  # type: ignore
 
-        # 4. Run ExtractionEngine.extract() with all three pipelines
-        from src.extraction import ExtractionEngine
+        if dispatch_native is not None:
+            try:
+                _canonical = dispatch_native(document_bytes, filename=source_file, doc_id=document_id)
+                _extraction_json = _dc_asdict(_canonical)
+                # Normalize sheet cell tuple keys — dataclasses.asdict preserves tuple keys
+                # which are not JSON-serialisable; stringify them.
+                for _sheet in _extraction_json.get("sheets", []) or []:
+                    _sheet["cells"] = {str(k): v for k, v in (_sheet.get("cells") or {}).items()}
+                logger.info(
+                    "[Plan1 native path] doc_id=%s format=%s pages=%d sheets=%d slides=%d",
+                    document_id, _canonical.format,
+                    len(_canonical.pages), len(_canonical.sheets), len(_canonical.slides),
+                )
+                _native_path_taken = True
+                # Build result_dict and summary in the same shape downstream helpers expect.
+                result_dict = {
+                    "document_id": document_id,
+                    "subscription_id": subscription_id,
+                    "profile_id": profile_id,
+                    "canonical": _extraction_json,
+                    "path_taken": "native",
+                }
+                # Flatten tables for summary count across all pages/sheets/slides
+                _table_count = (
+                    sum(len(p.get("tables", [])) for p in _extraction_json.get("pages", []))
+                    + sum(len(s.get("tables", [])) for s in _extraction_json.get("slides", []))
+                )
+                summary = {
+                    "page_count": len(_canonical.pages) or len(_canonical.sheets) or len(_canonical.slides),
+                    "entity_count": 0,
+                    "section_count": 0,
+                    "table_count": _table_count,
+                    "doc_type_detected": _canonical.format,
+                    "extraction_confidence": _canonical.metadata.coverage.verifier_score,
+                    "models_used": ["native"],
+                    "path_taken": "native",
+                }
+            except NotNativePathError as exc:
+                logger.info("[Plan1] native path not applicable (%s); falling through to legacy engine", exc)
+                _native_path_taken = False
+            except Exception as exc:  # noqa: BLE001
+                # Any failure in the native path must NOT break extraction — log and fall through.
+                logger.warning("[Plan1] native path raised unexpected error: %r; falling through", exc)
+                _native_path_taken = False
+        else:
+            _native_path_taken = False
+        # --- end Plan 1 native-first dispatch ---
 
-        engine = ExtractionEngine()
-        result = engine.extract(
-            document_id=document_id,
-            subscription_id=subscription_id,
-            profile_id=profile_id,
-            document_bytes=document_bytes,
-            file_type=file_type,
-            text_content=text_content,
-        )
+        if not _native_path_taken:
+            # 3. Extract basic text using fileProcessor for the semantic pipeline
+            text_content = _extract_text_content(document_bytes, source_file,
+                                                 content_type=content_type)
+            logger.info("Text extraction for %s: %d chars", document_id, len(text_content))
+
+            # 4. Run ExtractionEngine.extract() with all three pipelines
+            from src.extraction import ExtractionEngine
+
+            engine = ExtractionEngine()
+            result = engine.extract(
+                document_id=document_id,
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+                document_bytes=document_bytes,
+                file_type=file_type,
+                text_content=text_content,
+            )
+            result_dict = result.to_dict()
+            summary = result.to_summary()
 
         # 5. Store full extraction result JSON to Azure Blob
-        result_dict = result.to_dict()
         blob_path = _upload_extraction_json(
             subscription_id, profile_id, document_id, result_dict
         )
 
         # 6. Store summary to MongoDB via update_stage()
-        summary = result.to_summary()
         summary["blob_path"] = blob_path
 
         duration_seconds = round(time.time() - start_time, 2)
