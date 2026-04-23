@@ -1,0 +1,30 @@
+{
+  "format": "csv",
+  "path_taken": "native",
+  "pages": [
+    {
+      "page_num": 1,
+      "blocks": [],
+      "tables": [
+        {
+          "rows": [
+            [
+              "h1",
+              "h2"
+            ],
+            [
+              "1",
+              "2"
+            ],
+            [
+              "3",
+              "4"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "sheets": [],
+  "slides": []
+}

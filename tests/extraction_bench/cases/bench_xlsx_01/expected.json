@@ -1,0 +1,46 @@
+{
+  "format": "xlsx",
+  "path_taken": "native",
+  "pages": [],
+  "sheets": [
+    {
+      "name": "Data",
+      "cells": {
+        "(1, 1)": {
+          "value": "Name",
+          "formula": null,
+          "type": "s"
+        },
+        "(1, 2)": {
+          "value": "Amount",
+          "formula": null,
+          "type": "s"
+        },
+        "(2, 1)": {
+          "value": "Alice",
+          "formula": null,
+          "type": "s"
+        },
+        "(2, 2)": {
+          "value": 100,
+          "formula": null,
+          "type": "n"
+        },
+        "(3, 1)": {
+          "value": "Bob",
+          "formula": null,
+          "type": "s"
+        },
+        "(3, 2)": {
+          "value": 200,
+          "formula": null,
+          "type": "n"
+        }
+      },
+      "hidden": false,
+      "merged_cells": [],
+      "named_ranges": []
+    }
+  ],
+  "slides": []
+}

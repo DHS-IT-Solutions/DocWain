@@ -1,0 +1,32 @@
+{
+  "format": "pptx",
+  "path_taken": "native",
+  "pages": [],
+  "sheets": [],
+  "slides": [
+    {
+      "slide_num": 1,
+      "elements": [
+        {
+          "text": "Overview",
+          "block_type": "paragraph"
+        }
+      ],
+      "tables": [],
+      "notes": "speaker notes one",
+      "hidden": false
+    },
+    {
+      "slide_num": 2,
+      "elements": [
+        {
+          "text": "Details",
+          "block_type": "paragraph"
+        }
+      ],
+      "tables": [],
+      "notes": "speaker notes two",
+      "hidden": false
+    }
+  ]
+}

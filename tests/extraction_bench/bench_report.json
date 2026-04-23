@@ -1,0 +1,57 @@
+[
+  {
+    "case": "bench_csv_01",
+    "scores": {
+      "coverage": 1.0,
+      "fidelity": 1.0,
+      "structure": 1.0,
+      "hallucination": 0.0,
+      "weighted": 1.0
+    },
+    "gate_passed": true
+  },
+  {
+    "case": "bench_docx_01",
+    "scores": {
+      "coverage": 1.0,
+      "fidelity": 1.0,
+      "structure": 1.0,
+      "hallucination": 0.0,
+      "weighted": 1.0
+    },
+    "gate_passed": true
+  },
+  {
+    "case": "bench_pdf_01",
+    "scores": {
+      "coverage": 1.0,
+      "fidelity": 1.0,
+      "structure": 1.0,
+      "hallucination": 0.0,
+      "weighted": 1.0
+    },
+    "gate_passed": true
+  },
+  {
+    "case": "bench_pptx_01",
+    "scores": {
+      "coverage": 1.0,
+      "fidelity": 1.0,
+      "structure": 1.0,
+      "hallucination": 0.0,
+      "weighted": 1.0
+    },
+    "gate_passed": true
+  },
+  {
+    "case": "bench_xlsx_01",
+    "scores": {
+      "coverage": 1.0,
+      "fidelity": 1.0,
+      "structure": 1.0,
+      "hallucination": 0.0,
+      "weighted": 1.0
+    },
+    "gate_passed": true
+  }
+]

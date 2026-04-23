@@ -1,0 +1,28 @@
+{
+  "format": "pdf_native",
+  "path_taken": "native",
+  "pages": [
+    {
+      "page_num": 1,
+      "blocks": [
+        {
+          "text": "Invoice total amount for this purchase is 1234.56 USD.",
+          "block_type": "paragraph"
+        }
+      ],
+      "tables": []
+    },
+    {
+      "page_num": 2,
+      "blocks": [
+        {
+          "text": "Vendor record: Acme Corporation",
+          "block_type": "paragraph"
+        }
+      ],
+      "tables": []
+    }
+  ],
+  "sheets": [],
+  "slides": []
+}

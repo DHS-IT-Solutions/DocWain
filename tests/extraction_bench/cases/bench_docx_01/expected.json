@@ -1,0 +1,35 @@
+{
+  "format": "docx",
+  "path_taken": "native",
+  "pages": [
+    {
+      "page_num": 1,
+      "blocks": [
+        {
+          "text": "First paragraph.",
+          "block_type": "paragraph"
+        },
+        {
+          "text": "Second paragraph with detail.",
+          "block_type": "paragraph"
+        }
+      ],
+      "tables": [
+        {
+          "rows": [
+            [
+              "Header A",
+              "Header B"
+            ],
+            [
+              "cell 1",
+              "cell 2"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "sheets": [],
+  "slides": []
+}
