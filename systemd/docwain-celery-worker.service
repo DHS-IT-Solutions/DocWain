@@ -1,0 +1,38 @@
+[Unit]
+Description=DocWain Celery Worker (extraction / screening / embedding / kg / backfill queues)
+After=network.target docwain-app.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/PycharmProjects/DocWain
+EnvironmentFile=-/home/ubuntu/PycharmProjects/DocWain/.env
+Environment="PATH=/home/ubuntu/PycharmProjects/DocWain/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HF_HUB_OFFLINE=1"
+Environment="TRANSFORMERS_OFFLINE=1"
+Environment="HF_HUB_DISABLE_TELEMETRY=1"
+ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python -m celery -A src.celery_app worker \
+    -Q extraction_queue,screening_queue,kg_queue,embedding_queue,backfill_queue \
+    --concurrency=4 \
+    --loglevel=INFO \
+    --logfile=/home/ubuntu/PycharmProjects/DocWain/logs/celery_worker.log
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=120
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=docwain-celery-worker
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/PycharmProjects/DocWain /tmp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
