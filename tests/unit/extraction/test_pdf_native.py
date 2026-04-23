@@ -33,7 +33,8 @@ def _make_scanned_pdf_without_text_layer(num_pages: int = 1) -> bytes:
 
 
 def test_pdf_native_extracts_single_page_text():
-    pdf = _make_pdf_with_text(["Hello world"])
+    # Use realistic single-page content well above the 30-char native-path threshold.
+    pdf = _make_pdf_with_text(["Hello world from a native PDF document under test."])
     result = extract_pdf_native(pdf, doc_id="d1", filename="t.pdf")
     assert isinstance(result, ExtractionResult)
     assert result.format == "pdf_native"
