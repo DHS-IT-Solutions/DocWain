@@ -41,7 +41,6 @@ from src.embedding.pipeline.chunk_integrity import is_valid_chunk_text
 from src.embedding.pipeline.embed_pipeline import ChunkPrepStats, prepare_embedding_chunks, normalize_chunk_chain
 from src.embedding.pipeline.payload_normalizer import build_qdrant_payload, normalize_chunk_metadata
 from src.embedding.pipeline.schema_normalizer import EMBED_PIPELINE_VERSION
-from src.kg.ingest import build_graph_payload, get_graph_ingest_queue
 from src.embedding.model_loader import encode_with_fallback as model_encode_with_fallback, get_embedding_model
 from src.embedding.chunking.section_chunker import SectionChunker, normalize_text
 from src.metrics.ai_metrics import get_metrics_store
@@ -1680,17 +1679,7 @@ def save_embeddings_to_qdrant(
                 logger.debug("Redis client initialization failed: %s", exc)
                 redis_client = None
 
-        graph_payload = build_graph_payload(
-            embeddings_payload=embeddings,
-            subscription_id=subscription_id,
-            profile_id=profile_id,
-            document_id=doctag,
-            doc_name=filename or source_filename,
-            doc_metadata=doc_metadata,
-        )
-        if graph_payload:
-            queue = get_graph_ingest_queue(redis_client)
-            queue.enqueue(graph_payload)
+        # KG ingestion moved to the training-stage background service (spec: 2026-04-23-extraction-accuracy-design.md §6.1).
 
         try:
             from src.intelligence.facts_store import FactsStore

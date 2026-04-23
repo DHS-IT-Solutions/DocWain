@@ -224,48 +224,7 @@ def _training_success_fields() -> Dict[str, Any]:
         "trained_at": now,
     }
 
-def _ingest_chunks_to_knowledge_graph(
-    document_id: str,
-    subscription_id: str,
-    profile_id: str,
-    doc_name: str,
-    extracted_docs: Dict[str, Any],
-) -> None:
-    """Non-blocking chunk-level KG ingestion after Qdrant upsert.
-
-    Builds a graph payload from the embedding texts+metadata and enqueues
-    for async processing.  KG failure must never block embedding.
-    """
-    try:
-        from src.kg.ingest import build_graph_payload, get_graph_ingest_queue
-
-        texts: List[str] = []
-        chunk_metadata: List[Dict[str, Any]] = []
-        for fname, content in (extracted_docs or {}).items():
-            if isinstance(content, dict):
-                raw_texts = content.get("texts") or []
-                raw_meta = content.get("chunk_metadata") or []
-                if isinstance(raw_texts, list):
-                    texts.extend(raw_texts)
-                if isinstance(raw_meta, list):
-                    chunk_metadata.extend(raw_meta)
-
-        if not texts:
-            return
-
-        graph_payload = build_graph_payload(
-            embeddings_payload={"texts": texts, "chunk_metadata": chunk_metadata},
-            subscription_id=str(subscription_id),
-            profile_id=str(profile_id),
-            document_id=str(document_id),
-            doc_name=doc_name,
-        )
-        if graph_payload:
-            queue = get_graph_ingest_queue()
-            queue.enqueue(graph_payload)
-            logger.info("KG chunk-level ingestion enqueued for %s (%d texts)", document_id, len(texts))
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("KG chunk ingestion skipped for %s: %s", document_id, exc)
+# KG ingestion moved to the training-stage background service (spec: 2026-04-23-extraction-accuracy-design.md §6.1).
 
 def _get_max_workers(total: int) -> int:
     max_workers_env = os.getenv("EMBEDDING_MAX_WORKERS")
@@ -3041,15 +3000,6 @@ def _process_blob(
                         extra={"chunks_stored": total_upserted, "collection": collection_name,
                                "post_upsert_count": post_count})
 
-        # KG chunk-level ingestion (async, non-blocking)
-        _ingest_chunks_to_knowledge_graph(
-            document_id=doc_id,
-            subscription_id=subscription_id,
-            profile_id=profile_id,
-            doc_name=file_name or doc_id,
-            extracted_docs=extracted_docs,
-        )
-
         # ── Cross-document intelligence (Phase 5, non-blocking daemon thread) ──
         try:
             import threading as _cd_threading
@@ -3819,15 +3769,6 @@ def _process_local_document(
         emit_progress(document_id, "completed", 1.0,
                       f"Training completed — {total_upserted} chunks stored",
                       extra={"chunks_stored": total_upserted, "collection": collection_name})
-
-        # KG chunk-level ingestion (async, non-blocking)
-        _ingest_chunks_to_knowledge_graph(
-            document_id=document_id,
-            subscription_id=subscription_id,
-            profile_id=profile_id,
-            doc_name=file_name or document_id,
-            extracted_docs=extracted_docs,
-        )
 
         # ── Cross-document intelligence (Phase 5, non-blocking daemon thread) ──
         try:
