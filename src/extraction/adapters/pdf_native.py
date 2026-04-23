@@ -23,7 +23,7 @@ from src.extraction.canonical_schema import (
 
 # If fewer than this many characters are extractable across the whole document,
 # treat as non-native (scanned).
-MIN_TEXT_CHARS_FOR_NATIVE = 10
+MIN_TEXT_CHARS_FOR_NATIVE = 30
 
 
 def extract_pdf_native(file_bytes: bytes, *, doc_id: str, filename: str) -> ExtractionResult:
