@@ -18,6 +18,29 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _infer_format_hint(filename: str) -> str:
+    import os
+    _, ext = os.path.splitext(filename.lower())
+    if ext == ".pdf":
+        return "pdf_scanned"
+    if ext in (".png", ".jpg", ".jpeg", ".tif", ".tiff"):
+        return "image"
+    return "image"
+
+
+def _get_redis_if_available():
+    try:
+        from src.api.dw_newron import get_redis_client
+        return get_redis_client()
+    except Exception:
+        try:
+            import redis
+            return redis.Redis(host="localhost", port=6379, db=0,
+                               decode_responses=True, socket_timeout=1.0)
+        except Exception:
+            return None
+
+
 def _download_document_bytes(document_id: str, source_file: str) -> bytes:
     """Download raw document bytes from Azure Blob storage."""
     from src.api.blob_content_store import get_blob_client
@@ -190,7 +213,55 @@ def extract_document(self, document_id: str, subscription_id: str,
             _native_path_taken = False
         # --- end Plan 1 native-first dispatch ---
 
+        # --- Plan 2: vision path (runs when native dispatch raised NotNativePathError) ---
+        _vision_path_taken = False
         if not _native_path_taken:
+            try:
+                from dataclasses import asdict as _dc_asdict_vision
+                from src.extraction.vision.orchestrator import extract_via_vision as _extract_via_vision
+
+                _vision_result = _extract_via_vision(
+                    document_bytes,
+                    doc_id=document_id,
+                    filename=source_file,
+                    format_hint=_infer_format_hint(source_file),
+                )
+                _vision_dict = _dc_asdict_vision(_vision_result)
+                # Normalize sheet cell tuple keys (vision path produces no sheets,
+                # but the helper is defensive).
+                for _sheet in _vision_dict.get("sheets", []) or []:
+                    _sheet["cells"] = {str(k): v for k, v in (_sheet.get("cells") or {}).items()}
+                result_dict = {
+                    **_vision_dict,
+                    "subscription_id": subscription_id,
+                    "profile_id": profile_id,
+                }
+                _vision_table_count = sum(
+                    len(p.get("tables", [])) for p in _vision_dict.get("pages", [])
+                )
+                summary = {
+                    "page_count": len(_vision_result.pages),
+                    "entity_count": 0,
+                    "section_count": 0,
+                    "table_count": _vision_table_count,
+                    "doc_type_detected": _vision_result.format,
+                    "extraction_confidence": _vision_result.metadata.coverage.verifier_score,
+                    "models_used": ["vision"],
+                    "path_taken": "vision",
+                }
+                _vision_path_taken = True
+                logger.info(
+                    "[Plan2 vision path] doc_id=%s pages=%d fallback_invocations=%d",
+                    document_id,
+                    len(_vision_result.pages),
+                    len(_vision_result.metadata.coverage.fallback_invocations),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[Plan2] vision path raised %r; falling through to legacy engine", exc)
+                _vision_path_taken = False
+        # --- end Plan 2 vision path ---
+
+        if not _native_path_taken and not _vision_path_taken:
             # 3. Extract basic text using fileProcessor for the semantic pipeline
             text_content = _extract_text_content(document_bytes, source_file,
                                                  content_type=content_type)
@@ -240,6 +311,36 @@ def extract_document(self, document_id: str, subscription_id: str,
             summary.get("table_count", 0),
             summary.get("extraction_confidence", 0.0),
         )
+
+        # Plan 2: per-extraction observability audit log.
+        try:
+            import time as _time
+            from src.extraction.vision.observability import (
+                ExtractionLogEntry,
+                write_entry_if_redis,
+            )
+            _log_entry = ExtractionLogEntry(
+                doc_id=document_id,
+                format=str(result_dict.get("format", "unknown")),
+                path_taken=str(result_dict.get("path_taken", "legacy")),
+                timings_ms={},
+                routing_decision=((result_dict.get("metadata") or {}).get("doc_intel") or {}),
+                coverage_score=float(
+                    ((result_dict.get("metadata") or {}).get("coverage") or {}).get(
+                        "verifier_score", 1.0
+                    )
+                ),
+                fallback_invocations=list(
+                    ((result_dict.get("metadata") or {}).get("coverage") or {}).get(
+                        "fallback_invocations", []
+                    )
+                ),
+                human_review=False,
+                completed_at=_time.time(),
+            )
+            write_entry_if_redis(redis_client=_get_redis_if_available(), entry=_log_entry)
+        except Exception:
+            logger.debug("observability log skipped", exc_info=True)
 
     except SoftTimeLimitExceeded:
         duration_seconds = round(time.time() - start_time, 2)
