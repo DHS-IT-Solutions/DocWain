@@ -97,7 +97,7 @@ class ExtractionMerger:
         if structural.get("layout") or structural.get("sections"):
             models_used.append("layoutlm-v3")
         if semantic.get("entities") or semantic.get("context"):
-            models_used.append("qwen3:14b")
+            models_used.append("DHS/DocWain:latest")
         if vision.get("ocr_text") or vision.get("scanned_text"):
             models_used.append("glm-ocr")
         if v2 and (v2.get("entities") or v2.get("ocr_text")):

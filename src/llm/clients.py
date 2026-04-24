@@ -80,7 +80,7 @@ _local_client = None
 _local_client_lock = threading.Lock()
 
 def get_local_client():
-    """Return a local Ollama client for document processing (qwen3:14b).
+    """Return a local Ollama client for document processing (DocWain local model).
 
     This client always talks to the LOCAL Ollama instance (no cloud),
     using a lightweight model optimised for fast extraction, classification,
@@ -90,7 +90,7 @@ def get_local_client():
     if _local_client is None:
         with _local_client_lock:
             if _local_client is None:
-                local_model = os.getenv("OLLAMA_LOCAL_MODEL", "qwen3:14b")
+                local_model = os.getenv("OLLAMA_LOCAL_MODEL", "DHS/DocWain:latest")
                 _local_client = OllamaClient(model_name=local_model)
                 # Override to ensure local-only (no cloud auth headers)
                 try:
@@ -119,7 +119,7 @@ class OllamaClient:
     _OLLAMA_HTTP_TIMEOUT_S = 300.0
 
     def __init__(self, model_name: Optional[str] = None):
-        resolved = _resolve_model_alias(model_name) or _resolve_model_alias(os.getenv("OLLAMA_MODEL")) or "qwen3:14b"
+        resolved = _resolve_model_alias(model_name) or _resolve_model_alias(os.getenv("OLLAMA_MODEL")) or "DHS/DocWain:latest"
         self.model_name = resolved
         if not self.model_name:
             raise ValueError("OLLAMA_MODEL environment variable is not set")
@@ -180,7 +180,7 @@ class OllamaClient:
             generation_options.update(merged)
 
         # Explicitly set think=False to avoid thinking token overhead.
-        # qwen3:14b thinking tokens consume from num_predict budget.
+        # DocWain-14B thinking tokens consume from num_predict budget.
         extra_kwargs: Dict[str, Any] = {"think": thinking}
 
         last_response: Dict[str, Any] = {}

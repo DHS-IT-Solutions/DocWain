@@ -20,9 +20,9 @@ from .types import LLMBudget, LLMResponseSchema
 logger = get_logger(__name__)
 
 # ── tunables ──────────────────────────────────────────────────────────
-LLM_EXTRACT_TIMEOUT_S = 120.0  # qwen3:14b: ~60tok/s on T4, 4K tokens = ~67s + prompt overhead
-LLM_MAX_OUTPUT_TOKENS = 4096  # qwen3:14b supports 40K context, generous output budget
-LLM_MAX_CONTEXT_CHARS = 8192  # Expanded for qwen3:14b's larger context window
+LLM_EXTRACT_TIMEOUT_S = 120.0  # DocWain-14B: ~60tok/s on T4, 4K tokens = ~67s + prompt overhead
+LLM_MAX_OUTPUT_TOKENS = 4096  # DocWain-14B supports 40K context, generous output budget
+LLM_MAX_CONTEXT_CHARS = 8192  # Expanded for DocWain-14B's larger context window
 LLM_MAX_CONTEXT_CHARS_MULTI = 16384  # Multi-document gets more context
 LLM_MAX_CHUNKS = 10  # More evidence = better answers
 LLM_MAX_CHUNKS_MULTI = 20  # Multi-doc queries need broad evidence
@@ -164,7 +164,7 @@ def _effective_max_chunks(num_documents: int, intent: str = "", query: str = "")
     # Scale up for many documents: ensure at least 2 chunks per document
     if num_documents > 3:
         per_doc_min = num_documents * 2
-        base = max(base, min(per_doc_min, 30))  # cap at 30 (qwen3:14b has 40K ctx)
+        base = max(base, min(per_doc_min, 30))  # cap at 30 (DocWain-14B has 40K ctx)
     # Query complexity scaling: multi-part queries need more evidence
     if query and _is_multi_part_query(query):
         base = min(base + 4, 30)  # Extra 4 chunks for multi-part
@@ -182,7 +182,7 @@ def _effective_context_chars(num_documents: int, intent: str = "") -> int:
     # Scale up for many documents: +2048 chars per doc beyond 3
     if num_documents > 3:
         extra = (num_documents - 3) * 2048
-        base = min(base + extra, 28672)  # cap at 28K chars (qwen3:14b supports 40K)
+        base = min(base + extra, 28672)  # cap at 28K chars (DocWain-14B supports 40K)
     return base
 
 # ── LLM extraction cache ──────────────────────────────────────────

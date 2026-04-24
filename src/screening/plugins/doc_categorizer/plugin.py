@@ -18,7 +18,7 @@ class Plugin(ScreeningPlugin):
             supported_doc_types=["*"],
             requires=["extraction"],
             outputs=["doc_category", "category_confidence"],
-            model="qwen3:14b",
+            model="DHS/DocWain:latest",
             timeout=120,
         )
 

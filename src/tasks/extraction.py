@@ -126,7 +126,7 @@ def extract_document(self, document_id: str, subscription_id: str,
 
     Models:
     - Triton: LayoutLM/DocFormer (structural)
-    - Ollama qwen3:14b (semantic)
+    - Ollama DHS/DocWain:latest (semantic)
     - Ollama glm-ocr (vision)
 
     Results merged, stored to Azure Blob. Summary to MongoDB.

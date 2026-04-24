@@ -5,7 +5,7 @@ Response generation:
     Primary: Ollama Cloud qwen3.5:397b (high-quality reasoning)
     Fallback: Azure GPT-4o
 
-Document processing uses get_local_client() → local qwen3:14b (fast).
+Document processing uses get_local_client() → local DHS/DocWain:latest (fast).
 
 Public API:
     create_llm_gateway() -> LLMGateway

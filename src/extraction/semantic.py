@@ -1,4 +1,4 @@
-"""Semantic extraction pipeline — LLM-driven via Ollama qwen3:14b."""
+"""Semantic extraction pipeline — LLM-driven via Ollama (DocWain local model)."""
 
 import logging
 
@@ -6,12 +6,12 @@ logger = logging.getLogger(__name__)
 
 
 class SemanticExtractor:
-    """Extracts semantic meaning using LLM (qwen3:14b via Ollama).
+    """Extracts semantic meaning using LLM via Ollama.
 
     Handles: NER, relationship extraction, document context, key phrases.
     """
 
-    def __init__(self, ollama_host: str = None, model: str = "qwen3:14b"):
+    def __init__(self, ollama_host: str = None, model: str = "DHS/DocWain:latest"):
         self.ollama_host = ollama_host or "http://localhost:11434"
         self.model = model
 

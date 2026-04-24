@@ -23,7 +23,7 @@ model_router = APIRouter(prefix="/model", tags=["Model Management"])
 
 class ModelUpdateRequest(BaseModel):
     model_name: str = Field(default="DHS/DocWain", description="Ollama model name to update")
-    base_model: str = Field(default="qwen3:14b", description="Base model to build from")
+    base_model: str = Field(default="DHS/DocWain:latest", description="Base model to build from")
 
 
 class FinetuneCheckResponse(BaseModel):
