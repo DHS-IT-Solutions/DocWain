@@ -121,6 +121,10 @@ def _normalize_section_summaries(raw: Any) -> Dict[str, str]:
                 summaries[str(title)] = str(summary)
     return summaries
 
+# Bump when the understand prompt or output shape changes.
+_UNDERSTAND_PROMPT_VERSION = "v1"
+
+
 def understand_document(
     *,
     extracted: Any,
@@ -133,7 +137,27 @@ def understand_document(
     if not full_text and _get(extracted, "sections"):
         full_text = "\n".join([_get(s, "text", "") for s in _get(extracted, "sections", []) if _get(s, "text")])
 
-    llm_payload = _ollama_understand(full_text, doc_type, model_name=model_name, llm_client=llm_client, use_thinking=use_thinking)
+    # Content-hash cache keyed by (text, doc_type). Same text + same doc_type
+    # always yields the same understanding payload from the same prompt.
+    cache_seed = f"{doc_type}::{full_text}"
+    llm_payload = None
+    try:
+        from src.doc_understanding.llm_cache import get_cached, set_cached
+        cached = get_cached("understand", cache_seed, _UNDERSTAND_PROMPT_VERSION)
+        if cached and isinstance(cached, dict):
+            logger.info("Cache hit: understand doc_type=%s", doc_type)
+            llm_payload = cached
+    except Exception:
+        pass
+
+    if llm_payload is None:
+        llm_payload = _ollama_understand(full_text, doc_type, model_name=model_name, llm_client=llm_client, use_thinking=use_thinking)
+        if llm_payload:
+            try:
+                from src.doc_understanding.llm_cache import set_cached
+                set_cached("understand", cache_seed, _UNDERSTAND_PROMPT_VERSION, llm_payload)
+            except Exception:
+                pass
 
     if llm_payload:
         doc_summary = str(llm_payload.get("doc_summary") or "").strip()

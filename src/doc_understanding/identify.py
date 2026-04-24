@@ -184,6 +184,10 @@ _STRUCTURED_EXTENSIONS = {
     "parquet": "report",
 }
 
+# Bump when the classify prompt / taxonomy changes so cached results
+# from the old prompt are invalidated automatically.
+_IDENTIFY_PROMPT_VERSION = "v1"
+
 
 def identify_document(
     *,
@@ -217,7 +221,20 @@ def identify_document(
         logger.info("Heuristic classified structured file '%s' as %s (from extension)", filename, structured_type)
         doc_type, confidence = structured_type, 0.98
     else:
-        doc_type, confidence = classify_document_type(text_sample, tables_sample, filename, model_name=model_name, llm_client=llm_client)
+        # Content-hash cache: identical text always gives the same label.
+        from src.doc_understanding.llm_cache import get_cached, set_cached
+        cached = get_cached("identify", text_sample, _IDENTIFY_PROMPT_VERSION)
+        if cached and isinstance(cached, dict):
+            logger.info("Cache hit: identify '%s' -> %s", filename, cached.get("doc_type"))
+            doc_type, confidence = cached["doc_type"], float(cached.get("confidence", 0.9))
+        else:
+            doc_type, confidence = classify_document_type(
+                text_sample, tables_sample, filename, model_name=model_name, llm_client=llm_client,
+            )
+            set_cached(
+                "identify", text_sample, _IDENTIFY_PROMPT_VERSION,
+                {"doc_type": doc_type, "confidence": confidence},
+            )
 
     # Normalize to canonical domain labels for consistency across all classifiers
     try:

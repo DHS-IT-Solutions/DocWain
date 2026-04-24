@@ -1419,24 +1419,73 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
 
         emit_progress(doc_id, "extraction", 0.65, "Visual intelligence complete")
 
-        # Intelligence layer processing: entity extraction, Q&A generation
-        intelligence_result = _process_document_intelligence(
-            document_id=doc_id,
-            extracted_docs=masked_docs,
-            filename=doc_data.get("name", "document"),
-            subscription_id=subscription_id,
-            profile_id=profile_id,
-        )
-        emit_progress(doc_id, "extraction", 0.80, "Entity extraction complete")
+        # ------------------------------------------------------------------
+        # LLM-heavy steps — run the independent ones in parallel.
+        #
+        #   intelligence_result (entity/Q&A)  --- independent of anything else
+        #   identification (doc-type)         --- independent
+        #   content_map                       --- pure-Python, runs inline
+        #   understand_document               --- needs identification.document_type
+        #
+        # vLLM continuous batching absorbs concurrent requests, so firing
+        # intelligence + identify together saves ~15s/doc with zero change
+        # to what the model sees.
+        # ------------------------------------------------------------------
+        from concurrent.futures import ThreadPoolExecutor
+        from src.doc_understanding import identify_document, understand_document, build_content_map
 
-        # Document understanding (summary, entities, facts) — runs inline for pickle enrichment
         understanding_result = None
-        try:
-            from src.doc_understanding import identify_document, understand_document, build_content_map
-            for _fname, _content in (masked_docs or {}).items():
-                identification = identify_document(extracted=_content, filename=_fname)
-                content_map = build_content_map(_content)
-                understanding = understand_document(extracted=_content, doc_type=identification.document_type)
+        _primary_fname = None
+        _primary_content = None
+        for _fname, _content in (masked_docs or {}).items():
+            _primary_fname, _primary_content = _fname, _content
+            break
+
+        with ThreadPoolExecutor(max_workers=3) as _llm_pool:
+            fut_intel = _llm_pool.submit(
+                _process_document_intelligence,
+                document_id=doc_id,
+                extracted_docs=masked_docs,
+                filename=doc_data.get("name", "document"),
+                subscription_id=subscription_id,
+                profile_id=profile_id,
+            )
+            fut_ident = None
+            if _primary_content is not None:
+                fut_ident = _llm_pool.submit(
+                    identify_document,
+                    extracted=_primary_content,
+                    filename=_primary_fname or doc_data.get("name", "document"),
+                )
+
+            content_map = None
+            if _primary_content is not None:
+                try:
+                    content_map = build_content_map(_primary_content)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("build_content_map failed for %s: %s", doc_id, exc)
+
+            try:
+                intelligence_result = fut_intel.result()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Intelligence layer failed for %s: %s", doc_id, exc)
+                intelligence_result = None
+            emit_progress(doc_id, "extraction", 0.80, "Entity extraction complete")
+
+            identification = None
+            if fut_ident is not None:
+                try:
+                    identification = fut_ident.result()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("identify_document failed for %s: %s", doc_id, exc)
+
+        # understand_document depends on identification.document_type.
+        if identification is not None and _primary_content is not None:
+            try:
+                understanding = understand_document(
+                    extracted=_primary_content,
+                    doc_type=identification.document_type,
+                )
                 understanding_result = {
                     "document_type": identification.document_type,
                     "doc_type_confidence": identification.confidence,
@@ -1447,15 +1496,13 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
                     "intent_tags": understanding.get("intent_tags"),
                     "content_map": content_map,
                 }
-                # Store in MongoDB for fast lookups during retrieval
                 try:
                     update_extraction_metadata(doc_id, subscription_id, None, None)
                     _update_understanding_fields(doc_id, understanding_result)
                 except Exception as exc:
                     logger.warning("Failed to persist understanding for connector %s: %s", doc_id, exc)
-                break  # Process first document only
-        except Exception as exc:
-            logger.warning("Document understanding skipped for %s: %s", doc_id, exc)
+            except Exception as exc:
+                logger.warning("Document understanding skipped for %s: %s", doc_id, exc)
 
         emit_progress(doc_id, "extraction", 0.90, "Document understanding complete")
 
