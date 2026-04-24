@@ -289,17 +289,7 @@ def embed_document(self, document_id: str, subscription_id: str,
                         dedup_removed=dedup_removed,
                         avg_quality_grade=avg_grade)
 
-        # ── 11. If KG was not ready, dispatch backfill ───────────────────
-        if not kg_ready:
-            try:
-                from src.tasks.backfill import backfill_kg_refs
-                backfill_kg_refs.apply_async(
-                    args=[document_id, subscription_id, profile_id],
-                    countdown=30,
-                )
-                logger.info("Dispatched KG backfill for %s", document_id)
-            except Exception as exc:
-                logger.warning("Failed to dispatch KG backfill for %s: %s", document_id, exc)
+        # Plan 3: embedding is fully isolated from KG. No KG dispatch or status check from here. Spec §4.3.
 
         logger.info("Embedding pipeline completed for document %s: %d chunks, %d deduped, grade=%s",
                      document_id, len(chunk_dicts), dedup_removed, avg_grade)
