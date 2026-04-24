@@ -70,6 +70,57 @@ def set_extraction_roster(profile_id: str, doc_ids: List[str], subscription_id: 
         pass
 
 
+def append_to_extraction_roster(
+    profile_id: str,
+    doc_id: str,
+    subscription_id: Optional[str] = None,
+) -> None:
+    """Add *doc_id* to the profile's active extraction roster.
+
+    Used by the per-file upload flow so ``/api/extract/progress`` sees the
+    freshly uploaded docs as a batch even though each Celery task is
+    dispatched independently. If no roster exists yet, creates one with a
+    new ``started_at``. If a roster already exists for this profile,
+    appends (dedup) without resetting ``started_at`` — the session is a
+    series of uploads that are all part of the same user action.
+    """
+    if not profile_id or not doc_id:
+        return
+    client = _redis_client_safe()
+    if not client:
+        return
+    try:
+        key = _ROSTER_KEY_FMT.format(profile_id=profile_id)
+        existing = client.get(key)
+        now_ts = time.time()
+        if existing:
+            raw = existing.decode("utf-8", errors="ignore") if isinstance(existing, bytes) else existing
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                ids = [str(x) for x in (payload.get("doc_ids") or [])]
+                if str(doc_id) not in ids:
+                    ids.append(str(doc_id))
+                payload["doc_ids"] = ids
+                payload["total"] = len(ids)
+                # Refresh TTL so a long upload session keeps the roster alive.
+                client.setex(key, _ROSTER_TTL, json.dumps(payload))
+                return
+        # No existing roster — create one starting now.
+        payload = {
+            "profile_id": profile_id,
+            "subscription_id": subscription_id,
+            "doc_ids": [str(doc_id)],
+            "total": 1,
+            "started_at": now_ts,
+        }
+        client.setex(key, _ROSTER_TTL, json.dumps(payload))
+    except Exception:
+        pass
+
+
 def get_extraction_roster(profile_id: str) -> Optional[Dict[str, Any]]:
     if not profile_id:
         return None
@@ -440,264 +491,207 @@ def _is_extraction_in_flight(doc: Dict[str, Any]) -> bool:
 
 
 def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
-    """Get comprehensive extraction status for all documents in a profile.
+    """Progress for the extraction currently running on *profile_id*.
 
-    The returned ``documents`` list carries every document in the profile so
-    the UI can render the full table with per-doc progress bars. The
-    aggregate in ``common_data`` is strictly **doc-count based**:
+    Contract (what the UI reads from ``common_data``):
 
-        overall_progress = completed / (queued + in_flight + completed + failed) * 100
+        total_documents   — how many docs are in the CURRENT run
+        uploaded          — how many of them have finished extraction
+        overall_progress  — (uploaded / total) * 100, gradually 0 → 100
+        elapsed_time      — seconds since the current run started ("0s" when idle)
+        state             — "running" | "starting" | "completed" | "idle"
 
-    100% therefore means *every* uploaded doc has completed extraction
-    successfully and is ready for screening — never a sub-stage percentage.
-    Failed docs stay in the denominator so a partially-failed batch cannot
-    climb to 100% without retry.
-
-    Source of truth for the batch total is the Redis roster published by
-    ``extract_documents`` at batch start (``set_extraction_roster``). That
-    way a 10-doc batch reports 10 total from the very first poll, not
-    1 (currently extracting) + whatever the sequential loop has reached.
+    The "current run" is defined by the Redis roster published by
+    ``extract_documents`` at batch start. If no roster is active,
+    UPLOADED docs or docs currently being extracted (via the Celery per-
+    upload flow) form the implicit run. When neither is true the
+    profile is IDLE and every count returns 0 — the endpoint never mixes
+    in historical data.
     """
     from src.utils.logging_utils import get_live_logs
 
     collection = get_documents_collection()
+    empty = {
+        "Overall_live_logs": [],
+        "state": "idle",
+        "overall_progress": 0,
+        "total_documents": 0,
+        "uploaded": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "failed": 0,
+        "elapsed_time": "0s",
+    }
     if collection is None:
-        return {"documents": [], "common_data": {
-            "Overall_live_logs": [], "overall_progress": 0,
-            "total_documents": 0, "queued": 0, "in_flight": 0, "completed": 0, "failed": 0,
-            "elapsed_time": "0s",
-        }}
+        return {"documents": [], "common_data": empty}
 
     docs = list(collection.find(
         {"profile_id": profile_id},
         {
             "document_id": 1, "status": 1, "source_file": 1,
-            "extraction": 1, "screening": 1, "embedding": 1,
-            "training_started_at": 1, "trained_at": 1,
+            "extraction": 1, "subscription_id": 1,
             "created_at": 1, "updated_at": 1,
         },
-    ).sort("updated_at", -1))
+    ))
+    doc_by_id: Dict[str, Dict[str, Any]] = {
+        str(d.get("document_id") or d.get("_id")): d for d in docs
+    }
 
     now = time.time()
     roster = get_extraction_roster(profile_id)
-
-    # Build quick lookup from doc_id to its record for roster-based classification.
-    doc_by_id: Dict[str, Dict[str, Any]] = {}
-    for d in docs:
-        key = str(d.get("document_id") or d.get("_id"))
-        doc_by_id[key] = d
-
-    result_docs = []
-    batch_queued = 0
-    batch_in_flight = 0
-    batch_completed = 0
-    batch_failed = 0
-    batch_earliest_start: Optional[float] = None
-    batch_latest_end: Optional[float] = None
-
-    # --- ROSTER PATH (active batch) ----------------------------------------
-    # If a roster is present, classify each roster doc_id against its Mongo
-    # record relative to the roster.started_at cutoff. A doc is only
-    # "completed for this run" if its extraction.completed_at >= cutoff.
-    roster_ids: Optional[List[str]] = None
+    roster_ids: List[str] = []
     roster_started_at: Optional[float] = None
-    if roster and isinstance(roster, dict):
-        ids = roster.get("doc_ids") or []
-        if ids:
-            roster_ids = [str(x) for x in ids]
-            ts = roster.get("started_at")
-            roster_started_at = float(ts) if isinstance(ts, (int, float)) else None
+    if isinstance(roster, dict):
+        roster_ids = [str(x) for x in (roster.get("doc_ids") or [])]
+        ts = roster.get("started_at")
+        if isinstance(ts, (int, float)):
+            roster_started_at = float(ts)
 
-    if roster_ids:
-        for doc_id in roster_ids:
-            d = doc_by_id.get(doc_id) or {}
-            extraction = d.get("extraction") or {}
-            start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
-            end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
-            ext_status = extraction.get("status")
-            status = d.get("status", "UNKNOWN")
-            cutoff = roster_started_at or 0
-
-            in_progress_now = ext_status == "IN_PROGRESS" and (start_at or 0) >= cutoff and not (end_at and end_at >= cutoff)
-            completed_now = bool(end_at and end_at >= cutoff and ext_status == "COMPLETED")
-            failed_now = status in _EXTRACT_FAILED_STATUSES and (end_at or 0) >= cutoff
-
-            if completed_now:
-                batch_completed += 1
-            elif failed_now:
-                batch_failed += 1
-            elif in_progress_now:
-                batch_in_flight += 1
-            else:
-                # Roster member that hasn't been touched yet by this run.
-                batch_queued += 1
-
-            if start_at is not None and start_at >= cutoff:
-                if batch_earliest_start is None or start_at < batch_earliest_start:
-                    batch_earliest_start = start_at
-            if end_at is not None and end_at >= cutoff:
-                if batch_latest_end is None or end_at > batch_latest_end:
-                    batch_latest_end = end_at
-
-    # Always build the per-doc list (covers every doc in the profile, not
-    # just the batch — UI renders this as the file table).
-    for doc in docs:
-        doc_id = str(doc.get("document_id") or doc.get("_id"))
-        status = doc.get("status", "UNKNOWN")
-        extraction = doc.get("extraction") or {}
-        start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
-        end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
-
-        ext_in_progress = (
-            extraction.get("status") == "IN_PROGRESS"
-            and start_at is not None
-            and not end_at
+    # --- Resolve the "run" — which docs do we count? ---------------------
+    # 1. Active roster → its doc_ids are the run.
+    # 2. No roster but UPLOADED / nested-IN_PROGRESS docs exist → those form
+    #    the implicit run (per-doc Celery upload flow).
+    # 3. Otherwise → idle, run is empty.
+    def _is_active_doc(d: Dict[str, Any]) -> bool:
+        ext = d.get("extraction") or {}
+        st = d.get("status", "")
+        return (
+            st == "UPLOADED"
+            or st == "EXTRACTION_IN_PROGRESS"
+            or (ext.get("status") == "IN_PROGRESS" and not ext.get("completed_at"))
         )
 
-        progress = _compute_document_progress(status, get_training_progress(doc_id))
-        per_doc_progress = progress.get("progress", 0)
-        if ext_in_progress and progress.get("source") == "derived" and per_doc_progress <= 0:
-            per_doc_progress = _STATUS_TO_PROGRESS.get("EXTRACTION_IN_PROGRESS", 10)
-            progress = {
-                "progress": per_doc_progress,
-                "stage": "extraction_in_progress",
-                "detail": "Extraction In Progress",
-                "source": "derived",
-            }
+    if roster_ids:
+        run_docs = [doc_by_id.get(did) or {"_id": did, "document_id": did} for did in roster_ids]
+        run_started_at = roster_started_at
+    else:
+        run_docs = [d for d in docs if _is_active_doc(d)]
+        if run_docs:
+            starts = [
+                (d.get("extraction") or {}).get("started_at")
+                for d in run_docs
+                if isinstance((d.get("extraction") or {}).get("started_at"), (int, float))
+            ]
+            run_started_at = min(starts) if starts else None
+        else:
+            run_started_at = None
 
-        result_docs.append({
-            "document_id": doc_id,
-            "document_name": doc.get("source_file", ""),
-            "progress": progress,
-        })
-
-    # --- FALLBACK PATH (no active roster) ----------------------------------
-    # Two sub-cases that must be distinguished to avoid reporting stale
-    # "100%" numbers while a fresh batch is spinning up:
-    #
-    #   (a) A batch-starting marker exists for the owning subscription.
-    #       Extraction has just been triggered but the per-profile roster
-    #       hasn't been published yet (race window). Report a clean
-    #       "starting" view: every doc is in_flight or queued, progress 0,
-    #       elapsed anchored on the marker's started_at.
-    #
-    #   (b) No marker either — truly idle or long-finished. Report raw
-    #       per-doc state, but cap elapsed to the last recorded
-    #       extraction end (or 0 if nothing's ever run) so the timer
-    #       doesn't pretend a run is in progress.
+    # --- Check the batch-starting marker for the very first polls, before
+    #     the roster / Celery dispatch has hit Mongo yet.
     marker: Optional[Dict[str, Any]] = None
-    # Track started_at of currently-active (in-flight / queued) docs
-    # separately so idle-path elapsed doesn't pull from 27-hour-old history.
-    batch_earliest_active_start: Optional[float] = None
-    if not roster_ids:
-        # Try to find the owning subscription from any doc in the profile.
+    if not roster_ids and not run_docs:
         subscription_id: Optional[str] = None
         for d in docs:
             sid = d.get("subscription_id")
             if sid:
                 subscription_id = str(sid)
                 break
-        marker = get_batch_starting_marker(subscription_id) if subscription_id else None
+        if subscription_id:
+            marker = get_batch_starting_marker(subscription_id)
+        if marker and isinstance(marker.get("started_at"), (int, float)):
+            run_started_at = float(marker["started_at"])
 
-        for doc in docs:
-            status = doc.get("status", "UNKNOWN")
-            extraction = doc.get("extraction") or {}
-            start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
-            end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
+    # --- Classify each run doc ----------------------------------------------
+    uploaded_count = 0  # extraction.COMPLETED (== "uploaded" in UI-speak)
+    queued_count = 0    # UPLOADED, waiting to be picked up
+    in_flight_count = 0 # currently extracting
+    failed_count = 0
+    result_docs: List[Dict[str, Any]] = []
 
-            ext_in_progress = (
-                extraction.get("status") == "IN_PROGRESS"
-                and start_at is not None
-                and not end_at
-            )
+    for d in run_docs:
+        did = str(d.get("document_id") or d.get("_id"))
+        status = d.get("status", "UNKNOWN")
+        extraction = d.get("extraction") or {}
+        ext_status = extraction.get("status")
+        start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
+        end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
 
-            classified_active = False
-            if marker:
-                # Batch is starting. Classify conservatively: anything not
-                # yet completed-after-marker is queued or in-flight.
-                marker_start = float(marker.get("started_at", 0) or 0)
-                if end_at and end_at >= marker_start and extraction.get("status") == "COMPLETED":
-                    batch_completed += 1
-                elif status in _EXTRACT_FAILED_STATUSES and (end_at or 0) >= marker_start:
-                    batch_failed += 1
-                elif ext_in_progress:
-                    batch_in_flight += 1
-                    classified_active = True
-                else:
-                    # Not yet touched by this run → queued.
-                    batch_queued += 1
-                    classified_active = True
-            else:
-                # Truly idle view — raw per-doc snapshot with no "run" semantics.
-                # UPLOADED is the 'waiting for extraction' queue; only count
-                # docs in EXTRACTION_IN_PROGRESS / nested-IN_PROGRESS as in-flight
-                # so the progress bar moves step-wise as each doc actually
-                # starts extracting.
-                if status == "UPLOADED" and not ext_in_progress:
-                    batch_queued += 1
-                    classified_active = True
-                elif ext_in_progress or status == "EXTRACTION_IN_PROGRESS":
-                    batch_in_flight += 1
-                    classified_active = True
-                elif status in _EXTRACT_FAILED_STATUSES:
-                    batch_failed += 1
-                else:
-                    batch_completed += 1
+        # Whether this doc counts as "done this run" depends on the cutoff.
+        cutoff = run_started_at or 0
+        is_completed = bool(end_at and end_at >= cutoff and ext_status == "COMPLETED")
+        # Past-stage statuses (SCREENING_*, TRAINING_*, UNDER_REVIEW with
+        # COMPLETED extraction) are 'uploaded' for our purposes — extraction
+        # is behind them.
+        if not is_completed and ext_status == "COMPLETED" and end_at:
+            is_completed = True
+        is_failed = status in _EXTRACT_FAILED_STATUSES
+        is_in_flight = (ext_status == "IN_PROGRESS" and not (end_at and end_at >= cutoff))
+        is_queued = status == "UPLOADED" and not is_in_flight
 
-            if start_at is not None:
-                if batch_earliest_start is None or start_at < batch_earliest_start:
-                    batch_earliest_start = start_at
-                if classified_active and (
-                    batch_earliest_active_start is None or start_at < batch_earliest_active_start
-                ):
-                    batch_earliest_active_start = start_at
-            if end_at is not None:
-                if batch_latest_end is None or end_at > batch_latest_end:
-                    batch_latest_end = end_at
+        if is_completed:
+            uploaded_count += 1
+            per_doc_pct = 100
+            stage = "extracted"
+        elif is_failed:
+            failed_count += 1
+            per_doc_pct = 0
+            stage = "failed"
+        elif is_in_flight:
+            in_flight_count += 1
+            per_doc_pct = 50
+            stage = "extracting"
+        elif is_queued:
+            queued_count += 1
+            per_doc_pct = 0
+            stage = "queued"
+        else:
+            # Unknown (roster member missing from Mongo yet). Treat as queued.
+            queued_count += 1
+            per_doc_pct = 0
+            stage = "queued"
 
-    live_logs = get_live_logs(profile_id)
+        live = get_training_progress(did)
+        if live and isinstance(live.get("progress"), (int, float)):
+            # Live emit from the extraction pipeline gives finer per-doc
+            # progress during the LLM sub-stages. Scale 0-1 to 0-100.
+            v = live.get("progress") or 0
+            per_doc_pct = round(min(max(v * 100, 0), 100), 1)
+            stage = live.get("stage") or stage
 
-    total_docs = batch_queued + batch_in_flight + batch_completed + batch_failed
-    if total_docs == 0:
-        total_docs = len(result_docs)
+        result_docs.append({
+            "document_id": did,
+            "document_name": d.get("source_file", ""),
+            "progress": {
+                "progress": per_doc_pct,
+                "stage": stage,
+                "detail": (live or {}).get("detail") or stage.replace("_", " ").title(),
+                "source": "live" if live else "derived",
+            },
+        })
 
-    # Doc-count-based progress. Always clamp to total_docs > 0 before divide.
+    total_docs = uploaded_count + queued_count + in_flight_count + failed_count
+
+    # --- Aggregate progress + state -----------------------------------------
     if total_docs > 0:
-        overall_progress = round((batch_completed / total_docs) * 100, 1)
+        overall_progress = round((uploaded_count / total_docs) * 100, 1)
     else:
         overall_progress = 0.0
 
-    # ------------------------------------------------------------------
-    # Resolve a single, unambiguous state + elapsed.
-    # Semantics (what the UI can render without interpretation):
-    #   running    — at least one doc is actively being extracted
-    #   starting   — a batch was just triggered (lock held, roster not
-    #                yet published) — timer ticks from lock acquisition
-    #   idle       — no extraction active. elapsed_time is "0s" so the
-    #                UI doesn't flash a historical timer.
-    # Progress ticks gradually: completed / total * 100. Never 100% at
-    # kickoff — at t=0 every roster doc is queued and the ratio is 0%.
-    # ------------------------------------------------------------------
-    batch_has_work = bool(batch_queued or batch_in_flight)
-    if roster_ids:
-        state = "running" if batch_has_work else "completed"
-        elapsed_start: Optional[float] = roster_started_at
-    elif marker:
-        state = "starting"
-        elapsed_start = float(marker.get("started_at", 0) or 0) or None
-    elif batch_has_work:
-        # No batch artefact but docs are actively extracting (upload-per-
-        # doc flow via Celery, or a stale zombie). Show running with
-        # elapsed anchored to the earliest active doc's started_at.
+    if total_docs == 0:
+        state = "idle" if not marker else "starting"
+        elapsed_start: Optional[float] = float(marker["started_at"]) if marker else None
+    elif queued_count or in_flight_count:
         state = "running"
-        elapsed_start = batch_earliest_active_start
+        elapsed_start = run_started_at
+    elif uploaded_count or failed_count:
+        state = "completed"
+        elapsed_start = run_started_at
     else:
         state = "idle"
         elapsed_start = None
 
     elapsed_seconds: Optional[float] = None
     if elapsed_start:
-        elapsed_seconds = round(now - elapsed_start, 1)
+        elapsed_seconds = max(0.0, round(now - elapsed_start, 1))
+
+    # --- Auto-expire a finished roster so it doesn't pin 100% forever ------
+    if roster_ids and queued_count == 0 and in_flight_count == 0:
+        try:
+            clear_extraction_roster(profile_id)
+        except Exception:
+            pass
+
+    live_logs = get_live_logs(profile_id)
 
     return {
         "documents": result_docs,
@@ -706,10 +700,12 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
             "state": state,
             "overall_progress": overall_progress,
             "total_documents": total_docs,
-            "queued": batch_queued,
-            "in_flight": batch_in_flight,
-            "completed": batch_completed,
-            "failed": batch_failed,
+            # 'uploaded' is the field the UI reads as "Uploaded" count.
+            "uploaded": uploaded_count,
+            "queued": queued_count,
+            "in_flight": in_flight_count,
+            "completed": uploaded_count,  # alias retained for other callers
+            "failed": failed_count,
             "elapsed_time": _format_elapsed(elapsed_seconds),
         },
     }
