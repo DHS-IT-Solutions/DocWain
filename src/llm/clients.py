@@ -782,7 +782,11 @@ class OpenAICompatibleClient:
         self.api_key = api_key or os.getenv("LOCAL_LLM_API_KEY", "")
         self.temperature = float(os.getenv("LOCAL_LLM_TEMPERATURE", str(getattr(Config.LLM, "TEMPERATURE", 0.0))))
         self.max_tokens = int(os.getenv("LOCAL_LLM_MAX_TOKENS", str(getattr(Config.LLM, "MAX_TOKENS", 2048))))
-        self.timeout = float(os.getenv("LOCAL_LLM_TIMEOUT", "30"))
+        # Large default: extraction/reasoning on a 14B vLLM instance can take
+        # minutes per request under load. Wall-clock timeouts here cause the
+        # gateway to spuriously mark vLLM as "failed" and fall back to Ollama.
+        # Efficiency is handled via concurrency / caching, not by cutting replies.
+        self.timeout = float(os.getenv("LOCAL_LLM_TIMEOUT", "600"))
         self.backend = "vllm"
         logger.info("Initialized OpenAICompatibleClient at %s with model %s", self.endpoint, self.model_name)
 

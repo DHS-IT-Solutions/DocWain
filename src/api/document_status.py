@@ -292,11 +292,35 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
         doc_id = str(doc.get("document_id") or doc.get("_id"))
         status = doc.get("status", "UNKNOWN")
 
+        extraction = doc.get("extraction") or {}
+        embedding = doc.get("embedding") or {}
+
+        # Re-extraction of an UNDER_REVIEW / EXTRACTION_FAILED doc leaves the
+        # top-level `status` unchanged but sets `extraction.status=IN_PROGRESS`.
+        # Classifying only by top-level status would bucket those as COMPLETED
+        # and falsely inflate the aggregate to 100%. Treat the nested signal
+        # as authoritative when it says work is actively running.
+        ext_in_progress = (
+            extraction.get("status") == "IN_PROGRESS"
+            and extraction.get("started_at") is not None
+            and not extraction.get("completed_at")
+        )
+
         progress = _compute_document_progress(status, get_training_progress(doc_id))
         per_doc_progress = progress.get("progress", 0)
+        if ext_in_progress and progress.get("source") == "derived" and per_doc_progress <= 0:
+            # Nested says running but top-level derived progress is 0
+            # (e.g. UNDER_REVIEW re-extract). Show the baseline IN_PROGRESS value.
+            per_doc_progress = _STATUS_TO_PROGRESS.get("EXTRACTION_IN_PROGRESS", 10)
+            progress = {
+                "progress": per_doc_progress,
+                "stage": "extraction_in_progress",
+                "detail": "Extraction In Progress",
+                "source": "derived",
+            }
 
         # Classify doc and accumulate only in-flight progress into the aggregate.
-        if status in _EXTRACT_IN_FLIGHT_STATUSES:
+        if ext_in_progress or status in _EXTRACT_IN_FLIGHT_STATUSES:
             in_flight_count += 1
             progress_sum += per_doc_progress
         elif status in _EXTRACT_COMPLETED_STATUSES:
@@ -307,8 +331,6 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
         # in the per-doc list but excluded from aggregates.
 
         # Track earliest start and latest end for elapsed time
-        extraction = doc.get("extraction") or {}
-        embedding = doc.get("embedding") or {}
         start_at = extraction.get("started_at")
         if start_at and isinstance(start_at, (int, float)):
             if earliest_start is None or start_at < earliest_start:
