@@ -1,0 +1,107 @@
+[
+  {
+    "id": "factual-1",
+    "q": "What vendors appear in the invoices?",
+    "status": 200,
+    "elapsed_s": 25.95,
+    "len": 245,
+    "grounded": true,
+    "n_sources": 5,
+    "response_head": "**Vendors appearing in the invoices:** \n- **Coffee Bliss Suppliers** \n- **Morning Brew Coffee** \n- **T-Shirt Dreams** \n- **Dell Workspace Solutions Ltd** \n\nThese entities are explicitly identified as vendors or equivalent roles in the documents."
+  },
+  {
+    "id": "factual-2",
+    "q": "What is the total value of all invoices?",
+    "status": 200,
+    "elapsed_s": 34.66,
+    "len": 323,
+    "grounded": false,
+    "n_sources": 10,
+    "response_head": "**Total value of all invoices:** **$152,465.00**\n\nBreakdown:\n- **$11,097.50** from\n- **$7,072.50** from\n- **$925.00** from\n- **$134,370.00** from\n\nThese values are derived directly from the EVIDENCE section. Some documents contain partial data (e.g., line items without totals), so the full scope may require deeper review."
+  },
+  {
+    "id": "factual-3",
+    "q": "Who issued PO5?",
+    "status": 200,
+    "elapsed_s": 17.08,
+    "len": 248,
+    "grounded": false,
+    "n_sources": 3,
+    "response_head": "**PO5 is not specified in the documents.** \n\nThe documents reference purchase orders such as **PO520556**, **PO520556_QTE-2026-01521**, and **PO5205561**, but no document explicitly mentions **PO5**. All available data pertains to other PO numbers."
+  },
+  {
+    "id": "insight-1",
+    "q": "Summarise the key themes across all documents in this profile.",
+    "status": 200,
+    "elapsed_s": 43.16,
+    "len": 2057,
+    "grounded": false,
+    "n_sources": 4,
+    "response_head": "## Document Collection Overview\n\nThis collection contains **financial documents** covering invoice, purchase order, and quotation. Key entities: **Dell Workspace Solutions Ltd**, **Kaiser LLC**, **WHOLESALE GIANTS**, **UrbEdge Facilities Management Ltd**, **Sophie turner**.\n\n### QUOTE_WSG100025_watermark_split tables.pdf (invoice)\n- **Amount (\u00a3):** 9,120 | **Description:** Knoll\n- **Amount (\u00a3):** "
+  },
+  {
+    "id": "insight-2",
+    "q": "List the top three vendors by frequency of appearance.",
+    "status": 200,
+    "elapsed_s": 24.88,
+    "len": 543,
+    "grounded": false,
+    "n_sources": 5,
+    "response_head": "N items found: 3\n\n**Vendors:** \n- **Coffee Bliss Suppliers:** appears in PO 17_Hospo_Invoice_SplitPart 1.pdf, PO 18_Hospo_Invoice_SplitPart 2.pdf, PO 17_Hospo_Invoice_IncreasedQtyCost.pdf, PO 18_Hospo_Invoice_IncreasedQtyCost.pdf \n- **Dell Workspace Solutions Ltd:** appears in QUOTE_WSG 100024_watermark_split tables.docx, QUOTE_WSG 100025_watermark_split tables.pdf \n- **Kaiser LLC:** appears in PO"
+  },
+  {
+    "id": "insight-3",
+    "q": "Are there any anomalies or inconsistencies across the invoices?",
+    "status": 200,
+    "elapsed_s": 35.81,
+    "len": 674,
+    "grounded": true,
+    "n_sources": 5,
+    "response_head": "No anomalies or inconsistencies are detected across the invoices based on the provided documents. All values, dates, and entities align with standard financial terminology and formatting. \n\n### Finding\n- All documents follow consistent financial reporting structures.\n- Tax calculations, currency units, and contractual terms are applied uniformly.\n\n### Evidence\n- **VAT is excluded.** (from QUOTE_WS"
+  },
+  {
+    "id": "insight-4",
+    "q": "What percentage of the invoices are Apparel vs Furniture vs Hospo?",
+    "status": 200,
+    "elapsed_s": 41.03,
+    "len": 325,
+    "grounded": false,
+    "n_sources": 4,
+    "response_head": "The documents do not specify Apparel, Furniture, or Hospo categories for invoices. These dimensions are not captured in the data. \n\n| Dimension | Value | Source |\n|-----------|-------|--------|\n| Apparel | not specified | all documents |\n| Furniture | not specified | all documents |\n| Hospo | not specified | all documents |"
+  },
+  {
+    "id": "cross-1",
+    "q": "Compare the Apparel invoices against the Furniture invoices \u2014 what differs?",
+    "status": "error",
+    "elapsed_s": 0.0,
+    "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /api/ask (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8000): Failed to establish a new connectio"
+  },
+  {
+    "id": "cross-2",
+    "q": "Which documents reference the same purchase order number?",
+    "status": "error",
+    "elapsed_s": 0.0,
+    "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /api/ask (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8000): Failed to establish a new connectio"
+  },
+  {
+    "id": "temporal-1",
+    "q": "Order the invoices chronologically and identify any gaps.",
+    "status": "error",
+    "elapsed_s": 0.0,
+    "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /api/ask (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8000): Failed to establish a new connectio"
+  },
+  {
+    "id": "analysis-1",
+    "q": "If a user asks to review supplier risk, what would you highlight from these documents?",
+    "status": "error",
+    "elapsed_s": 0.0,
+    "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /api/ask (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8000): Failed to establish a new connectio"
+  },
+  {
+    "id": "analysis-2",
+    "q": "Generate an executive summary of this profile suitable for a weekly briefing.",
+    "status": "error",
+    "elapsed_s": 0.0,
+    "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /api/ask (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8000): Failed to establish a new connectio"
+  }
+]

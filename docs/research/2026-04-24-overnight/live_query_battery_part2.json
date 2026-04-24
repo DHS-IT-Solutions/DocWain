@@ -1,0 +1,52 @@
+[
+  {
+    "id": "cross-1",
+    "q": "Compare the Apparel invoices against the Furniture invoices \u2014 what differs?",
+    "status": 200,
+    "elapsed_s": 29.81,
+    "len": 765,
+    "grounded": false,
+    "n_sources": 1,
+    "response_head": "| Criteria | Apparel Invoices | Furniture Invoices |\n|-------------------|-------------------------------------------|-------------------------------------------|\n| **Organization** | **T-Shirt Dreams** | Horizon HQ |\n| **Amount** | **$870.00** | **\u00a3129,200** |\n| **Tax Rate** | 10% | **20%** |\n| **Key Entity** | Nancy Doe (Buyer) | Sophie turner (recipient) |\n| **Domain** | Apparel | **Facility Se"
+  },
+  {
+    "id": "cross-2",
+    "q": "Which documents reference the same purchase order number?",
+    "status": 200,
+    "elapsed_s": 26.13,
+    "len": 358,
+    "grounded": false,
+    "n_sources": 5,
+    "response_head": "| Document | Purchase Order Number |\n|----------|-----------------------|\n| **PO520556_QTE-2026-01521_HRInvoice2.docx** | **PO 5206556** |\n| **PO520556_QTE-2026-01521_watermark.docx** | **PO 5206556** |\n| **Office Clean_PO520512_QTE-2026-01844_watermark.docx** | **PO 5206512** |\n| **PO5205561_watermark_less Items_no vat_duplicate .docx** | **PO 5206512** |"
+  },
+  {
+    "id": "temporal-1",
+    "q": "Order the invoices chronologically and identify any gaps.",
+    "status": 200,
+    "elapsed_s": 36.6,
+    "len": 568,
+    "grounded": false,
+    "n_sources": 3,
+    "response_head": "| Document | Date | Amount (\u00a3) |\n|----------|------|------------|\n| **PO 8_Apparel_Invoice_Split 2.pdf** | **02/05/2022** | **\u00a34,680.00** |\n| **PO 17_Hospo_Invoice_SplitPart 1.pdf** | **November 15, 2023** | **\u00a33,695.00** |\n| **Office Clean Invoice 1.docx** | **10/20/2025** | **\u00a3155,040.00** |\n| **Office Clean Invoice 1.pdf** | **0/20/2025** | **\u00a3129,200.00** |\n| **Office Clean Invoice 1.docx** | "
+  },
+  {
+    "id": "analysis-1",
+    "q": "If a user asks to review supplier risk, what would you highlight from these documents?",
+    "status": 200,
+    "elapsed_s": 36.71,
+    "len": 958,
+    "grounded": false,
+    "n_sources": 6,
+    "response_head": "## Supplier Risk Review\n\n**Executive summary:** To assess supplier risk, focus on contractual obligations, financial exposure, and compliance requirements derived from the documents.\n\n### Key Risk Indicators\n**Contractual Obligations:** The amount of the Purchase Order is the agreed fixed price and shall not be exceeded without advanced written consent.\n**Financial Exposure:** VAT is excluded from"
+  },
+  {
+    "id": "analysis-2",
+    "q": "Generate an executive summary of this profile suitable for a weekly briefing.",
+    "status": 200,
+    "elapsed_s": 23.93,
+    "len": 891,
+    "grounded": false,
+    "n_sources": 7,
+    "response_head": "## Executive Summary\n\nThis profile covers **12 documents** spanning **2022\u20132025**, with a focus on financial and HR domains. Key entities: **UrbEdge Facilities Management Ltd**, **Horizon Retail Group Ltd**, **PeopleFirst HR Solutions Ltd**.\n\n### Revenue Overview\n- **Total Revenue:** \u00a31,086,970.37\n- **Top Contributors:** \n - **UrbEdge Facilities Management Ltd:** \u00a3155,040.00\n - **Horizon Retail Gr"
+  }
+]
