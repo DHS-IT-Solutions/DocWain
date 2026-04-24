@@ -50,3 +50,10 @@ def test_dispatch_native_raises_for_scanned_pdf():
     d.close()
     with pytest.raises(NotNativePathError):
         dispatch_native(buf.getvalue(), filename="scan.pdf", doc_id="d4")
+
+
+def test_dispatch_native_routes_png_to_image_adapter_which_raises():
+    import pytest
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+    with pytest.raises(NotNativePathError):
+        dispatch_native(png, filename="pic.png", doc_id="di1")

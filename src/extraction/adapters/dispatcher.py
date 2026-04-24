@@ -13,6 +13,7 @@ import os
 from src.extraction.adapters.csv_native import extract_csv_native
 from src.extraction.adapters.docx_native import extract_docx_native
 from src.extraction.adapters.errors import NotNativePathError
+from src.extraction.adapters.image_native import extract_image_native
 from src.extraction.adapters.pdf_native import extract_pdf_native
 from src.extraction.adapters.pptx_native import extract_pptx_native
 from src.extraction.adapters.xlsx_native import extract_xlsx_native
@@ -25,6 +26,11 @@ _ADAPTERS = {
     ".xls": extract_xlsx_native,
     ".pptx": extract_pptx_native,
     ".csv": extract_csv_native,
+    ".png": extract_image_native,
+    ".jpg": extract_image_native,
+    ".jpeg": extract_image_native,
+    ".tif": extract_image_native,
+    ".tiff": extract_image_native,
 }
 
 
