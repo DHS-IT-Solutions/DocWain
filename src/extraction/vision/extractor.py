@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 
 EXTRACTOR_SYSTEM_PROMPT = (
     "You are DocWain's vision extractor. You receive a single document page as "
-    "an image plus routing hints (document type, layout complexity, whether "
+    "an image plus extraction hints (document type, layout complexity, whether "
     "handwriting is present).\n\n"
     "Your task: emit a JSON object describing every visible content region on "
     "the page, preserving reading order, bboxes (normalized 0..1 coordinates), "
@@ -38,7 +38,7 @@ EXTRACTOR_SYSTEM_PROMPT = (
     "Rules:\n"
     "- Cover every visible text or content region; missing regions are failures.\n"
     "- Do not hallucinate — if a region is unreadable, emit it with "
-    'confidence < 0.5 so the coverage verifier can flag it.\n'
+    'confidence < 0.5 so the verifier stage can flag it.\n'
     "- Preserve exact text characters; do not correct spelling, expand "
     "abbreviations, or normalize whitespace beyond collapsing internal line "
     "breaks within a single text block."
