@@ -60,10 +60,12 @@ except Exception as _datahandler_exc:  # noqa: BLE001
     update_pii_stats = _datahandler_unavailable
 from src.api.layout_graph_store import save_layout_graph, save_layout_graph_local
 from src.api.document_status import (
+    clear_batch_starting_marker,
     clear_extraction_roster,
     emit_progress,
     get_documents_collection,
     init_document_record,
+    mark_batch_starting,
     set_error,
     set_extraction_roster,
     update_document_fields,
@@ -1741,6 +1743,16 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
             "documents": [],
         }
 
+    # Publish the "batch starting" marker immediately so /api/extract/progress
+    # returns a consistent "starting" view during the few hundred ms between
+    # here and the per-profile roster publish. Without this, the endpoint
+    # would briefly fall through to the historical view and flash the
+    # previous batch's 100%/elapsed to the user.
+    try:
+        mark_batch_starting(effective_sub)
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to publish batch starting marker for %s", effective_sub, exc_info=True)
+
     try:
         doc_coll = extract_document_info()
         if not doc_coll:
@@ -1933,6 +1945,10 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
                 clear_extraction_roster(_prof_id)
             except Exception:  # noqa: BLE001
                 logger.debug("Failed to clear extraction roster for profile %s", _prof_id, exc_info=True)
+        try:
+            clear_batch_starting_marker(effective_sub)
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to clear batch starting marker for %s", effective_sub, exc_info=True)
 
         return {
             "status": "completed",
@@ -1948,6 +1964,10 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
         return {"status": "error", "message": str(exc), "documents": []}
     finally:
         _release_batch_lock(batch_lock_key)
+        try:
+            clear_batch_starting_marker(effective_sub)
+        except Exception:  # noqa: BLE001
+            pass
 
 def extract_single_document(doc_id: str) -> Dict[str, Any]:
     doc_coll = extract_document_info()

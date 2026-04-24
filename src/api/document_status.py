@@ -28,6 +28,13 @@ _PROGRESS_CHANNEL = "dw:training:events"
 # has been touched by the sequential loop.
 _ROSTER_TTL = 2 * 60 * 60  # 2 hours
 _ROSTER_KEY_FMT = "dw:extraction:roster:{profile_id}"
+# Subscription-level "batch starting" marker published the instant a batch
+# lock is acquired, *before* the eligible-doc query. Plugs the race where
+# the progress endpoint would otherwise fall through to the historical
+# view and report stale "100%" for the second or two between the user
+# clicking Extract and the per-profile roster being published.
+_BATCH_MARKER_TTL = 30 * 60  # 30 min — longer than any realistic batch
+_BATCH_MARKER_KEY_FMT = "dw:extraction:batch_start:{subscription_id}"
 
 
 def _redis_client_safe():
@@ -88,6 +95,59 @@ def clear_extraction_roster(profile_id: str) -> None:
         return
     try:
         client.delete(_ROSTER_KEY_FMT.format(profile_id=profile_id))
+    except Exception:
+        pass
+
+
+def mark_batch_starting(subscription_id: str) -> None:
+    """Publish a subscription-level 'batch is about to run' marker.
+
+    Called the instant a batch lock is acquired, before we know which
+    profiles are involved. The progress endpoint consults this marker to
+    avoid reporting a stale historical view while the eligibility query
+    is still computing.
+    """
+    if not subscription_id:
+        return
+    client = _redis_client_safe()
+    if not client:
+        return
+    try:
+        payload = {"subscription_id": str(subscription_id), "started_at": time.time()}
+        client.setex(
+            _BATCH_MARKER_KEY_FMT.format(subscription_id=subscription_id),
+            _BATCH_MARKER_TTL,
+            json.dumps(payload),
+        )
+    except Exception:
+        pass
+
+
+def get_batch_starting_marker(subscription_id: str) -> Optional[Dict[str, Any]]:
+    if not subscription_id:
+        return None
+    client = _redis_client_safe()
+    if not client:
+        return None
+    try:
+        raw = client.get(_BATCH_MARKER_KEY_FMT.format(subscription_id=subscription_id))
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def clear_batch_starting_marker(subscription_id: str) -> None:
+    if not subscription_id:
+        return
+    client = _redis_client_safe()
+    if not client:
+        return
+    try:
+        client.delete(_BATCH_MARKER_KEY_FMT.format(subscription_id=subscription_id))
     except Exception:
         pass
 
@@ -472,30 +532,38 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
         })
 
     # --- FALLBACK PATH (no active roster) ----------------------------------
-    # No roster means no batch is running right now. Fall back to the
-    # time-window heuristic so the UI can still show the last-completed run.
+    # Two sub-cases that must be distinguished to avoid reporting stale
+    # "100%" numbers while a fresh batch is spinning up:
+    #
+    #   (a) A batch-starting marker exists for the owning subscription.
+    #       Extraction has just been triggered but the per-profile roster
+    #       hasn't been published yet (race window). Report a clean
+    #       "starting" view: every doc is in_flight or queued, progress 0,
+    #       elapsed anchored on the marker's started_at.
+    #
+    #   (b) No marker either — truly idle or long-finished. Report raw
+    #       per-doc state, but cap elapsed to the last recorded
+    #       extraction end (or 0 if nothing's ever run) so the timer
+    #       doesn't pretend a run is in progress.
+    marker: Optional[Dict[str, Any]] = None
+    # Track started_at of currently-active (in-flight / queued) docs
+    # separately so idle-path elapsed doesn't pull from 27-hour-old history.
+    batch_earliest_active_start: Optional[float] = None
     if not roster_ids:
-        anchor_ts: Optional[float] = None
-        for doc in docs:
-            extraction = doc.get("extraction") or {}
-            for candidate in (
-                extraction.get("started_at"),
-                extraction.get("completed_at"),
-                doc.get("updated_at"),
-                doc.get("created_at"),
-            ):
-                if isinstance(candidate, (int, float)):
-                    if anchor_ts is None or candidate > anchor_ts:
-                        anchor_ts = candidate
-        batch_floor = (anchor_ts - _BATCH_WINDOW_SECONDS) if anchor_ts else None
+        # Try to find the owning subscription from any doc in the profile.
+        subscription_id: Optional[str] = None
+        for d in docs:
+            sid = d.get("subscription_id")
+            if sid:
+                subscription_id = str(sid)
+                break
+        marker = get_batch_starting_marker(subscription_id) if subscription_id else None
 
         for doc in docs:
             status = doc.get("status", "UNKNOWN")
             extraction = doc.get("extraction") or {}
             start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
             end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
-            updated_at = doc.get("updated_at") if isinstance(doc.get("updated_at"), (int, float)) else None
-            created_at = doc.get("created_at") if isinstance(doc.get("created_at"), (int, float)) else None
 
             ext_in_progress = (
                 extraction.get("status") == "IN_PROGRESS"
@@ -503,31 +571,45 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
                 and not end_at
             )
 
-            latest_signal = max(
-                (ts for ts in (start_at, updated_at, created_at, end_at) if ts is not None),
-                default=None,
-            )
-            in_batch = (
-                ext_in_progress
-                or (batch_floor is not None and latest_signal is not None and latest_signal >= batch_floor)
-            )
-
-            if in_batch:
-                if status == "UPLOADED" and not ext_in_progress:
-                    batch_queued += 1
-                elif ext_in_progress or status in _EXTRACT_IN_FLIGHT_STATUSES:
+            classified_active = False
+            if marker:
+                # Batch is starting. Classify conservatively: anything not
+                # yet completed-after-marker is queued or in-flight.
+                marker_start = float(marker.get("started_at", 0) or 0)
+                if end_at and end_at >= marker_start and extraction.get("status") == "COMPLETED":
+                    batch_completed += 1
+                elif status in _EXTRACT_FAILED_STATUSES and (end_at or 0) >= marker_start:
+                    batch_failed += 1
+                elif ext_in_progress:
                     batch_in_flight += 1
+                    classified_active = True
+                else:
+                    # Not yet touched by this run → queued.
+                    batch_queued += 1
+                    classified_active = True
+            else:
+                # Truly idle view — raw per-doc snapshot with no "run" semantics.
+                if ext_in_progress or status in _EXTRACT_IN_FLIGHT_STATUSES:
+                    batch_in_flight += 1
+                    classified_active = True
+                elif status == "UPLOADED":
+                    batch_queued += 1
+                    classified_active = True
                 elif status in _EXTRACT_FAILED_STATUSES:
                     batch_failed += 1
                 else:
                     batch_completed += 1
 
-                if start_at is not None:
-                    if batch_earliest_start is None or start_at < batch_earliest_start:
-                        batch_earliest_start = start_at
-                if end_at is not None:
-                    if batch_latest_end is None or end_at > batch_latest_end:
-                        batch_latest_end = end_at
+            if start_at is not None:
+                if batch_earliest_start is None or start_at < batch_earliest_start:
+                    batch_earliest_start = start_at
+                if classified_active and (
+                    batch_earliest_active_start is None or start_at < batch_earliest_active_start
+                ):
+                    batch_earliest_active_start = start_at
+            if end_at is not None:
+                if batch_latest_end is None or end_at > batch_latest_end:
+                    batch_latest_end = end_at
 
     live_logs = get_live_logs(profile_id)
 
@@ -535,18 +617,38 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     if total_docs == 0:
         total_docs = len(result_docs)
 
+    # Doc-count-based progress. Always clamp to total_docs > 0 before divide.
     if total_docs > 0:
         overall_progress = round((batch_completed / total_docs) * 100, 1)
     else:
         overall_progress = 0.0
 
+    # Elapsed time: only ticks while a batch is active. When idle (no roster
+    # and no batch marker) it reports 0 rather than a window span, so the
+    # UI never shows a stale running timer between runs.
     elapsed_seconds: Optional[float] = None
-    # If a roster is active, anchor elapsed to the roster start so the
-    # timer starts the instant the batch was kicked off, even before the
-    # first doc's extraction.started_at is written.
-    elapsed_start = roster_started_at if roster_ids else batch_earliest_start
+    batch_active = bool(batch_queued or batch_in_flight)
+    elapsed_start: Optional[float] = None
+    if roster_ids:
+        # Active batch — count from roster.started_at.
+        elapsed_start = roster_started_at
+    elif marker:
+        # Starting batch — count from marker.started_at (pre-roster window).
+        elapsed_start = float(marker.get("started_at", 0) or 0) or None
+    elif batch_active:
+        # Idle path but some doc is flagged active (commonly a stale zombie
+        # that the sweep hasn't caught yet). Anchor elapsed to that doc's
+        # own started_at rather than the profile's earliest historical
+        # started_at — otherwise a week-old first extraction would pull
+        # elapsed back by days.
+        elapsed_start = batch_earliest_active_start
+    else:
+        # Idle — no active work. Show the last completed run's duration
+        # if we have one, otherwise 0.
+        if batch_earliest_start and batch_latest_end and batch_latest_end >= batch_earliest_start:
+            elapsed_seconds = round(batch_latest_end - batch_earliest_start, 1)
+
     if elapsed_start:
-        batch_active = bool(batch_queued or batch_in_flight)
         end_ref = now if batch_active else (batch_latest_end or now)
         elapsed_seconds = round(end_ref - elapsed_start, 1)
 
