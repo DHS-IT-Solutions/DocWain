@@ -178,6 +178,17 @@ async def trigger_embedding(document_id: str):
     append_audit_log(document_id, "EMBEDDING_TRIGGERED", by="user",
                     celery_task_id=task.id)
 
+    # Plan 3: dispatch KG build in parallel on kg_queue. Fire-and-forget — KG
+    # failure is fully isolated from embedding and from pipeline_status.
+    # Spec: 2026-04-24-kg-training-stage-background-design.md §4.1
+    try:
+        from src.tasks.kg import build_knowledge_graph
+        build_knowledge_graph.delay(document_id, subscription_id, profile_id)
+        logger.info("KG ingestion dispatched for %s", document_id)
+    except Exception as exc:  # noqa: BLE001
+        # Redis down or task registry issue. Do NOT propagate — embedding still ran.
+        logger.warning("KG dispatch failed for %s: %s", document_id, exc)
+
     return {"document_id": document_id, "status": "EMBEDDING_IN_PROGRESS",
             "task_id": task.id}
 
