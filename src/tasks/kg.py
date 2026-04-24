@@ -48,12 +48,46 @@ def _is_canonical_extraction(extraction: dict) -> bool:
     return any(k in extraction for k in ("pages", "sheets", "slides"))
 
 
+def _call_entity_extractor(document_text: str):
+    """Call DocWain to extract entities+relationships from concatenated doc text.
+
+    Returns an ExtractedEntities with empty lists on any failure. Never raises.
+
+    Spec: 2026-04-24-unified-docwain-engineering-layer-design.md §5.3
+    """
+    from src.docwain.prompts.entity_extraction import (
+        ENTITY_EXTRACTION_SYSTEM_PROMPT,
+        ExtractedEntities,
+        build_user_prompt,
+        parse_entity_response,
+    )
+    if not document_text or not document_text.strip():
+        return ExtractedEntities()
+    try:
+        from src.llm.gateway import LLMGateway
+        gw = LLMGateway()
+        user = build_user_prompt(document_text=document_text)
+        result = gw.generate_with_metadata(
+            prompt=user,
+            system=ENTITY_EXTRACTION_SYSTEM_PROMPT,
+            temperature=0.0,
+            max_tokens=2048,
+        )
+        text = getattr(result, "text", None) or ""
+        return parse_entity_response(text)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("entity extractor failed: %s", exc)
+        return ExtractedEntities()
+
+
 def _canonical_to_graph_payload(
     *,
     extraction: dict,
     document_id: str,
     subscription_id: str,
     profile_id: str,
+    screening: dict | None = None,
 ) -> "GraphIngestPayload":
     """Build a minimal GraphIngestPayload from canonical-shape extraction.
 
@@ -127,12 +161,38 @@ def _canonical_to_graph_payload(
         if (slide.get("notes") or "").strip():
             _add_mention(slide["notes"], f"slide:{slide_num}:notes")
 
+    # Wave 1: optionally enrich with entities via DocWain.
+    try:
+        from src.api.config import Config
+        kg_cfg = getattr(Config, "KG", None)
+        entity_extraction_enabled = getattr(kg_cfg, "ENTITY_EXTRACTION_ENABLED", False) if kg_cfg else False
+    except Exception:
+        entity_extraction_enabled = False
+
+    enriched_entities: list = []
+    enriched_relationships: list = []
+    if entity_extraction_enabled:
+        try:
+            # Concatenate mention text into a single doc blob for extraction.
+            # Mentions may be dicts or GraphMention dataclass instances — handle both.
+            def _mention_text(m):
+                if isinstance(m, dict):
+                    return m.get("text", "") or ""
+                return getattr(m, "text", "") or ""
+            doc_text = "\n\n".join(_mention_text(m) for m in mentions if _mention_text(m)).strip()
+            extracted = _call_entity_extractor(doc_text)
+            enriched_entities = list(extracted.entities or [])
+            enriched_relationships = list(extracted.relationships or [])
+        except Exception:
+            # Double-guard — helper already swallows, but never let enrichment break KG.
+            pass
+
     return GraphIngestPayload(
         document=document,
-        entities=[],
+        entities=enriched_entities,
         mentions=mentions,
         fields=[],
-        typed_relationships=[],
+        typed_relationships=enriched_relationships,
         temporal_spans=[],
     )
 
