@@ -35,6 +35,109 @@ def _try_download_blob_json(blob_path: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Canonical shape detection and adapter
+# ---------------------------------------------------------------------------
+
+def _is_canonical_extraction(extraction: dict) -> bool:
+    """Canonical shape (Plan 1/2): has pages/sheets/slides at top level and no top-level entities.
+
+    Legacy shape has top-level `entities[]`.
+    """
+    if "entities" in extraction:
+        return False
+    return any(k in extraction for k in ("pages", "sheets", "slides"))
+
+
+def _canonical_to_graph_payload(
+    *,
+    extraction: dict,
+    document_id: str,
+    subscription_id: str,
+    profile_id: str,
+) -> "GraphIngestPayload":
+    """Build a minimal GraphIngestPayload from canonical-shape extraction.
+
+    Canonical extraction (Plan 1/2) has no entity extraction — just text blocks,
+    table rows, slide elements. We produce a Document node and one mention per
+    text block (for traceability), but no entities or typed_relationships.
+    Researcher Agent (Plan 4) enriches the graph with semantic entities later.
+
+    Spec: 2026-04-24-kg-training-stage-background-design.md §5
+    """
+    from src.kg.ingest import GraphIngestPayload, GraphMention
+
+    meta = extraction.get("metadata") or {}
+    doc_intel = meta.get("doc_intel") or {}
+    doc_type = doc_intel.get("doc_type_hint") or "generic"
+
+    document = {
+        "doc_id": str(document_id),
+        "profile_id": str(profile_id),
+        "subscription_id": str(subscription_id),
+        "doc_name": document_id,
+        "document_category": doc_type,
+        "format": extraction.get("format") or "unknown",
+        "path_taken": extraction.get("path_taken") or "unknown",
+        "extraction_version": meta.get("extraction_version") or "",
+        "graph_version": f"extraction_{document_id}",
+    }
+
+    mentions: list = []
+    mention_counter = 0
+
+    def _add_mention(text: str, locator: str):
+        nonlocal mention_counter
+        if not text or not str(text).strip():
+            return
+        mention_counter += 1
+        edge_key = f"canonical::{document_id}::{locator}::{mention_counter}"
+        mentions.append(
+            GraphMention(
+                doc_id=str(document_id),
+                entity_id=f"{document_id}::chunk::{mention_counter}",
+                chunk_id=f"{document_id}::chunk::{mention_counter}",
+                evidence_span=str(text)[:200],
+                confidence=1.0,
+                edge_key=edge_key,
+                subscription_id=str(subscription_id),
+                profile_id=str(profile_id),
+            )
+        )
+
+    for page in (extraction.get("pages") or []):
+        page_num = page.get("page_num", 0)
+        for block in (page.get("blocks") or []):
+            _add_mention(block.get("text", ""), f"page:{page_num}:block")
+        for table in (page.get("tables") or []):
+            for row_idx, row in enumerate(table.get("rows") or []):
+                _add_mention(" | ".join(str(c) for c in row), f"page:{page_num}:table:row:{row_idx}")
+
+    for sheet in (extraction.get("sheets") or []):
+        sheet_name = sheet.get("name", "sheet")
+        for coord, cell in (sheet.get("cells") or {}).items():
+            value = (cell or {}).get("value") if isinstance(cell, dict) else None
+            if value is None:
+                continue
+            _add_mention(str(value), f"sheet:{sheet_name}:cell:{coord}")
+
+    for slide in (extraction.get("slides") or []):
+        slide_num = slide.get("slide_num", 0)
+        for elem in (slide.get("elements") or []):
+            _add_mention(elem.get("text", ""), f"slide:{slide_num}:element")
+        if (slide.get("notes") or "").strip():
+            _add_mention(slide["notes"], f"slide:{slide_num}:notes")
+
+    return GraphIngestPayload(
+        document=document,
+        entities=[],
+        mentions=mentions,
+        fields=[],
+        typed_relationships=[],
+        temporal_spans=[],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Extraction-to-graph adapter
 # ---------------------------------------------------------------------------
 
@@ -54,6 +157,16 @@ def _extraction_to_graph_payload(
     - sections / text content
     - metadata (doc_type, languages, etc.)
     """
+    # --- Shape detection: route canonical Plan 1/2 extraction to dedicated adapter ---
+    if _is_canonical_extraction(extraction):
+        return _canonical_to_graph_payload(
+            extraction=extraction,
+            document_id=document_id,
+            subscription_id=subscription_id,
+            profile_id=profile_id,
+        )
+    # Legacy shape processing below (unchanged)
+
     from src.kg.ingest import (
         GraphIngestPayload,
         GraphEntity,
