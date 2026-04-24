@@ -1068,6 +1068,24 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
     pii_masking_enabled = get_subscription_pii_setting(subscription_id)
     logger.info("Document %s (subscription %s): PII masking=%s", doc_id, subscription_id, pii_masking_enabled)
 
+    # Persist profile_id/subscription_id up-front so /api/extract/progress
+    # (which filters docs by profile_id) can see work that's actively running.
+    # Previously these were only written on completion, so the progress bar
+    # showed 100% the instant extraction was triggered — it was summing only
+    # already-completed docs and the in-flight doc wasn't matched by the query.
+    _pre_fields: Dict[str, Any] = {}
+    if profile_id:
+        _pre_fields["profile_id"] = profile_id
+    if subscription_id:
+        _pre_fields["subscription_id"] = subscription_id
+    if doc_data.get("name") and not doc_data.get("source_file"):
+        _pre_fields["source_file"] = doc_data.get("name")
+    if _pre_fields:
+        try:
+            update_document_fields(doc_id, _pre_fields)
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to persist in-flight identity fields for %s", doc_id, exc_info=True)
+
     update_stage(doc_id, "extraction", {"status": "IN_PROGRESS", "started_at": time.time(), "error": None})
     emit_progress(doc_id, "extraction", 0.05, "Starting document extraction")
 
