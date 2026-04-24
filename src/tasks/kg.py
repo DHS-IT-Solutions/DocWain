@@ -510,6 +510,8 @@ def build_knowledge_graph(self, document_id: str, subscription_id: str,
     6. Update MongoDB with node/edge counts
     """
     start_time = time.time()
+    import time as _time_kg_obs
+    _kg_obs_start = _time_kg_obs.perf_counter()
 
     try:
         update_stage(document_id, "knowledge_graph", STAGE_IN_PROGRESS,
@@ -549,6 +551,22 @@ def build_knowledge_graph(self, document_id: str, subscription_id: str,
                                  "skipped": True, "reason": "no_entities"})
             append_audit_log(document_id, "KG_BUILD_COMPLETED",
                            node_count=0, edge_count=0, skipped=True)
+            # Plan 3: per-extraction observability log (best-effort).
+            try:
+                from src.kg.observability import KGLogEntry, write_kg_entry_if_redis
+                _kg_entry = KGLogEntry(
+                    doc_id=document_id,
+                    status="KG_COMPLETED",
+                    nodes_created=0,
+                    edges_created=0,
+                    timings_ms={"total": (_time_kg_obs.perf_counter() - _kg_obs_start) * 1000.0},
+                    error=None,
+                    completed_at=_time_kg_obs.time(),
+                )
+                from src.api.dw_newron import get_redis_client
+                write_kg_entry_if_redis(redis_client=get_redis_client(), entry=_kg_entry)
+            except Exception:
+                pass  # observability never breaks the task
             return
 
         # 4. Ingest into Neo4j using existing infrastructure
@@ -597,6 +615,23 @@ def build_knowledge_graph(self, document_id: str, subscription_id: str,
                     summary=summary)
         append_audit_log(document_id, "KG_BUILD_COMPLETED", **summary)
 
+        # Plan 3: per-extraction observability log (best-effort).
+        try:
+            from src.kg.observability import KGLogEntry, write_kg_entry_if_redis
+            _kg_entry = KGLogEntry(
+                doc_id=document_id,
+                status="KG_COMPLETED",
+                nodes_created=node_count,
+                edges_created=edge_count,
+                timings_ms={"total": (_time_kg_obs.perf_counter() - _kg_obs_start) * 1000.0},
+                error=None,
+                completed_at=_time_kg_obs.time(),
+            )
+            from src.api.dw_newron import get_redis_client
+            write_kg_entry_if_redis(redis_client=get_redis_client(), entry=_kg_entry)
+        except Exception:
+            pass  # observability never breaks the task
+
         logger.info(
             "KG build completed for %s in %.2fs: %d nodes, %d edges",
             document_id, duration_seconds, node_count, edge_count,
@@ -608,6 +643,21 @@ def build_knowledge_graph(self, document_id: str, subscription_id: str,
         update_stage(document_id, "knowledge_graph", STAGE_FAILED, error=error)
         append_audit_log(document_id, "KG_BUILD_FAILED", error="timeout",
                         duration_seconds=duration_seconds)
+        try:
+            from src.kg.observability import KGLogEntry, write_kg_entry_if_redis
+            _kg_fail_entry = KGLogEntry(
+                doc_id=document_id,
+                status="KG_FAILED",
+                nodes_created=0,
+                edges_created=0,
+                timings_ms={"total": (_time_kg_obs.perf_counter() - _kg_obs_start) * 1000.0},
+                error="timeout",
+                completed_at=_time_kg_obs.time(),
+            )
+            from src.api.dw_newron import get_redis_client
+            write_kg_entry_if_redis(redis_client=get_redis_client(), entry=_kg_fail_entry)
+        except Exception:
+            pass
 
     except Exception as exc:
         duration_seconds = round(time.time() - start_time, 2)
@@ -615,4 +665,19 @@ def build_knowledge_graph(self, document_id: str, subscription_id: str,
         update_stage(document_id, "knowledge_graph", STAGE_FAILED, error=error)
         append_audit_log(document_id, "KG_BUILD_FAILED", error=str(exc),
                         duration_seconds=duration_seconds)
+        try:
+            from src.kg.observability import KGLogEntry, write_kg_entry_if_redis
+            _kg_fail_entry = KGLogEntry(
+                doc_id=document_id,
+                status="KG_FAILED",
+                nodes_created=0,
+                edges_created=0,
+                timings_ms={"total": (_time_kg_obs.perf_counter() - _kg_obs_start) * 1000.0},
+                error=repr(exc),
+                completed_at=_time_kg_obs.time(),
+            )
+            from src.api.dw_newron import get_redis_client
+            write_kg_entry_if_redis(redis_client=get_redis_client(), entry=_kg_fail_entry)
+        except Exception:
+            pass
         self.retry(exc=exc)
