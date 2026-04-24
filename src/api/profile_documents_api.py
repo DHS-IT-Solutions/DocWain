@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from src.api.document_understanding_service import run_document_understanding
-from src.api.document_status import init_document_record
+from src.api.document_status import append_to_extraction_roster, init_document_record
 from src.profiles.profile_store import resolve_profile_name
 from src.retrieval.profile_query import query_profile
 from src.utils.logging_utils import get_logger
@@ -82,6 +82,15 @@ async def upload_document_for_profile(
         blob_url=blob_url,
         created_by="user",
     )
+
+    # Attach this upload to the profile's active extraction roster so the
+    # progress endpoint shows only the docs the user is uploading right
+    # now — not every doc ever extracted for this profile. A multi-file
+    # upload session shares one roster; each file appends its doc_id.
+    try:
+        append_to_extraction_roster(profile_id, document_id, subscription_id=subscription_id)
+    except Exception:
+        logger.debug("Failed to append to extraction roster", exc_info=True)
 
     # ── 3. Auto-dispatch extraction via Celery (fallback: synchronous) ─
     celery_task_id: Optional[str] = None
