@@ -80,30 +80,60 @@ _local_client = None
 _local_client_lock = threading.Lock()
 
 def get_local_client():
-    """Return a local Ollama client for document processing (DocWain local model).
+    """Return the local doc-processing LLM client.
 
-    This client always talks to the LOCAL Ollama instance (no cloud),
-    using a lightweight model optimised for fast extraction, classification,
-    summarisation and entity extraction during document ingestion.
+    Historically this returned a dedicated OllamaClient pointed at a local
+    Ollama running ``DHS/DocWain:latest``. On this box vLLM already holds
+    ~90% of GPU memory serving the same DocWain weights at port 8100, so
+    loading a second copy into Ollama reliably times out and produces the
+    spam of "Ollama attempt 1/3 failed: timed out" warnings during
+    embedding/KG/intelligence extraction. We now route every document-
+    processing call through the unified LLM gateway (primary vLLM,
+    fallback Ollama Cloud), which reuses the vLLM instance already
+    serving the base model.
+
+    Setting env ``DOCWAIN_DOC_PROCESSING_USE_OLLAMA=true`` restores the
+    legacy per-process Ollama client for rollback.
     """
     global _local_client
-    if _local_client is None:
-        with _local_client_lock:
-            if _local_client is None:
-                local_model = os.getenv("OLLAMA_LOCAL_MODEL", "DHS/DocWain:latest")
-                _local_client = OllamaClient(model_name=local_model)
-                # Override to ensure local-only (no cloud auth headers)
-                try:
-                    import ollama as _ollama
-                    import httpx as _httpx
-                    _local_client._client = _ollama.Client(
-                        host=os.getenv("OLLAMA_LOCAL_HOST", "http://localhost:11434"),
-                        timeout=_httpx.Timeout(OllamaClient._OLLAMA_HTTP_TIMEOUT_S),
-                    )
-                except Exception:
-                    pass
-                logger.info("Local document processing client ready (model=%s)", local_model)
-    return _local_client
+    if _local_client is not None:
+        return _local_client
+    with _local_client_lock:
+        if _local_client is not None:
+            return _local_client
+
+        use_ollama = os.getenv("DOCWAIN_DOC_PROCESSING_USE_OLLAMA", "false").lower() in {"1", "true", "yes"}
+        if not use_ollama:
+            try:
+                from src.llm.gateway import get_llm_gateway
+                _local_client = get_llm_gateway()
+                logger.info(
+                    "Local doc-processing client routed through LLM gateway (backend=%s)",
+                    getattr(_local_client, "backend", "unknown"),
+                )
+                return _local_client
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Gateway unavailable for doc-processing client (%s) — "
+                    "falling back to local Ollama",
+                    exc,
+                )
+
+        # Legacy per-process Ollama client (rollback path).
+        local_model = os.getenv("OLLAMA_LOCAL_MODEL", "DHS/DocWain:latest")
+        _local_client = OllamaClient(model_name=local_model)
+        try:
+            import ollama as _ollama
+            import httpx as _httpx
+            _local_client._client = _ollama.Client(
+                host=os.getenv("OLLAMA_LOCAL_HOST", "http://localhost:11434"),
+                timeout=_httpx.Timeout(OllamaClient._OLLAMA_HTTP_TIMEOUT_S),
+            )
+            _local_client._is_cloud = False
+        except Exception:
+            pass
+        logger.info("Local doc-processing client ready via Ollama (model=%s)", local_model)
+        return _local_client
 
 # ── OllamaClient ───────────────────────────────────────────────────
 
