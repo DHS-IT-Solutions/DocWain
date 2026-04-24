@@ -663,39 +663,37 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     else:
         overall_progress = 0.0
 
-    # Elapsed time: only ticks while a batch is active. When idle (no roster
-    # and no batch marker) it reports 0 rather than a window span, so the
-    # UI never shows a stale running timer between runs.
-    elapsed_seconds: Optional[float] = None
-    batch_active = bool(batch_queued or batch_in_flight)
-    elapsed_start: Optional[float] = None
+    # ------------------------------------------------------------------
+    # Resolve a single, unambiguous state + elapsed.
+    # Semantics (what the UI can render without interpretation):
+    #   running    — a batch is actively extracting, timer ticks from start
+    #   starting   — a batch was just triggered (lock held, roster not yet
+    #                published) — timer ticks from lock acquisition
+    #   idle       — no extraction active. elapsed_time MUST be "0s" so the
+    #                UI doesn't flash a 28-hour historical span.
+    # The presence of the roster or marker is the ONLY way a batch is
+    # considered active — historical data never ticks a timer.
+    # ------------------------------------------------------------------
+    batch_has_work = bool(batch_queued or batch_in_flight)
     if roster_ids:
-        # Active batch — count from roster.started_at.
-        elapsed_start = roster_started_at
+        state = "running" if batch_has_work else "completed"
+        elapsed_start: Optional[float] = roster_started_at
     elif marker:
-        # Starting batch — count from marker.started_at (pre-roster window).
+        state = "starting"
         elapsed_start = float(marker.get("started_at", 0) or 0) or None
-    elif batch_active:
-        # Idle path but some doc is flagged active (commonly a stale zombie
-        # that the sweep hasn't caught yet). Anchor elapsed to that doc's
-        # own started_at rather than the profile's earliest historical
-        # started_at — otherwise a week-old first extraction would pull
-        # elapsed back by days.
-        elapsed_start = batch_earliest_active_start
     else:
-        # Idle — no active work. Show the last completed run's duration
-        # if we have one, otherwise 0.
-        if batch_earliest_start and batch_latest_end and batch_latest_end >= batch_earliest_start:
-            elapsed_seconds = round(batch_latest_end - batch_earliest_start, 1)
+        state = "idle"
+        elapsed_start = None
 
+    elapsed_seconds: Optional[float] = None
     if elapsed_start:
-        end_ref = now if batch_active else (batch_latest_end or now)
-        elapsed_seconds = round(end_ref - elapsed_start, 1)
+        elapsed_seconds = round(now - elapsed_start, 1)
 
     return {
         "documents": result_docs,
         "common_data": {
             "Overall_live_logs": live_logs,
+            "state": state,
             "overall_progress": overall_progress,
             "total_documents": total_docs,
             "queued": batch_queued,
