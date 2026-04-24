@@ -154,6 +154,48 @@ def _progress_to_percent(progress: Optional[dict]) -> Optional[dict]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# In-flight status sets — control which docs contribute to overall_progress.
+# Completed, failed, and out-of-stage docs appear in the per-doc list but
+# are excluded from aggregate counters so the progress bar reflects real work.
+# ---------------------------------------------------------------------------
+
+# Extraction endpoint: only these statuses are "in flight"
+_EXTRACT_IN_FLIGHT_STATUSES = frozenset({
+    "UPLOADED",
+    "EXTRACTION_IN_PROGRESS",
+})
+_EXTRACT_COMPLETED_STATUSES = frozenset({
+    "EXTRACTION_COMPLETED",
+    "AWAITING_REVIEW_1",
+    "UNDER_REVIEW",
+})
+_EXTRACT_FAILED_STATUSES = frozenset({
+    "EXTRACTION_FAILED",
+})
+
+# Training endpoint: only these statuses are "in flight"
+_TRAIN_IN_FLIGHT_STATUSES = frozenset({
+    "EMBEDDING_IN_PROGRESS",
+    "TRAINING_STARTED",
+})
+_TRAIN_COMPLETED_STATUSES = frozenset({
+    "TRAINING_COMPLETED",
+    "TRAINING_PARTIALLY_COMPLETED",
+})
+_TRAIN_FAILED_STATUSES = frozenset({
+    "TRAINING_FAILED",
+    "TRAINING_BLOCKED_SECURITY",
+    "TRAINING_BLOCKED_CONFIDENTIAL",
+    "EMBEDDING_FAILED",
+    "EXTRACTION_OR_CHUNKING_FAILED",
+})
+
+# KG status strand — independent from pipeline_status per Plan 3 isolation.
+_KG_IN_FLIGHT_STATUSES = frozenset({"KG_PENDING", "KG_IN_PROGRESS"})
+_KG_COMPLETED_STATUSES = frozenset({"KG_COMPLETED"})
+_KG_FAILED_STATUSES = frozenset({"KG_FAILED"})
+
 # Maps document status to a deterministic pipeline progress % (0-100).
 # Used when Redis real-time progress has expired.
 _STATUS_TO_PROGRESS = {
@@ -222,7 +264,8 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     if collection is None:
         return {"documents": [], "common_data": {
             "Overall_live_logs": [], "overall_progress": 0,
-            "toatal_documents": 0, "uploaded": 0, "elapsed_time": "0s",
+            "total_documents": 0, "in_flight": 0, "completed": 0, "failed": 0,
+            "elapsed_time": "0s",
         }}
 
     docs = list(collection.find(
@@ -237,17 +280,31 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
 
     now = time.time()
     result_docs = []
+    # Aggregate counters — only in-flight docs contribute to overall_progress.
+    in_flight_count = 0
+    completed_count = 0
+    failed_count = 0
     progress_sum = 0.0
     earliest_start: Optional[float] = None
     latest_end: Optional[float] = None
-    uploaded_count = 0
 
     for doc in docs:
         doc_id = str(doc.get("document_id") or doc.get("_id"))
         status = doc.get("status", "UNKNOWN")
 
         progress = _compute_document_progress(status, get_training_progress(doc_id))
-        progress_sum += progress.get("progress", 0)
+        per_doc_progress = progress.get("progress", 0)
+
+        # Classify doc and accumulate only in-flight progress into the aggregate.
+        if status in _EXTRACT_IN_FLIGHT_STATUSES:
+            in_flight_count += 1
+            progress_sum += per_doc_progress
+        elif status in _EXTRACT_COMPLETED_STATUSES:
+            completed_count += 1
+        elif status in _EXTRACT_FAILED_STATUSES:
+            failed_count += 1
+        # Other statuses (e.g., TRAINING_COMPLETED, past-stage docs) are visible
+        # in the per-doc list but excluded from aggregates.
 
         # Track earliest start and latest end for elapsed time
         extraction = doc.get("extraction") or {}
@@ -266,9 +323,6 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
             if latest_end is None or end_at > latest_end:
                 latest_end = end_at
 
-        # Count uploaded (any document that exists is uploaded)
-        uploaded_count += 1
-
         result_docs.append({
             "document_id": doc_id,
             "document_name": doc.get("source_file", ""),
@@ -279,7 +333,12 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     live_logs = get_live_logs(profile_id)
 
     total_docs = len(result_docs)
-    overall_progress = round(progress_sum / total_docs, 1) if total_docs else 0
+    if in_flight_count:
+        overall_progress = round(progress_sum / in_flight_count, 1)
+    elif completed_count and not failed_count:
+        overall_progress = 100.0
+    else:
+        overall_progress = 0.0
 
     # Elapsed time: from earliest start to latest end (or now if still running)
     elapsed_seconds: Optional[float] = None
@@ -292,8 +351,10 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
         "common_data": {
             "Overall_live_logs": live_logs,
             "overall_progress": overall_progress,
-            "toatal_documents": total_docs,
-            "uploaded": uploaded_count,
+            "total_documents": total_docs,
+            "in_flight": in_flight_count,
+            "completed": completed_count,
+            "failed": failed_count,
             "elapsed_time": _format_elapsed(elapsed_seconds),
         },
     }
@@ -307,23 +368,19 @@ def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
     if collection is None:
         return {"documents": [], "common_data": {
             "Overall_live_logs": [], "overall_progress": 0,
-            "toatal_documents": 0, "uploaded": 0, "elapsed_time": "0s",
+            "total_documents": 0, "in_flight": 0, "completed": 0, "failed": 0,
+            "kg": {"in_flight": 0, "completed": 0, "failed": 0, "pending": 0},
+            "elapsed_time": "0s",
         }}
 
-    # Focus on documents that have reached or passed screening
+    # Fetch all docs for this profile so that KG status (a parallel strand) is
+    # always visible, and terminal-failure filtering is done in Python rather
+    # than in the Mongo query (avoids accidental exclusion of KG-active docs).
     docs = list(collection.find(
-        {
-            "profile_id": profile_id,
-            "status": {"$in": [
-                "SCREENING_COMPLETED", "TRAINING_STARTED", "TRAINING_COMPLETED",
-                "TRAINING_FAILED", "TRAINING_PARTIALLY_COMPLETED",
-                "TRAINING_BLOCKED_SECURITY", "TRAINING_BLOCKED_CONFIDENTIAL",
-                "EXTRACTION_OR_CHUNKING_FAILED", "EMBEDDING_FAILED",
-            ]},
-        },
+        {"profile_id": profile_id},
         {
             "document_id": 1, "status": 1, "source_file": 1,
-            "embedding": 1,
+            "embedding": 1, "knowledge_graph": 1,
             "training_started_at": 1, "trained_at": 1,
             "created_at": 1, "updated_at": 1,
         },
@@ -331,17 +388,50 @@ def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
 
     now = time.time()
     result_docs = []
+    # Pipeline aggregate counters — only in-flight contributes to overall_progress.
+    in_flight_count = 0
+    completed_count = 0
+    failed_count = 0
     progress_sum = 0.0
+    # KG counters — tracked independently from pipeline status.
+    kg_in_flight_count = 0
+    kg_completed_count = 0
+    kg_failed_count = 0
+    kg_pending_count = 0
     earliest_start: Optional[float] = None
     latest_end: Optional[float] = None
-    uploaded_count = 0
 
     for doc in docs:
         doc_id = str(doc.get("document_id") or doc.get("_id"))
         status = doc.get("status", "UNKNOWN")
 
         progress = _compute_document_progress(status, get_training_progress(doc_id))
-        progress_sum += progress.get("progress", 0)
+        per_doc_progress = progress.get("progress", 0)
+
+        # Classify pipeline status — only in-flight docs feed overall_progress.
+        if status in _TRAIN_IN_FLIGHT_STATUSES:
+            in_flight_count += 1
+            progress_sum += per_doc_progress
+        elif status in _TRAIN_COMPLETED_STATUSES:
+            completed_count += 1
+        elif status in _TRAIN_FAILED_STATUSES:
+            failed_count += 1
+        # Other statuses (e.g., SCREENING_COMPLETED awaiting trigger) are visible
+        # in the per-doc list but excluded from aggregates.
+
+        # Classify KG status — independent strand per Plan 3.
+        kg_field = (doc.get("knowledge_graph") or {})
+        kg_status = kg_field.get("status") if isinstance(kg_field, dict) else None
+        if kg_status is None:
+            kg_pending_count += 1
+        elif kg_status in _KG_IN_FLIGHT_STATUSES:
+            kg_in_flight_count += 1
+        elif kg_status in _KG_COMPLETED_STATUSES:
+            kg_completed_count += 1
+        elif kg_status in _KG_FAILED_STATUSES:
+            kg_failed_count += 1
+        else:
+            kg_pending_count += 1  # unknown value -> pending bucket
 
         # Track earliest start and latest end for elapsed time
         embedding = doc.get("embedding") or {}
@@ -355,8 +445,6 @@ def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
             if latest_end is None or end_at > latest_end:
                 latest_end = end_at
 
-        uploaded_count += 1
-
         result_docs.append({
             "document_id": doc_id,
             "document_name": doc.get("source_file", ""),
@@ -367,7 +455,12 @@ def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
     live_logs = get_live_logs(profile_id)
 
     total_docs = len(result_docs)
-    overall_progress = round(progress_sum / total_docs, 1) if total_docs else 0
+    if in_flight_count:
+        overall_progress = round(progress_sum / in_flight_count, 1)
+    elif completed_count and not failed_count:
+        overall_progress = 100.0
+    else:
+        overall_progress = 0.0
 
     # Elapsed time: from earliest start to latest end (or now if still running)
     elapsed_seconds: Optional[float] = None
@@ -380,8 +473,16 @@ def get_profile_training_status(profile_id: str) -> Dict[str, Any]:
         "common_data": {
             "Overall_live_logs": live_logs,
             "overall_progress": overall_progress,
-            "toatal_documents": total_docs,
-            "uploaded": uploaded_count,
+            "total_documents": total_docs,
+            "in_flight": in_flight_count,
+            "completed": completed_count,
+            "failed": failed_count,
+            "kg": {
+                "in_flight": kg_in_flight_count,
+                "completed": kg_completed_count,
+                "failed": kg_failed_count,
+                "pending": kg_pending_count,
+            },
             "elapsed_time": _format_elapsed(elapsed_seconds),
         },
     }
