@@ -148,8 +148,16 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             response.headers[self.header_name] = correlation_id
             response.headers["X-Response-Time-Ms"] = f"{duration_ms:.2f}"
 
-            # Log request completion at INFO level with latency
-            logger.info(
+            # Log request completion. Routine successful fast responses go to DEBUG
+            # so prod logs stay signal-dense; errors and slow requests stay at INFO/WARN.
+            if response.status_code >= 500:
+                level = logging.ERROR
+            elif response.status_code >= 400 or duration_ms > 5000:
+                level = logging.WARNING
+            else:
+                level = logging.DEBUG
+            logger.log(
+                level,
                 "Request completed: %s %s -> %s (%.2fms)",
                 request.method,
                 request.url.path,

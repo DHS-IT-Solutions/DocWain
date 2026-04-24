@@ -175,10 +175,11 @@ def get_chat_history(user_id: str) -> Dict[str, Any]:
         blob_data = blob_client.download_blob().readall()
         payload = json.loads(blob_data.decode("utf-8"))
         history = _normalize_history(payload)
-        logger.info("[GET_HISTORY] User=%s sessions=%d", user_id, len(history.get("sessions", [])))
+        logger.debug("[GET_HISTORY] User=%s sessions=%d", user_id, len(history.get("sessions", [])))
         return history
     except Exception as exc:
-        logger.info("[GET_HISTORY] No existing chat history for %s: %s", user_id, exc)
+        # Normal condition for first-time users (BlobNotFound); not an informational event.
+        logger.debug("[GET_HISTORY] No existing chat history for %s: %s", user_id, exc)
         return {"sessions": []}
 
 def save_chat_history(user_id: str, chat_history: Dict[str, Any]) -> None:
