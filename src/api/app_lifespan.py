@@ -368,7 +368,17 @@ async def lifespan(app: FastAPI):
     try:
         from src.llm.intelligence_router import IntelligenceRouter, set_intelligence_router
         from src.llm.clients import OllamaClient, GeminiClient, OpenAIClient, ClaudeClient
-        _local = OllamaClient()
+        # Route the router's local tier through the unified LLM gateway
+        # (primary vLLM) instead of a standalone Ollama client. vLLM is
+        # already holding the DocWain weights on the GPU — a second
+        # in-process Ollama client for DHS/DocWain reliably OOMs and
+        # wastes 300s/call in retries. Gateway is duck-compatible with
+        # the OllamaClient API the router uses.
+        try:
+            from src.llm.gateway import get_llm_gateway
+            _local = get_llm_gateway()
+        except Exception:  # noqa: BLE001
+            _local = OllamaClient()
         _gemini = None
         _openai = None
         _claude = None

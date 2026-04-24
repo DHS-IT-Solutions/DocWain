@@ -83,11 +83,11 @@ class DomainAgent(ABC):
         # For reasoning tasks, prefer thinking model when available
         if self.use_thinking_model and self._thinking is not None:
             return self._thinking
-        # Fall back to base model
+        # Fall back to base model (unified gateway → vLLM primary, Ollama fallback).
         if self._llm is None:
             try:
-                from src.llm.clients import OllamaClient
-                self._llm = OllamaClient()
+                from src.llm.gateway import get_llm_gateway
+                self._llm = get_llm_gateway()
             except Exception as exc:
                 logger.warning("Failed to initialize LLM client: %s", exc)
         return self._llm
@@ -96,8 +96,8 @@ class DomainAgent(ABC):
         """Always return the base (DocWain-Agent) LLM, bypassing thinking model."""
         if self._llm is None:
             try:
-                from src.llm.clients import OllamaClient
-                self._llm = OllamaClient()
+                from src.llm.gateway import get_llm_gateway
+                self._llm = get_llm_gateway()
             except Exception as exc:
                 logger.warning("Failed to initialize base LLM client: %s", exc)
         return self._llm
