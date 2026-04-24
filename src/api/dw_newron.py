@@ -618,6 +618,10 @@ _QDRANT_CLIENT = None
 _REDIS_CLIENT = None
 _MODEL_CACHE: Dict[int, SentenceTransformer] = {}
 _MODEL_BY_NAME: Dict[str, SentenceTransformer] = {}
+# transformers.from_pretrained is not thread-safe — concurrent loads can race
+# inside accelerate's meta-tensor init and surface as "Cannot copy out of meta
+# tensor". Serialize ALL HF model construction through this single lock.
+_HF_LOAD_LOCK = threading.Lock()
 _METRICS_TRACKER = None
 REDIS_MEMORY_TTL = int(os.getenv("REDIS_MEMORY_TTL", "86400"))
 ANSWER_CACHE_TTL = int(os.getenv("RAG_ANSWER_CACHE_TTL", "1800"))
@@ -843,7 +847,8 @@ def _load_model_candidates(required_dim: Optional[int] = None) -> SentenceTransf
     for name in candidates:
         try:
             logger.info("Loading sentence transformer model: %s (device=%s)", name, device)
-            model = SentenceTransformer(name, device=device, local_files_only=True)
+            with _HF_LOAD_LOCK:
+                model = SentenceTransformer(name, device=device, local_files_only=True)
             model.show_progress_bar = False
             dim = model.get_sentence_embedding_dimension()
             logger.info("Loaded model '%s' with dim=%s on %s", name, dim, device)
@@ -857,7 +862,8 @@ def _load_model_candidates(required_dim: Optional[int] = None) -> SentenceTransf
             if device != "cpu":
                 try:
                     logger.info("Retrying '%s' on CPU...", name)
-                    model = SentenceTransformer(name, device="cpu", local_files_only=True)
+                    with _HF_LOAD_LOCK:
+                        model = SentenceTransformer(name, device="cpu", local_files_only=True)
                     model.show_progress_bar = False
                     dim = model.get_sentence_embedding_dimension()
                     logger.info("Loaded model '%s' with dim=%s on CPU (fallback)", name, dim)
@@ -895,12 +901,13 @@ def get_model_by_name(model_name: str, required_dim: Optional[int] = None) -> Se
         device = _embedding_device()
         model_kwargs = _model_kwargs_for_device(device)
         try:
-            model = SentenceTransformer(
-                model_name,
-                device=device,
-                model_kwargs=model_kwargs,
-                local_files_only=True,
-            )
+            with _HF_LOAD_LOCK:
+                model = SentenceTransformer(
+                    model_name,
+                    device=device,
+                    model_kwargs=model_kwargs,
+                    local_files_only=True,
+                )
             _MODEL_BY_NAME[model_name] = model
         except Exception as exc:  # noqa: BLE001
             logger.warning("Embedding model %s failed to load: %s", model_name, exc)
@@ -984,7 +991,8 @@ def get_cross_encoder():
             # The reranker is small (~420MB) and runs faster on CPU (1-2s)
             # than on a contended GPU (14-38s when Ollama is generating).
             ce_device = getattr(getattr(Config, "Reranker", None), "DEVICE", "cpu") or "cpu"
-            _CROSS_ENCODER = CrossEncoder(model_name, device=ce_device, local_files_only=True)
+            with _HF_LOAD_LOCK:
+                _CROSS_ENCODER = CrossEncoder(model_name, device=ce_device, local_files_only=True)
             logger.info("Loaded cross-encoder model: %s on %s", model_name, ce_device)
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to load cross-encoder '%s', continuing without reranker: %s", model_name, e)
