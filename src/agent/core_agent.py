@@ -597,9 +597,20 @@ class CoreAgent:
 
         # --- REASON ---
         t0 = time.monotonic()
-        # Enable thinking for cloud backends — adds reasoning depth.
-        # Ollama Cloud qwen3.5:397b and Azure GPT-4o both support it.
-        use_thinking = self._llm.backend in ("gemini", "openai", "azure", "azure_openai", "ollama")
+        # Extended thinking improves cross-document reasoning on
+        # analysis-intent queries (compare / summarize / overview /
+        # investigate / aggregate). Lookup-style queries are faster
+        # without it. Gate by env DOCWAIN_EXTENDED_THINKING=false to
+        # disable globally if needed.
+        import os as _os
+        _thinking_enabled = _os.getenv("DOCWAIN_EXTENDED_THINKING", "true").lower() in {"1", "true", "yes"}
+        _thinking_backends = {"gemini", "openai", "azure", "azure_openai", "ollama", "vllm"}
+        _analysis_tasks = {"compare", "summarize", "overview", "investigate", "aggregate", "analyze"}
+        use_thinking = (
+            _thinking_enabled
+            and self._llm.backend in _thinking_backends
+            and understanding.task_type in _analysis_tasks
+        )
 
         # Single-GPU: skip sub-agent decomposition — parallel LLM calls
         # serialize on Ollama, causing timeouts. Use the reasoner directly.

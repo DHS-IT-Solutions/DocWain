@@ -332,14 +332,21 @@ class RedisLogHandler(logging.Handler):
             pass  # Best-effort, never block the pipeline
 
 
-def get_live_logs(profile_id: str) -> list:
-    """Retrieve all live log entries from Redis for a profile."""
+def get_live_logs(profile_id: str, limit: int = 200) -> list:
+    """Retrieve recent live log entries from Redis for a profile.
+
+    Capped at the most recent ``limit`` entries — without the cap a
+    long-running profile accumulates thousands of entries and the
+    /api/extract/progress endpoint (which polls this every ~5s) spends
+    seconds decoding JSON for the same history over and over.
+    """
     try:
         from src.api.dw_newron import get_redis_client
         client = get_redis_client()
         if not client:
             return []
-        raw_entries = client.lrange(f"dw:live_logs:{profile_id}", 0, -1)
+        # -limit..-1 = most recent `limit` entries (Redis LRANGE is inclusive).
+        raw_entries = client.lrange(f"dw:live_logs:{profile_id}", -int(limit), -1)
         logs = []
         for raw in raw_entries:
             try:
