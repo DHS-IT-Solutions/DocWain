@@ -629,11 +629,15 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
                     classified_active = True
             else:
                 # Truly idle view — raw per-doc snapshot with no "run" semantics.
-                if ext_in_progress or status in _EXTRACT_IN_FLIGHT_STATUSES:
-                    batch_in_flight += 1
-                    classified_active = True
-                elif status == "UPLOADED":
+                # UPLOADED is the 'waiting for extraction' queue; only count
+                # docs in EXTRACTION_IN_PROGRESS / nested-IN_PROGRESS as in-flight
+                # so the progress bar moves step-wise as each doc actually
+                # starts extracting.
+                if status == "UPLOADED" and not ext_in_progress:
                     batch_queued += 1
+                    classified_active = True
+                elif ext_in_progress or status == "EXTRACTION_IN_PROGRESS":
+                    batch_in_flight += 1
                     classified_active = True
                 elif status in _EXTRACT_FAILED_STATUSES:
                     batch_failed += 1
@@ -666,13 +670,13 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     # ------------------------------------------------------------------
     # Resolve a single, unambiguous state + elapsed.
     # Semantics (what the UI can render without interpretation):
-    #   running    — a batch is actively extracting, timer ticks from start
-    #   starting   — a batch was just triggered (lock held, roster not yet
-    #                published) — timer ticks from lock acquisition
-    #   idle       — no extraction active. elapsed_time MUST be "0s" so the
-    #                UI doesn't flash a 28-hour historical span.
-    # The presence of the roster or marker is the ONLY way a batch is
-    # considered active — historical data never ticks a timer.
+    #   running    — at least one doc is actively being extracted
+    #   starting   — a batch was just triggered (lock held, roster not
+    #                yet published) — timer ticks from lock acquisition
+    #   idle       — no extraction active. elapsed_time is "0s" so the
+    #                UI doesn't flash a historical timer.
+    # Progress ticks gradually: completed / total * 100. Never 100% at
+    # kickoff — at t=0 every roster doc is queued and the ratio is 0%.
     # ------------------------------------------------------------------
     batch_has_work = bool(batch_queued or batch_in_flight)
     if roster_ids:
@@ -681,6 +685,12 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     elif marker:
         state = "starting"
         elapsed_start = float(marker.get("started_at", 0) or 0) or None
+    elif batch_has_work:
+        # No batch artefact but docs are actively extracting (upload-per-
+        # doc flow via Celery, or a stale zombie). Show running with
+        # elapsed anchored to the earliest active doc's started_at.
+        state = "running"
+        elapsed_start = batch_earliest_active_start
     else:
         state = "idle"
         elapsed_start = None
