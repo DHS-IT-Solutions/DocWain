@@ -427,7 +427,7 @@ async def lifespan(app: FastAPI):
         from src.utils.logging_utils import configure_logging
         configure_logging(
             log_level=os.getenv("LOG_LEVEL", "INFO"),
-            json_format=os.getenv("JSON_LOGGING", "true").lower() in {"1", "true", "yes"},
+            json_format=os.getenv("JSON_LOGGING", "false").lower() in {"1", "true", "yes"},
             include_correlation_id=True,
         )
     except Exception as exc:

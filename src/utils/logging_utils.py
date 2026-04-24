@@ -425,8 +425,9 @@ def configure_logging(
             encoding="utf-8",
         )
         file_handler.setLevel(level)
-        # Always use JSON for file logs (easier to parse/aggregate)
-        file_handler.setFormatter(JSONFormatter(include_extra=True))
+        # File handler follows the same formatter choice as console for consistency.
+        # Set JSON_LOGGING=true if you need structured file logs for aggregation.
+        file_handler.setFormatter(formatter)
         if correlation_filter:
             file_handler.addFilter(correlation_filter)
         root_logger.addHandler(file_handler)
