@@ -1,8 +1,6 @@
 import hashlib
 import json
 import logging
-
-from src.utils.logging_utils import get_logger
 import datetime as dt
 import os
 import re
@@ -11,6 +9,10 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from src.docwain.logging_config import apply_log_hygiene
+apply_log_hygiene()
+
+from src.utils.logging_utils import get_logger
 import ollama
 import uvicorn
 from bson.objectid import ObjectId

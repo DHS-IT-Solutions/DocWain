@@ -3,6 +3,9 @@
 import os
 from celery import Celery
 
+from src.docwain.logging_config import apply_log_hygiene
+apply_log_hygiene()
+
 
 def _build_redis_url(db: int = 0) -> str:
     """Build Redis URL from existing Config.Redis settings."""

@@ -221,7 +221,7 @@ def verify_knowledge_result(
 
     result.rejected_count += total_rejected
 
-    logger.info(
+    logger.debug(
         "[EvidenceVerifier] Verified result: entities=%d facts=%d rels=%d "
         "claims=%d rejected=%d",
         len(result.entities), len(result.facts), len(result.relationships),
