@@ -173,6 +173,18 @@ def classify_document_type(
 
     return "other", 0.5
 
+_STRUCTURED_EXTENSIONS = {
+    "csv": "report",
+    "tsv": "report",
+    "xlsx": "report",
+    "xls": "report",
+    "xlsm": "report",
+    "json": "report",
+    "jsonl": "report",
+    "parquet": "report",
+}
+
+
 def identify_document(
     *,
     extracted: Any,
@@ -196,7 +208,16 @@ def identify_document(
     except Exception:  # noqa: BLE001
         text_sample = text_sample or ""
 
-    doc_type, confidence = classify_document_type(text_sample, tables_sample, filename, model_name=model_name, llm_client=llm_client)
+    # Short-circuit structured formats — CSV/XLSX/JSON/TSV always classify as
+    # tabular reports. Running a 14B LLM just to label a spreadsheet wastes
+    # ~15s per doc with zero accuracy gain; the format *is* the signal.
+    ext = filename.rsplit(".", 1)[-1].lower() if filename and "." in filename else ""
+    if ext in _STRUCTURED_EXTENSIONS:
+        structured_type = _STRUCTURED_EXTENSIONS[ext]
+        logger.info("Heuristic classified structured file '%s' as %s (from extension)", filename, structured_type)
+        doc_type, confidence = structured_type, 0.98
+    else:
+        doc_type, confidence = classify_document_type(text_sample, tables_sample, filename, model_name=model_name, llm_client=llm_client)
 
     # Normalize to canonical domain labels for consistency across all classifiers
     try:

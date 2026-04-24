@@ -74,6 +74,38 @@ class ChunkingDiagnosticError(RuntimeError):
         super().__init__(message)
         self.diagnostics = diagnostics or {}
 
+
+# Small process-wide TTL cache to avoid hammering Mongo with identical PII
+# lookups during a batch. 18+ duplicate lookups per batch were observed in
+# production; a 5-minute TTL fits any realistic extraction batch while still
+# letting admin toggles propagate quickly.
+_PII_SETTING_CACHE: Dict[str, Tuple[float, bool]] = {}
+_PII_SETTING_TTL_SECONDS = 300
+
+
+def _pii_cache_get(subscription_id: str) -> Optional[bool]:
+    entry = _PII_SETTING_CACHE.get(subscription_id)
+    if not entry:
+        return None
+    ts, value = entry
+    if time.time() - ts > _PII_SETTING_TTL_SECONDS:
+        _PII_SETTING_CACHE.pop(subscription_id, None)
+        return None
+    return value
+
+
+def _pii_cache_set(subscription_id: str, value: bool) -> None:
+    _PII_SETTING_CACHE[subscription_id] = (time.time(), value)
+
+
+def invalidate_subscription_pii_cache(subscription_id: Optional[str] = None) -> None:
+    """Drop the cached PII setting. Call when admin changes the flag."""
+    if subscription_id is None:
+        _PII_SETTING_CACHE.clear()
+    else:
+        _PII_SETTING_CACHE.pop(subscription_id, None)
+
+
 def get_subscription_pii_setting(subscription_id: str) -> bool:
     """
     Fetch PII enabled/disabled setting from subscription in MongoDB.
@@ -85,6 +117,9 @@ def get_subscription_pii_setting(subscription_id: str) -> bool:
         bool: True if PII masking is enabled, False if disabled
         Default to True if setting not found (safe default)
     """
+    cached = _pii_cache_get(subscription_id)
+    if cached is not None:
+        return cached
     try:
         # Check if subscriptions collection exists in Config
         subscriptions_collection = getattr(Config.MongoDB, 'SUBSCRIPTIONS', 'subscriptions')
@@ -113,7 +148,9 @@ def get_subscription_pii_setting(subscription_id: str) -> bool:
             if pii_enabled is not None:
                 logger.info(
                     f"Subscription {subscription_id}: PII masking is {'ENABLED' if pii_enabled else 'DISABLED'}")
-                return bool(pii_enabled)
+                result = bool(pii_enabled)
+                _pii_cache_set(subscription_id, result)
+                return result
             else:
                 # Persist the default back so subsequent lookups don't repeat the warning
                 try:
@@ -130,17 +167,19 @@ def get_subscription_pii_setting(subscription_id: str) -> bool:
                         "Subscription %s: PII setting not found, defaulting to ENABLED (persist failed: %s)",
                         subscription_id, persist_exc,
                     )
+                _pii_cache_set(subscription_id, True)
                 return True  # Safe default - enable PII masking if not specified
         else:
             logger.info(
                 "PII masking defaulted to enabled because subscription not found (subscription_id=%s)",
                 subscription_id,
             )
+            _pii_cache_set(subscription_id, True)
             return True  # Safe default
 
     except Exception as e:
         logger.error(f"Error fetching PII setting for subscription {subscription_id}: {e}")
-        return True  # Safe default - enable PII masking on error
+        return True  # Safe default - enable PII masking on error (don't cache errors)
 
 def normalize_embedding_matrix(raw_vectors, expected_dim=None):
     """

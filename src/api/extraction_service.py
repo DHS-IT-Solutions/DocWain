@@ -1205,10 +1205,11 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
             extracted_docs=masked_docs,
         )
 
-        emit_progress(doc_id, "extraction", 0.08, "Text extracted from document")
+        emit_progress(doc_id, "extraction", 0.15, "Text extracted from document")
 
         # ── Auto-subagents: Language Detection + Translation + OCR Enhancement ──
         masked_docs = _run_extraction_subagents(doc_id, masked_docs)
+        emit_progress(doc_id, "extraction", 0.25, "Language detected")
 
         # ── LLM Deep Knowledge Extraction → KG + Redis hot cache ──
         try:
@@ -1344,7 +1345,7 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
                     doc_summary.get("domain", "general"),
                 )
 
-            emit_progress(doc_id, "extraction", 0.09, "Knowledge graph enriched")
+            emit_progress(doc_id, "extraction", 0.40, "Knowledge graph enriched")
         except ImportError:
             logger.debug("[EXTRACTION] Knowledge extractor not available — skipping KG enrichment")
         except Exception as kg_err:
@@ -1395,6 +1396,8 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
             logger.warning("Failed to run structured extraction engine for %s: %s", doc_id, exc)
             structured_docs = {}
 
+        emit_progress(doc_id, "extraction", 0.55, "Structured extraction complete")
+
         # --- Visual Intelligence Enrichment (second pass) ---
         if VISUAL_INTELLIGENCE_AVAILABLE and _raw_file_bytes:
             try:
@@ -1414,6 +1417,8 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
             except Exception as _vi_exc:
                 logger.warning("Visual intelligence enrichment skipped: %s", _vi_exc)
 
+        emit_progress(doc_id, "extraction", 0.65, "Visual intelligence complete")
+
         # Intelligence layer processing: entity extraction, Q&A generation
         intelligence_result = _process_document_intelligence(
             document_id=doc_id,
@@ -1422,6 +1427,7 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
             subscription_id=subscription_id,
             profile_id=profile_id,
         )
+        emit_progress(doc_id, "extraction", 0.80, "Entity extraction complete")
 
         # Document understanding (summary, entities, facts) — runs inline for pickle enrichment
         understanding_result = None
@@ -1450,6 +1456,8 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
                 break  # Process first document only
         except Exception as exc:
             logger.warning("Document understanding skipped for %s: %s", doc_id, exc)
+
+        emit_progress(doc_id, "extraction", 0.90, "Document understanding complete")
 
         # Deep document analysis (entity extraction, quality grading, temporal analysis)
         deep_result = None
@@ -1797,7 +1805,7 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
                     _esl(doc_id, "extraction", "extraction_completed",
                          f"Extraction completed in {elapsed}s",
                          extra={"elapsed_seconds": elapsed})
-                    emit_progress(doc_id, "extraction", 0.20, f"Extraction completed in {elapsed}s")
+                    emit_progress(doc_id, "extraction", 1.0, f"Extraction completed in {elapsed}s")
                 except Exception:
                     pass
             elif status == "CONFLICT":

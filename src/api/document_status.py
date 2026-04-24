@@ -256,15 +256,47 @@ def _format_elapsed(seconds: Optional[float]) -> str:
     return f"{hours}h {mins}m" if mins else f"{hours}h"
 
 
+_BATCH_WINDOW_SECONDS = 2 * 60 * 60  # 2h — docs started within this window are "same run"
+
+
+def _is_extraction_in_flight(doc: Dict[str, Any]) -> bool:
+    """True iff the doc is actively being extracted right now."""
+    extraction = doc.get("extraction") or {}
+    status = doc.get("status", "UNKNOWN")
+    nested = (
+        extraction.get("status") == "IN_PROGRESS"
+        and extraction.get("started_at") is not None
+        and not extraction.get("completed_at")
+    )
+    return nested or status in _EXTRACT_IN_FLIGHT_STATUSES
+
+
 def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
-    """Get comprehensive extraction status for all documents in a profile."""
+    """Get comprehensive extraction status for all documents in a profile.
+
+    The returned ``documents`` list carries every document in the profile so
+    the UI can render the full table with per-doc progress bars. The
+    aggregate in ``common_data`` is strictly **doc-count based**:
+
+        overall_progress = completed / (queued + in_flight + completed + failed) * 100
+
+    100% therefore means *every* uploaded doc has completed extraction
+    successfully and is ready for screening — never a sub-stage percentage.
+    Failed docs stay in the denominator so a partially-failed batch cannot
+    climb to 100% without retry.
+
+    Scope: the batch is anchored on the most recent extraction activity
+    (last ``_BATCH_WINDOW_SECONDS`` around latest started_at / updated_at).
+    Historical docs outside the window remain in the list but are excluded
+    from the aggregate so the progress bar always reflects the current run.
+    """
     from src.utils.logging_utils import get_live_logs
 
     collection = get_documents_collection()
     if collection is None:
         return {"documents": [], "common_data": {
             "Overall_live_logs": [], "overall_progress": 0,
-            "total_documents": 0, "in_flight": 0, "completed": 0, "failed": 0,
+            "total_documents": 0, "queued": 0, "in_flight": 0, "completed": 0, "failed": 0,
             "elapsed_time": "0s",
         }}
 
@@ -279,38 +311,58 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     ).sort("updated_at", -1))
 
     now = time.time()
+
+    # Anchor on the most recent signal of activity: latest extraction
+    # started_at, completed_at, or doc updated_at. That's what defines
+    # "the current batch" — upload → extract → queued-for-screening.
+    anchor_ts: Optional[float] = None
+    any_in_flight = False
+    for doc in docs:
+        extraction = doc.get("extraction") or {}
+        for candidate in (
+            extraction.get("started_at"),
+            extraction.get("completed_at"),
+            doc.get("updated_at"),
+            doc.get("created_at"),
+        ):
+            if isinstance(candidate, (int, float)):
+                if anchor_ts is None or candidate > anchor_ts:
+                    anchor_ts = candidate
+        if _is_extraction_in_flight(doc):
+            any_in_flight = True
+
+    batch_floor = (anchor_ts - _BATCH_WINDOW_SECONDS) if anchor_ts else None
+
     result_docs = []
-    # Aggregate counters — only in-flight docs contribute to overall_progress.
-    in_flight_count = 0
-    completed_count = 0
-    failed_count = 0
-    progress_sum = 0.0
-    earliest_start: Optional[float] = None
-    latest_end: Optional[float] = None
+    # Batch-scoped counters. "Queued" = UPLOADED, waiting to be picked up.
+    # "In-flight" = currently extracting. "Completed" = extraction done
+    # (including past-stage docs like SCREENING_COMPLETED / TRAINING_*).
+    batch_queued = 0
+    batch_in_flight = 0
+    batch_completed = 0
+    batch_failed = 0
+    batch_earliest_start: Optional[float] = None
+    batch_latest_end: Optional[float] = None
 
     for doc in docs:
         doc_id = str(doc.get("document_id") or doc.get("_id"))
         status = doc.get("status", "UNKNOWN")
 
         extraction = doc.get("extraction") or {}
-        embedding = doc.get("embedding") or {}
+        start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
+        end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
+        updated_at = doc.get("updated_at") if isinstance(doc.get("updated_at"), (int, float)) else None
+        created_at = doc.get("created_at") if isinstance(doc.get("created_at"), (int, float)) else None
 
-        # Re-extraction of an UNDER_REVIEW / EXTRACTION_FAILED doc leaves the
-        # top-level `status` unchanged but sets `extraction.status=IN_PROGRESS`.
-        # Classifying only by top-level status would bucket those as COMPLETED
-        # and falsely inflate the aggregate to 100%. Treat the nested signal
-        # as authoritative when it says work is actively running.
         ext_in_progress = (
             extraction.get("status") == "IN_PROGRESS"
-            and extraction.get("started_at") is not None
-            and not extraction.get("completed_at")
+            and start_at is not None
+            and not end_at
         )
 
         progress = _compute_document_progress(status, get_training_progress(doc_id))
         per_doc_progress = progress.get("progress", 0)
         if ext_in_progress and progress.get("source") == "derived" and per_doc_progress <= 0:
-            # Nested says running but top-level derived progress is 0
-            # (e.g. UNDER_REVIEW re-extract). Show the baseline IN_PROGRESS value.
             per_doc_progress = _STATUS_TO_PROGRESS.get("EXTRACTION_IN_PROGRESS", 10)
             progress = {
                 "progress": per_doc_progress,
@@ -319,31 +371,35 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
                 "source": "derived",
             }
 
-        # Classify doc and accumulate only in-flight progress into the aggregate.
-        if ext_in_progress or status in _EXTRACT_IN_FLIGHT_STATUSES:
-            in_flight_count += 1
-            progress_sum += per_doc_progress
-        elif status in _EXTRACT_COMPLETED_STATUSES:
-            completed_count += 1
-        elif status in _EXTRACT_FAILED_STATUSES:
-            failed_count += 1
-        # Other statuses (e.g., TRAINING_COMPLETED, past-stage docs) are visible
-        # in the per-doc list but excluded from aggregates.
-
-        # Track earliest start and latest end for elapsed time
-        start_at = extraction.get("started_at")
-        if start_at and isinstance(start_at, (int, float)):
-            if earliest_start is None or start_at < earliest_start:
-                earliest_start = start_at
-
-        end_at = (
-            doc.get("trained_at")
-            or embedding.get("completed_at")
-            or extraction.get("completed_at")
+        # A doc belongs to the current batch if it had activity inside the
+        # window. Use any of started_at / updated_at / created_at — that way
+        # UPLOADED docs (no started_at yet) still count as "queued for this
+        # batch" if they were uploaded in the same window.
+        latest_signal = max(
+            (ts for ts in (start_at, updated_at, created_at, end_at) if ts is not None),
+            default=None,
         )
-        if end_at and isinstance(end_at, (int, float)):
-            if latest_end is None or end_at > latest_end:
-                latest_end = end_at
+        in_batch = (
+            ext_in_progress
+            or (batch_floor is not None and latest_signal is not None and latest_signal >= batch_floor)
+        )
+
+        if in_batch:
+            if status == "UPLOADED" and not ext_in_progress:
+                batch_queued += 1
+            elif ext_in_progress or status in _EXTRACT_IN_FLIGHT_STATUSES:
+                batch_in_flight += 1
+            elif status in _EXTRACT_FAILED_STATUSES:
+                batch_failed += 1
+            else:
+                batch_completed += 1
+
+            if start_at is not None:
+                if batch_earliest_start is None or start_at < batch_earliest_start:
+                    batch_earliest_start = start_at
+            if end_at is not None:
+                if batch_latest_end is None or end_at > batch_latest_end:
+                    batch_latest_end = end_at
 
         result_docs.append({
             "document_id": doc_id,
@@ -351,22 +407,28 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
             "progress": progress,
         })
 
-    # Live logs: actual terminal output captured by RedisLogHandler
     live_logs = get_live_logs(profile_id)
 
-    total_docs = len(result_docs)
-    if in_flight_count:
-        overall_progress = round(progress_sum / in_flight_count, 1)
-    elif completed_count and not failed_count:
-        overall_progress = 100.0
+    total_docs = batch_queued + batch_in_flight + batch_completed + batch_failed
+    if total_docs == 0:
+        # No batch activity — fall back to the raw doc count so the UI shows
+        # something reasonable for a freshly-created profile.
+        total_docs = len(result_docs)
+
+    # Doc-count-based progress: 100% = every doc extraction-complete.
+    # Failed docs stay in the denominator so they hold the bar below 100
+    # until the user retries.
+    if total_docs > 0:
+        overall_progress = round((batch_completed / total_docs) * 100, 1)
     else:
         overall_progress = 0.0
 
-    # Elapsed time: from earliest start to latest end (or now if still running)
+    # Elapsed: from the earliest extraction.started_at in this batch until
+    # now (active run) or latest completed_at (finished run).
     elapsed_seconds: Optional[float] = None
-    if earliest_start:
-        end_ref = latest_end or now
-        elapsed_seconds = round(end_ref - earliest_start, 1)
+    if batch_earliest_start:
+        end_ref = now if (any_in_flight or batch_queued or batch_in_flight) else (batch_latest_end or now)
+        elapsed_seconds = round(end_ref - batch_earliest_start, 1)
 
     return {
         "documents": result_docs,
@@ -374,9 +436,10 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
             "Overall_live_logs": live_logs,
             "overall_progress": overall_progress,
             "total_documents": total_docs,
-            "in_flight": in_flight_count,
-            "completed": completed_count,
-            "failed": failed_count,
+            "queued": batch_queued,
+            "in_flight": batch_in_flight,
+            "completed": batch_completed,
+            "failed": batch_failed,
             "elapsed_time": _format_elapsed(elapsed_seconds),
         },
     }
