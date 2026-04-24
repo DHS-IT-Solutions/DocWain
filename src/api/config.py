@@ -137,6 +137,12 @@ class Config:
     class KG:
         """Knowledge Graph feature flags (Wave 1)."""
         ENTITY_EXTRACTION_ENABLED = os.getenv("DOCWAIN_KG_ENTITY_EXTRACTION_ENABLED", "true").lower() == "true"
+        # When True, the LLM-based knowledge extraction (entities/facts/
+        # relationships/claims) runs as a Celery task after the doc is
+        # marked EXTRACTION_COMPLETED, instead of inline in the extraction
+        # critical path. Cuts per-doc user-visible latency by ~50-75%.
+        # Set False to revert to the legacy inline behaviour.
+        EXTRACTION_ASYNC = os.getenv("DOCWAIN_KG_EXTRACTION_ASYNC", "true").lower() == "true"
 
     class Researcher:
         """Researcher Agent feature flags (Wave 1)."""

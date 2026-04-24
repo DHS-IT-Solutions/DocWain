@@ -51,6 +51,7 @@ app.config_from_object({
         "src.tasks.extraction.extract_document": {"queue": "extraction_queue"},
         "src.tasks.screening.screen_document": {"queue": "screening_queue"},
         "src.tasks.kg.build_knowledge_graph": {"queue": "kg_queue"},
+        "src.tasks.kg_extract.run_knowledge_extraction": {"queue": "kg_queue"},
         "src.tasks.embedding.embed_document": {"queue": "embedding_queue"},
         "src.tasks.researcher.run_researcher_agent": {"queue": "researcher_queue"},
         "src.tasks.backfill.backfill_kg_refs": {"queue": "backfill_queue"},
@@ -106,6 +107,7 @@ except Exception:
     pass
 
 app.autodiscover_tasks(["src.tasks.extraction", "src.tasks.screening",
-                         "src.tasks.kg", "src.tasks.embedding",
+                         "src.tasks.kg", "src.tasks.kg_extract",
+                         "src.tasks.embedding",
                          "src.tasks.backfill", "src.tasks.researcher",
                          "src.tasks.researcher_refresh"])

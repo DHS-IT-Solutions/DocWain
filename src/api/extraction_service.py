@@ -1222,145 +1222,119 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
         masked_docs = _run_extraction_subagents(doc_id, masked_docs)
         emit_progress(doc_id, "extraction", 0.25, "Language detected")
 
-        # ── LLM Deep Knowledge Extraction → KG + Redis hot cache ──
-        try:
-            from src.intelligence.knowledge_extractor import get_knowledge_extractor
-            from src.intelligence.evidence_verifier import verify_knowledge_result
-            from src.intelligence.hot_cache import cache_document_knowledge, recompute_profile_domain
+        # ── LLM Deep Knowledge Extraction (LEGACY INLINE PATH) ──
+        # When Config.KG.EXTRACTION_ASYNC is True (default), the LLM-heavy
+        # extract+verify work is dispatched to src.tasks.kg_extract.run_
+        # knowledge_extraction after EXTRACTION_COMPLETED — see the
+        # dispatch site below near `_mark_intelligence_ready`. This keeps
+        # the per-doc critical path at ~40-80s instead of 100-150s.
+        # Set DOCWAIN_KG_EXTRACTION_ASYNC=false to restore inline behaviour.
+        if not getattr(Config.KG, "EXTRACTION_ASYNC", True):
+            try:
+                from src.intelligence.knowledge_extractor import get_knowledge_extractor
+                from src.intelligence.evidence_verifier import verify_knowledge_result
+                from src.intelligence.hot_cache import cache_document_knowledge, recompute_profile_domain
 
-            extractor = get_knowledge_extractor()
-            for fname, content in masked_docs.items():
-                full_text = ""
-                if isinstance(content, dict):
-                    full_text = content.get("translated_text") or content.get("full_text", "")
-                elif isinstance(content, str):
-                    full_text = content
-                if not full_text or len(full_text.strip()) < 100:
-                    continue
+                extractor = get_knowledge_extractor()
+                for fname, content in masked_docs.items():
+                    full_text = ""
+                    if isinstance(content, dict):
+                        full_text = content.get("translated_text") or content.get("full_text", "")
+                    elif isinstance(content, str):
+                        full_text = content
+                    if not full_text or len(full_text.strip()) < 100:
+                        continue
 
-                # Extract knowledge from sections or full text
-                sections_data = []
-                if isinstance(content, dict) and content.get("sections"):
-                    for sec in content["sections"]:
-                        if isinstance(sec, dict) and sec.get("text"):
-                            sections_data.append(sec)
-                if not sections_data:
-                    # Split into ~2000 char chunks for extraction
-                    chunk_size = 2000
-                    for i in range(0, len(full_text), chunk_size):
-                        sections_data.append({
-                            "text": full_text[i:i + chunk_size],
-                            "page": (i // chunk_size) + 1,
-                            "section_title": f"Section {(i // chunk_size) + 1}",
-                        })
+                    sections_data = []
+                    if isinstance(content, dict) and content.get("sections"):
+                        for sec in content["sections"]:
+                            if isinstance(sec, dict) and sec.get("text"):
+                                sections_data.append(sec)
+                    if not sections_data:
+                        chunk_size = 2000
+                        for i in range(0, len(full_text), chunk_size):
+                            sections_data.append({
+                                "text": full_text[i:i + chunk_size],
+                                "page": (i // chunk_size) + 1,
+                                "section_title": f"Section {(i // chunk_size) + 1}",
+                            })
 
-                all_entities = []
-                all_facts = []
-                all_relationships = []
-                all_claims = []
+                    all_entities, all_facts, all_relationships, all_claims = [], [], [], []
+                    capped_sections = sections_data[:15]
+                    _kg_max_workers = min(len(capped_sections), int(os.getenv("KG_EXTRACTION_MAX_WORKERS", "4")))
 
-                # Parallel KG extraction across sections using ThreadPoolExecutor
-                capped_sections = sections_data[:15]  # Cap at 15 sections
-                _kg_max_workers = min(len(capped_sections), int(os.getenv("KG_EXTRACTION_MAX_WORKERS", "4")))
-
-                def _extract_and_verify(sec):
-                    """Extract knowledge from a single section and verify."""
-                    result = extractor.extract_section(
-                        text=sec.get("text", ""),
-                        page=sec.get("start_page", sec.get("page", 1)),
-                        section=sec.get("title", sec.get("section_title", "unknown")),
-                    )
-                    source_text = sec.get("text", "")
-                    return verify_knowledge_result(result, source_text)
-
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                section_results = []
-                with ThreadPoolExecutor(max_workers=_kg_max_workers) as kg_executor:
-                    future_to_sec = {
-                        kg_executor.submit(_extract_and_verify, sec): sec
-                        for sec in capped_sections
-                    }
-                    for future in as_completed(future_to_sec):
-                        sec = future_to_sec[future]
-                        try:
-                            result = future.result()
-                            section_results.append(result)
-                        except Exception as sec_err:
-                            sec_title = sec.get("title", sec.get("section_title", "unknown"))
-                            logger.warning(
-                                "[EXTRACTION] KG section extraction failed for %s section=%s: %s",
-                                doc_id, sec_title, sec_err,
-                            )
-
-                for result in section_results:
-                    for ent in result.entities:
-                        all_entities.append({
-                            "name": ent.name, "type": ent.type,
-                            "context": ent.context, "evidence": ent.evidence,
-                            "confidence": ent.confidence, "location": ent.location,
-                        })
-                    for fact in result.facts:
-                        all_facts.append({
-                            "statement": fact.statement, "evidence": fact.evidence,
-                            "confidence": fact.confidence, "location": fact.location,
-                        })
-                    for rel in result.relationships:
-                        all_relationships.append({
-                            "subject": rel.subject, "object": rel.object,
-                            "relation": rel.relation, "evidence": rel.evidence,
-                            "confidence": rel.confidence,
-                        })
-                    for claim in result.claims:
-                        all_claims.append({
-                            "claim": claim.claim, "evidence": claim.evidence,
-                            "confidence": claim.confidence,
-                        })
-
-                # Generate document summary
-                doc_summary = extractor.generate_document_summary(full_text)
-
-                # Store in content for downstream KG ingestion
-                if isinstance(content, dict):
-                    content["kg_entities"] = all_entities
-                    content["kg_facts"] = all_facts
-                    content["kg_relationships"] = all_relationships
-                    content["kg_claims"] = all_claims
-                    content["kg_summary"] = doc_summary
-                    content["detected_domain"] = doc_summary.get("domain", "general")
-
-                # Cache in Redis hot cache
-                try:
-                    from src.api.rag_state import get_app_state
-                    app_state = get_app_state()
-                    redis_client = getattr(app_state, "redis_client", None) if app_state else None
-                    if redis_client:
-                        cache_document_knowledge(
-                            redis_client=redis_client,
-                            profile_id=profile_id,
-                            doc_id=doc_id,
-                            entities=all_entities,
-                            facts=all_facts,
-                            claims=all_claims,
-                            relationships=all_relationships,
-                            domain=doc_summary.get("domain", "general"),
-                            summary=doc_summary.get("summary", ""),
+                    def _extract_and_verify(sec):
+                        result = extractor.extract_section(
+                            text=sec.get("text", ""),
+                            page=sec.get("start_page", sec.get("page", 1)),
+                            section=sec.get("title", sec.get("section_title", "unknown")),
                         )
-                        recompute_profile_domain(redis_client, profile_id)
-                except Exception as cache_err:
-                    logger.debug("[EXTRACTION] Redis cache write failed (non-fatal): %s", cache_err)
+                        return verify_knowledge_result(result, sec.get("text", ""))
 
-                logger.info(
-                    "[EXTRACTION] KG extraction for %s: entities=%d facts=%d rels=%d claims=%d domain=%s",
-                    doc_id, len(all_entities), len(all_facts),
-                    len(all_relationships), len(all_claims),
-                    doc_summary.get("domain", "general"),
-                )
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    section_results = []
+                    with ThreadPoolExecutor(max_workers=_kg_max_workers) as kg_executor:
+                        futs = {kg_executor.submit(_extract_and_verify, s): s for s in capped_sections}
+                        for fut in as_completed(futs):
+                            try:
+                                section_results.append(fut.result())
+                            except Exception as sec_err:
+                                logger.warning("[EXTRACTION] KG section failed for %s: %s", doc_id, sec_err)
 
-            emit_progress(doc_id, "extraction", 0.40, "Knowledge graph enriched")
-        except ImportError:
-            logger.debug("[EXTRACTION] Knowledge extractor not available — skipping KG enrichment")
-        except Exception as kg_err:
-            logger.warning("[EXTRACTION] KG enrichment failed (non-fatal): %s", kg_err)
+                    for result in section_results:
+                        for ent in result.entities:
+                            all_entities.append({"name": ent.name, "type": ent.type, "context": ent.context,
+                                                 "evidence": ent.evidence, "confidence": ent.confidence,
+                                                 "location": ent.location})
+                        for fact in result.facts:
+                            all_facts.append({"statement": fact.statement, "evidence": fact.evidence,
+                                              "confidence": fact.confidence, "location": fact.location})
+                        for rel in result.relationships:
+                            all_relationships.append({"subject": rel.subject, "object": rel.object,
+                                                      "relation": rel.relation, "evidence": rel.evidence,
+                                                      "confidence": rel.confidence})
+                        for claim in result.claims:
+                            all_claims.append({"claim": claim.claim, "evidence": claim.evidence,
+                                               "confidence": claim.confidence})
+
+                    doc_summary = extractor.generate_document_summary(full_text)
+                    if isinstance(content, dict):
+                        content["kg_entities"] = all_entities
+                        content["kg_facts"] = all_facts
+                        content["kg_relationships"] = all_relationships
+                        content["kg_claims"] = all_claims
+                        content["kg_summary"] = doc_summary
+                        content["detected_domain"] = doc_summary.get("domain", "general")
+
+                    try:
+                        from src.api.rag_state import get_app_state
+                        app_state = get_app_state()
+                        redis_client = getattr(app_state, "redis_client", None) if app_state else None
+                        if redis_client:
+                            cache_document_knowledge(
+                                redis_client=redis_client, profile_id=profile_id, doc_id=doc_id,
+                                entities=all_entities, facts=all_facts, claims=all_claims,
+                                relationships=all_relationships,
+                                domain=doc_summary.get("domain", "general"),
+                                summary=doc_summary.get("summary", ""),
+                            )
+                            recompute_profile_domain(redis_client, profile_id)
+                    except Exception as cache_err:
+                        logger.debug("[EXTRACTION] Redis cache write failed: %s", cache_err)
+
+                    logger.info(
+                        "[EXTRACTION inline-KG] doc=%s entities=%d facts=%d rels=%d claims=%d",
+                        doc_id, len(all_entities), len(all_facts),
+                        len(all_relationships), len(all_claims),
+                    )
+                emit_progress(doc_id, "extraction", 0.40, "Knowledge graph enriched")
+            except ImportError:
+                logger.debug("[EXTRACTION] KG extractor unavailable — skipping")
+            except Exception as kg_err:
+                logger.warning("[EXTRACTION] KG inline failed (non-fatal): %s", kg_err)
+        else:
+            # Async path: skip inline work, dispatch happens after pickle save.
+            emit_progress(doc_id, "extraction", 0.40, "Knowledge graph (async)")
 
         # Structured extraction: build structured JSON from masked/raw text and persist alongside raw extraction
         try:
@@ -1603,6 +1577,22 @@ def _extract_from_connector(doc_id: str, doc_data: Dict[str, Any], conn_data: Di
         update_stage(doc_id, "extraction", {"status": "COMPLETED", "completed_at": time.time(), "error": None})
 
         # KG ingestion moved to the training-stage background service (spec: 2026-04-23-extraction-accuracy-design.md §6.1).
+
+        # Dispatch async LLM knowledge extraction (entities/facts/relationships/
+        # claims + hot cache write) now that the pickle is persisted. This
+        # keeps the user-visible extraction time at ~40-80s; KG enrichment
+        # lands in Redis + Mongo before screening is triggered. Skipped when
+        # Config.KG.EXTRACTION_ASYNC is False (legacy inline above did the work).
+        if getattr(Config.KG, "EXTRACTION_ASYNC", True):
+            try:
+                from src.tasks.kg_extract import run_knowledge_extraction
+                run_knowledge_extraction.delay(doc_id, subscription_id, profile_id)
+                logger.info("KG extraction dispatched async for %s", doc_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "KG extraction async dispatch failed for %s (continuing): %s",
+                    doc_id, exc,
+                )
 
         # HITL: No auto-embedding. Document stays at EXTRACTION_COMPLETED.
         # User must manually trigger screening then embedding.
@@ -2300,6 +2290,19 @@ def extract_uploaded_document(
     update_stage(document_id, "extraction", {"status": "COMPLETED", "completed_at": time.time(), "error": None})
 
     # KG ingestion moved to the training-stage background service (spec: 2026-04-23-extraction-accuracy-design.md §6.1).
+
+    # Async LLM knowledge extraction — see the sibling dispatch in
+    # _extract_from_connector for rationale.
+    if getattr(Config.KG, "EXTRACTION_ASYNC", True):
+        try:
+            from src.tasks.kg_extract import run_knowledge_extraction
+            run_knowledge_extraction.delay(document_id, subscription_id, profile_id)
+            logger.info("KG extraction dispatched async for %s", document_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "KG extraction async dispatch failed for %s (continuing): %s",
+                document_id, exc,
+            )
 
     # HITL: No auto-embedding. Document stays at EXTRACTION_COMPLETED.
     # User must manually trigger screening then embedding.
