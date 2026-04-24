@@ -196,10 +196,15 @@ def run_researcher_agent(self, document_id: str, subscription_id: str, profile_i
         _write_insights_to_qdrant(document_id, subscription_id, profile_id, insights)
         _write_insight_to_neo4j(document_id, insights)
 
+        # Persist the full insight payload on the Mongo record so a single
+        # API call can return everything without touching Qdrant / Neo4j.
+        # Keeps the existing summary_preview + confidence fields for
+        # backward-compatible list views.
         _set_researcher_status(
             document_id, RESEARCHER_COMPLETED,
             summary_preview=(insights.get("summary") or "")[:200],
             confidence=float(insights.get("confidence", 0.0)),
+            insights=insights,
             elapsed_ms=(_time.perf_counter() - started_at) * 1000.0,
             completed_at=_time.time(),
         )

@@ -318,6 +318,57 @@ def get_document_summary(
     return ""
 
 
+def get_prevalent_entities(
+    redis_client,
+    profile_id: str,
+    min_doc_count: int = 2,
+    limit: int = 50,
+    entity_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Entities that appear in >=*min_doc_count* documents of this profile.
+
+    Returns a list sorted by doc_count desc:
+        [{name, type, context, doc_count, doc_ids}]
+
+    Used by the profile-insights API to surface "the vendors / parties /
+    topics that matter across this corpus" without an LLM round trip.
+    Data already lives in the Redis hot-cache written at ingestion by
+    ``cache_document_knowledge``.
+    """
+    if not redis_client:
+        return []
+    ent_key = _key(profile_id, "entities")
+    try:
+        all_entities = redis_client.hgetall(ent_key) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[HotCache] prevalent-entities read failed: %s", exc)
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for name, raw in all_entities.items():
+        try:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+        except Exception:
+            continue
+        doc_ids = data.get("doc_ids") or []
+        if len(doc_ids) < min_doc_count:
+            continue
+        if entity_type and data.get("type") != entity_type:
+            continue
+        results.append({
+            "name": name.decode("utf-8", errors="ignore") if isinstance(name, bytes) else name,
+            "type": data.get("type"),
+            "context": data.get("context"),
+            "doc_count": len(doc_ids),
+            "doc_ids": doc_ids[:20],  # cap per entity to keep response small
+        })
+
+    results.sort(key=lambda x: (-x["doc_count"], x["name"]))
+    return results[:limit]
+
+
 def get_profile_domain(redis_client, profile_id: str) -> str:
     """Get the dominant domain for a profile."""
     if not redis_client:

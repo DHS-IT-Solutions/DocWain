@@ -23,6 +23,7 @@ async def get_document_status(document_id: str):
     if not record:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    researcher = record.get("researcher") or {}
     return {
         "document_id": record.get("document_id"),
         "pipeline_status": record.get("pipeline_status"),
@@ -42,7 +43,45 @@ async def get_document_status(document_id: str):
         "embedding": {
             "status": record.get("embedding", {}).get("status"),
             "summary": record.get("embedding", {}).get("summary"),
-        }
+        },
+        # Researcher Agent strand — populated post-embedding. Returns the
+        # high-level status + confidence + summary_preview so the UI can
+        # render "Insights ready" without hitting a second endpoint.
+        # The full payload (key_facts, anomalies, recommendations, etc.)
+        # is at GET /api/documents/{id}/researcher.
+        "researcher": {
+            "status": researcher.get("status"),
+            "summary_preview": researcher.get("summary_preview"),
+            "confidence": researcher.get("confidence"),
+            "updated_at": researcher.get("updated_at"),
+        },
+    }
+
+
+@pipeline_router.get("/{document_id}/researcher")
+async def get_document_researcher(document_id: str):
+    """Return the full Researcher Agent insights for a document.
+
+    Shape of ``insights``:
+      summary (str), key_facts (list[str]), entities (list[dict]),
+      recommendations (list[str]), anomalies (list[str]),
+      questions_to_ask (list[str]), confidence (float).
+    """
+    record = get_document_record(document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found")
+    researcher = record.get("researcher") or {}
+    return {
+        "document_id": record.get("document_id"),
+        "status": researcher.get("status"),
+        "summary_preview": researcher.get("summary_preview"),
+        "confidence": researcher.get("confidence"),
+        "insights": researcher.get("insights") or {},
+        "started_at": researcher.get("started_at"),
+        "completed_at": researcher.get("completed_at"),
+        "updated_at": researcher.get("updated_at"),
+        "elapsed_ms": researcher.get("elapsed_ms"),
+        "error": researcher.get("error"),
     }
 
 
