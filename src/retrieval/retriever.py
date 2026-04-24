@@ -29,6 +29,12 @@ class EvidenceChunk:
     chunk_id: str
     chunk_type: str = "text"
     profile_name: str = ""
+    # Filename + doc_type signals. Many profile layouts encode category or
+    # vendor in the filename (e.g. PO8_Apparel_Invoice_*.pdf) — the
+    # reasoner prompt now emits these as evidence headers so the LLM can
+    # pick up on them instead of hallucinating "not specified".
+    source_file: str = ""
+    doc_type: str = ""
 
 
 @dataclass
@@ -262,10 +268,15 @@ class UnifiedRetriever:
         provenance = payload.get("provenance") or {}
 
         text = payload.get("canonical_text") or payload.get("embedding_text") or ""
-        source_name = (
-            payload.get("source_name")
-            or provenance.get("source_file")
+        source_file = (
+            provenance.get("source_file")
             or payload.get("source_file")
+            or ""
+        )
+        source_name = payload.get("source_name") or source_file or ""
+        doc_type = (
+            payload.get("doc_type")
+            or (payload.get("doc_intelligence") or {}).get("document_type")
             or ""
         )
 
@@ -280,4 +291,6 @@ class UnifiedRetriever:
             score=getattr(point, "score", 0.0) or 0.0,
             chunk_id=chunk_meta.get("id", ""),
             chunk_type=chunk_meta.get("type", "text"),
+            source_file=source_file,
+            doc_type=doc_type,
         )

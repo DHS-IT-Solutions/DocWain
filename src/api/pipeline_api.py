@@ -85,6 +85,37 @@ async def get_document_researcher(document_id: str):
     }
 
 
+@pipeline_router.post("/{document_id}/researcher/run")
+async def run_document_researcher(document_id: str):
+    """Manually trigger (or re-run) the Researcher Agent for a document.
+
+    Returns immediately — the task runs async on the Celery researcher_queue.
+    Used by the UI 'Regenerate insights' action and by the profile-level
+    backfill endpoint.
+    """
+    record = get_document_record(document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found")
+    subscription_id = record.get("subscription_id") or ""
+    profile_id = record.get("profile_id") or ""
+    if not subscription_id or not profile_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Document missing subscription_id/profile_id; cannot dispatch Researcher Agent",
+        )
+    try:
+        from src.tasks.researcher import run_researcher_agent
+        task = run_researcher_agent.delay(document_id, subscription_id, profile_id)
+        return {
+            "document_id": document_id,
+            "dispatched": True,
+            "task_id": getattr(task, "id", None),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Researcher dispatch failed for %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail=f"dispatch failed: {exc}")
+
+
 @pipeline_router.get("/{document_id}/extraction")
 async def get_extraction_summary(document_id: str):
     """Get extraction summary from MongoDB (for UI review)."""

@@ -103,6 +103,10 @@ def build_context(
             "document_id": chunk.document_id,
             "profile_id": chunk.profile_id,
             "chunk_id": chunk.chunk_id,
+            # Gap C: surface filename + doc_type to the reasoner prompt so
+            # the LLM doesn't miss literal filename signals.
+            "source_file": getattr(chunk, "source_file", "") or chunk.source_name,
+            "doc_type": getattr(chunk, "doc_type", ""),
         })
         if chunk.document_id and chunk.document_id not in seen_doc_ids:
             seen_doc_ids.append(chunk.document_id)

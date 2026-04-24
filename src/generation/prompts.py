@@ -30,6 +30,14 @@ _SYSTEM_PROMPT = (
     "Check the key_sections, key_facts, and key_values fields thoroughly "
     "before reporting 'not found'. Cross-reference ALL subsections. "
     "Never generate plausible-sounding but fake data.\n"
+    "5b. PRE-COMPUTED ANALYSIS SIGNALS (when present) are deterministic "
+    "aggregations from the ingestion pipeline — document counts by type, "
+    "prevalent entities with their exact doc-count, pre-detected anomalies, "
+    "pre-generated recommendations. On analysis questions (anomalies, "
+    "percentages, distributions, rankings, trends) these are the authoritative "
+    "source. Do NOT say 'no anomalies' if the section lists anomalies. "
+    "Do NOT say 'not specified' if the section gives counts. Quote the "
+    "numbers from this section verbatim when asked.\n"
     "6. When evidence is thin, say so naturally: 'The documents address X in "
     "detail but don't cover Y specifically.'\n"
     "7. Do not list sources inline with [SOURCE-N] tags. Sources are provided "
@@ -447,6 +455,61 @@ def build_reason_prompt(
         parts.append("--- END DOCUMENT INTELLIGENCE ---")
         parts.append("")
 
+    # --- PRE-COMPUTED ANALYSIS SIGNALS ---
+    # Deterministic aggregations from Redis hot-cache + Mongo Researcher
+    # Agent outputs. When these are present, the model must defer to them
+    # rather than asserting "no anomalies" or "not specified" on questions
+    # the data literally answers. Injected by CoreAgent._build_analysis_context
+    # only for analysis-intent tasks.
+    analysis_signals = doc_context.get("analysis_signals") if doc_context else None
+    if analysis_signals:
+        parts.append("--- PRE-COMPUTED ANALYSIS SIGNALS (GROUND TRUTH — use these to answer analysis questions) ---")
+        total = analysis_signals.get("total_documents")
+        if total is not None:
+            parts.append(f"Total documents in profile: {total}")
+        dom = analysis_signals.get("dominant_domain")
+        if dom:
+            parts.append(f"Dominant domain: {dom}")
+
+        counts_by_type = analysis_signals.get("document_counts_by_type") or {}
+        if counts_by_type:
+            parts.append("Document counts by type:")
+            for t, n in sorted(counts_by_type.items(), key=lambda x: -x[1]):
+                parts.append(f"  - {t}: {n}")
+
+        prevalent = analysis_signals.get("prevalent_entities") or {}
+        if prevalent:
+            parts.append("Prevalent entities (appearing in multiple documents):")
+            for etype, ents in prevalent.items():
+                # Cap per bucket to keep prompt bounded.
+                top = ents[:10]
+                if not top:
+                    continue
+                parts.append(f"  {etype}:")
+                for ent in top:
+                    parts.append(f"    - {ent.get('name')} (in {ent.get('doc_count')} docs)")
+
+        anomalies = analysis_signals.get("researcher_anomalies") or []
+        if anomalies:
+            parts.append("Researcher-detected anomalies (per document):")
+            for a in anomalies[:25]:
+                parts.append(f"  - [{a.get('document','?')}] {a.get('anomaly')}")
+
+        recs = analysis_signals.get("researcher_recommendations") or []
+        if recs:
+            parts.append("Researcher recommendations:")
+            for r in recs[:25]:
+                parts.append(f"  - [{r.get('document','?')}] {r.get('recommendation')}")
+
+        qs = analysis_signals.get("researcher_questions") or []
+        if qs:
+            parts.append("Researcher open questions:")
+            for q in qs[:15]:
+                parts.append(f"  - [{q.get('document','?')}] {q.get('question')}")
+
+        parts.append("--- END ANALYSIS SIGNALS ---")
+        parts.append("")
+
     # Evidence block
     parts.append("--- EVIDENCE ---")
     if evidence:
@@ -457,8 +520,20 @@ def build_reason_prompt(
             page = item.get("page", "")
             score = item.get("score", 0)
             text = item.get("text", "")
+            # Filename signals category/vendor in many profiles (e.g.
+            # PO8_Apparel_Invoice_*.pdf). Surface doc_type + source_file
+            # explicitly so the LLM doesn't miss what's literally in the
+            # filename — this was a live failure mode in the UAT battery
+            # (query "what % are Apparel vs Furniture" returned "not
+            # specified" because filenames were never in context).
+            source_file = item.get("source_file") or item.get("document_name") or name
+            doc_type = item.get("doc_type") or ""
 
             header_parts = [f"[SOURCE-{idx}]", name]
+            if source_file and source_file != name:
+                header_parts.append(f"| File: {source_file}")
+            if doc_type:
+                header_parts.append(f"| Type: {doc_type}")
             if section:
                 header_parts.append(f"| Section: {section}")
             if page:
@@ -542,8 +617,16 @@ def build_subagent_prompt(
             name = item.get("source_name", "unknown")
             score = item.get("score", 0)
             text = item.get("text", "")
+            source_file = item.get("source_file") or item.get("document_name") or name
+            doc_type = item.get("doc_type") or ""
 
-            parts.append(f"[SOURCE-{idx}] {name} (relevance: {score:.2f})")
+            header = f"[SOURCE-{idx}] {name}"
+            if source_file and source_file != name:
+                header += f" | File: {source_file}"
+            if doc_type:
+                header += f" | Type: {doc_type}"
+            header += f" (relevance: {score:.2f})"
+            parts.append(header)
             parts.append(text)
             parts.append("")
     else:

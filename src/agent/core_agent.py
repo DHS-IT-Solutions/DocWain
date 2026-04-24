@@ -109,6 +109,126 @@ _META_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 
+def _build_analysis_context(
+    profile_id: str,
+    subscription_id: Optional[str],
+    query: str,
+) -> Optional[Dict[str, Any]]:
+    """Assemble a deterministic "analysis_signals" dict for the reasoner.
+
+    Pulls from pre-computed ingestion-time artefacts — zero new LLM calls:
+
+      * Hot cache: prevalent entities (docs where each entity appears),
+        top relationships by confidence, dominant profile domain.
+      * Mongo ``researcher.*`` strand: every doc's anomalies +
+        recommendations + questions_to_ask, tagged with source doc.
+
+    The reasoner prompt ingests this as "PRE-COMPUTED ANALYSIS SIGNALS"
+    so when the user asks "are there anomalies?" the model answers from
+    ground truth instead of generating "no anomalies detected".
+    """
+    if not profile_id:
+        return None
+    out: Dict[str, Any] = {}
+    try:
+        from src.api.dw_newron import get_redis_client
+        from src.intelligence.hot_cache import (
+            get_prevalent_entities, get_profile_domain, get_top_relationships,
+        )
+        redis_client = get_redis_client()
+        if redis_client:
+            dominant = get_profile_domain(redis_client, profile_id)
+            if dominant and dominant != "general":
+                out["dominant_domain"] = dominant
+            entities = get_prevalent_entities(
+                redis_client, profile_id, min_doc_count=2, limit=40,
+            ) or []
+            if entities:
+                bucketed: Dict[str, List[Dict[str, Any]]] = {}
+                for ent in entities:
+                    bucketed.setdefault(ent.get("type") or "other", []).append({
+                        "name": ent.get("name"),
+                        "doc_count": ent.get("doc_count"),
+                    })
+                out["prevalent_entities"] = bucketed
+            rels = get_top_relationships(redis_client, profile_id, limit=15) or []
+            if rels:
+                out["top_relationships"] = [
+                    {k: v for k, v in r.items() if k in {"subject","object","relation","relation_type","confidence"}}
+                    for r in rels[:15]
+                ]
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        from src.api.document_status import get_documents_collection
+        docs_col = get_documents_collection()
+        if docs_col is not None:
+            cursor = docs_col.find(
+                {
+                    "profile_id": profile_id,
+                    "researcher.status": "RESEARCHER_COMPLETED",
+                },
+                {"document_id": 1, "source_file": 1, "researcher": 1},
+            )
+            anomalies: List[Dict[str, Any]] = []
+            recommendations: List[Dict[str, Any]] = []
+            questions: List[Dict[str, Any]] = []
+            for d in cursor:
+                researcher = d.get("researcher") or {}
+                insights = researcher.get("insights") or {}
+                doc_id = str(d.get("document_id") or d.get("_id"))
+                doc_name = d.get("source_file") or ""
+                confidence = researcher.get("confidence")
+                for a in (insights.get("anomalies") or [])[:5]:
+                    anomalies.append({"document": doc_name, "document_id": doc_id,
+                                      "confidence": confidence, "anomaly": a})
+                for r in (insights.get("recommendations") or [])[:5]:
+                    recommendations.append({"document": doc_name, "document_id": doc_id,
+                                            "confidence": confidence, "recommendation": r})
+                for q in (insights.get("questions_to_ask") or [])[:3]:
+                    questions.append({"document": doc_name, "document_id": doc_id,
+                                      "question": q})
+            if anomalies:
+                out["researcher_anomalies"] = anomalies[:40]
+            if recommendations:
+                out["researcher_recommendations"] = recommendations[:40]
+            if questions:
+                out["researcher_questions"] = questions[:20]
+
+            # --- Cross-doc aggregation (Gap B): counts by doc_type / status.
+            # Deterministic group-bys, no LLM, using fields already in the
+            # Mongo record. Covers "how many X?" and "what's the mix of doc
+            # types?" without needing a new query planner.
+            all_docs = list(docs_col.find(
+                {"profile_id": profile_id},
+                {"status": 1, "document_type": 1, "doc_type": 1,
+                 "understanding.document_type": 1, "metadata.doc_intel.doc_type_hint": 1},
+            ))
+            by_type: Dict[str, int] = {}
+            by_status: Dict[str, int] = {}
+            for d in all_docs:
+                t = (
+                    d.get("document_type")
+                    or d.get("doc_type")
+                    or ((d.get("understanding") or {}).get("document_type"))
+                    or (((d.get("metadata") or {}).get("doc_intel") or {}).get("doc_type_hint"))
+                    or "unknown"
+                )
+                by_type[t] = by_type.get(t, 0) + 1
+                s = d.get("status") or "UNKNOWN"
+                by_status[s] = by_status.get(s, 0) + 1
+            if by_type:
+                out["document_counts_by_type"] = by_type
+            if by_status:
+                out["document_counts_by_status"] = by_status
+            out["total_documents"] = len(all_docs)
+    except Exception:  # noqa: BLE001
+        pass
+
+    return out or None
+
+
 class CoreAgent:
     """Orchestrates the full UNDERSTAND -> RETRIEVE -> REASON -> COMPOSE pipeline."""
 
@@ -594,6 +714,34 @@ class CoreAgent:
                     )
                 else:
                     doc_context["doc_intelligence_summaries"] = doc_intelligence_entries
+
+        # --- Inject structured profile-level intelligence ---
+        # Gap A (anomaly surfacing) + Gap B (cross-doc aggregation).
+        # On analysis-intent queries, pull pre-computed signals from the
+        # Redis hot-cache and Researcher Agent into doc_context so the
+        # reasoner stops hallucinating "no anomalies detected" or
+        # "percentages not specified" when the data literally exists.
+        # Zero extra LLM round trip — deterministic pulls only.
+        try:
+            import os as _os
+            if _os.getenv("DOCWAIN_ANALYSIS_INJECT", "true").lower() in {"1", "true", "yes"} and \
+               understanding.task_type in {"compare", "summarize", "overview", "investigate", "aggregate", "analyze", "list"}:
+                _analysis = _build_analysis_context(
+                    profile_id=profile_id,
+                    subscription_id=subscription_id,
+                    query=understanding.resolved_query,
+                )
+                if _analysis:
+                    doc_context["analysis_signals"] = _analysis
+                    logger.info(
+                        "[ANALYSIS_INJECT] task=%s entity_buckets=%d anomalies=%d recommendations=%d",
+                        understanding.task_type,
+                        len(_analysis.get("prevalent_entities") or {}),
+                        len(_analysis.get("researcher_anomalies") or []),
+                        len(_analysis.get("researcher_recommendations") or []),
+                    )
+        except Exception as _inj_exc:  # noqa: BLE001
+            logger.debug("Analysis injection skipped: %s", _inj_exc, exc_info=True)
 
         # --- REASON ---
         t0 = time.monotonic()

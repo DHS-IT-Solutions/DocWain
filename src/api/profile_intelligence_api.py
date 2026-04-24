@@ -43,6 +43,70 @@ async def get_profile_intelligence(profile_id: str):
     return report
 
 
+@profile_intelligence_router.post(
+    "/{profile_id}/researcher/backfill",
+    summary="Dispatch Researcher Agent for every extraction-complete doc in the profile",
+)
+async def backfill_profile_researcher(profile_id: str):
+    """Dispatch ``run_researcher_agent`` as Celery tasks for every doc in the
+    profile that has completed extraction but doesn't have a Researcher
+    Agent output yet.
+
+    Use after:
+      * upgrading the researcher payload shape
+      * onboarding a profile that was ingested before Researcher Agent
+        was wired up
+      * after any bulk re-extraction event
+
+    Returns immediately with counts; tasks run async on researcher_queue.
+    """
+    from src.api.document_status import get_documents_collection
+    col = get_documents_collection()
+    if col is None:
+        raise HTTPException(status_code=503, detail="documents collection unavailable")
+    candidates = list(col.find(
+        {
+            "profile_id": profile_id,
+            "status": {"$in": [
+                "EXTRACTION_COMPLETED", "UNDER_REVIEW",
+                "SCREENING_COMPLETED", "TRAINING_COMPLETED",
+            ]},
+        },
+        {"_id": 1, "document_id": 1, "subscription_id": 1, "profile_id": 1, "researcher": 1},
+    ))
+    dispatched: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    try:
+        from src.tasks.researcher import run_researcher_agent
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"researcher task unavailable: {exc}")
+    for d in candidates:
+        doc_id = str(d.get("document_id") or d.get("_id"))
+        sub_id = d.get("subscription_id")
+        prof_id = d.get("profile_id")
+        researcher = d.get("researcher") or {}
+        if researcher.get("status") == "RESEARCHER_COMPLETED" and researcher.get("insights"):
+            skipped.append({"document_id": doc_id, "reason": "already_complete"})
+            continue
+        if not sub_id or not prof_id:
+            skipped.append({"document_id": doc_id, "reason": "missing_ids"})
+            continue
+        try:
+            task = run_researcher_agent.delay(doc_id, sub_id, prof_id)
+            dispatched.append({"document_id": doc_id, "task_id": getattr(task, "id", None)})
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"document_id": doc_id, "error": str(exc)[:200]})
+    return {
+        "profile_id": profile_id,
+        "scanned": len(candidates),
+        "dispatched": len(dispatched),
+        "skipped": len(skipped),
+        "failed": len(failed),
+        "details": {"dispatched": dispatched, "skipped": skipped, "failed": failed},
+    }
+
+
 @profile_intelligence_router.get(
     "/{profile_id}/insights",
     summary="Get corpus-level insights (fast, aggregates over hot cache + Researcher Agent)",
