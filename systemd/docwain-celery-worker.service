@@ -14,7 +14,7 @@ Environment="HF_HUB_OFFLINE=1"
 Environment="TRANSFORMERS_OFFLINE=1"
 Environment="HF_HUB_DISABLE_TELEMETRY=1"
 ExecStart=/home/ubuntu/PycharmProjects/DocWain/.venv/bin/python -m celery -A src.celery_app worker \
-    -Q extraction_queue,screening_queue,kg_queue,embedding_queue,backfill_queue \
+    -Q extraction_queue,screening_queue,kg_queue,embedding_queue,backfill_queue,researcher_queue \
     --concurrency=4 \
     --loglevel=INFO \
     --logfile=/home/ubuntu/PycharmProjects/DocWain/logs/celery_worker.log
