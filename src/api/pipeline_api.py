@@ -189,6 +189,21 @@ async def trigger_embedding(document_id: str):
         # Redis down or task registry issue. Do NOT propagate — embedding still ran.
         logger.warning("KG dispatch failed for %s: %s", document_id, exc)
 
+    # Wave 1: dispatch Researcher Agent as a third parallel training-stage task.
+    # Fire-and-forget — failure does not affect embedding or KG.
+    try:
+        from src.api.config import Config
+        researcher_enabled = getattr(getattr(Config, "Researcher", None), "ENABLED", False)
+    except Exception:
+        researcher_enabled = False
+    if researcher_enabled:
+        try:
+            from src.tasks.researcher import run_researcher_agent
+            run_researcher_agent.delay(document_id, subscription_id, profile_id)
+            logger.info("Researcher Agent dispatched for %s", document_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Researcher dispatch failed for %s: %s", document_id, exc)
+
     return {"document_id": document_id, "status": "EMBEDDING_IN_PROGRESS",
             "task_id": task.id}
 

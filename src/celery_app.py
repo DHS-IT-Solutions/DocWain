@@ -40,6 +40,7 @@ app.config_from_object({
         "screening_queue": {"exchange": "screening", "routing_key": "screening"},
         "kg_queue": {"exchange": "kg", "routing_key": "kg"},
         "embedding_queue": {"exchange": "embedding", "routing_key": "embedding"},
+        "researcher_queue": {"exchange": "researcher", "routing_key": "researcher"},
         "backfill_queue": {"exchange": "backfill", "routing_key": "backfill"},
     },
 
@@ -48,6 +49,7 @@ app.config_from_object({
         "src.tasks.screening.screen_document": {"queue": "screening_queue"},
         "src.tasks.kg.build_knowledge_graph": {"queue": "kg_queue"},
         "src.tasks.embedding.embed_document": {"queue": "embedding_queue"},
+        "src.tasks.researcher.run_researcher_agent": {"queue": "researcher_queue"},
         "src.tasks.backfill.backfill_kg_refs": {"queue": "backfill_queue"},
     },
 
@@ -68,4 +70,4 @@ app.config_from_object({
 
 app.autodiscover_tasks(["src.tasks.extraction", "src.tasks.screening",
                          "src.tasks.kg", "src.tasks.embedding",
-                         "src.tasks.backfill"])
+                         "src.tasks.backfill", "src.tasks.researcher"])

@@ -24,6 +24,12 @@ KG_IN_PROGRESS = "IN_PROGRESS"
 KG_COMPLETED = "COMPLETED"
 KG_FAILED = "FAILED"
 
+# Researcher Agent status strand (independent from pipeline_status; same isolation as KG).
+RESEARCHER_PENDING = "RESEARCHER_PENDING"
+RESEARCHER_IN_PROGRESS = "RESEARCHER_IN_PROGRESS"
+RESEARCHER_COMPLETED = "RESEARCHER_COMPLETED"
+RESEARCHER_FAILED = "RESEARCHER_FAILED"
+
 # Legacy mappings (for backward compatibility during migration)
 # NOTE: STATUS_UNDER_REVIEW must keep its original literal value because
 # existing documents in MongoDB have status="UNDER_REVIEW" (not "UPLOADED").
