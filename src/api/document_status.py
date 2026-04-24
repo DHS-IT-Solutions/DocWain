@@ -729,22 +729,31 @@ def recover_zombie_documents(timeout_seconds: int = _ZOMBIE_TIMEOUT_SECONDS) -> 
 
 
 def recover_zombie_extractions(timeout_seconds: int = _EXTRACTION_ZOMBIE_TIMEOUT_SECONDS) -> int:
-    """Reset documents stuck in extraction IN_PROGRESS back to UNDER_REVIEW.
+    """Reset documents stuck in extraction IN_PROGRESS back to PENDING.
 
-    When the server is killed during extraction, documents are left with
-    ``status=UNDER_REVIEW`` and ``extraction.status=IN_PROGRESS`` forever.
-    This function detects those zombies and resets extraction state so the
-    next ``extract_documents()`` call will retry them.
+    When the server is killed during extraction (or an unhandled exception
+    skips the final state write), documents are left with
+    ``extraction.status=IN_PROGRESS`` and no ``completed_at`` forever. This
+    function detects those zombies — regardless of the top-level ``status``
+    — and resets ``extraction`` so ``/api/extract/progress`` stops showing
+    a phantom in-flight doc and the next extraction run can retry them.
     """
     collection = get_documents_collection()
     cutoff = time.time() - timeout_seconds
     zombies = list(collection.find(
         {
-            "status": STATUS_UNDER_REVIEW,
+            # Cover every top-level status where a stuck extraction may land:
+            #   UNDER_REVIEW (re-extract of previously-reviewed doc),
+            #   EXTRACTION_IN_PROGRESS (fresh run),
+            #   UPLOADED (pre-review extraction interrupted).
             "extraction.status": "IN_PROGRESS",
             "extraction.started_at": {"$lt": cutoff},
+            "$or": [
+                {"extraction.completed_at": {"$exists": False}},
+                {"extraction.completed_at": None},
+            ],
         },
-        {"_id": 1, "document_id": 1, "extraction.started_at": 1},
+        {"_id": 1, "document_id": 1, "status": 1, "extraction.started_at": 1},
     ))
     recovered = 0
     for doc in zombies:
@@ -759,10 +768,87 @@ def recover_zombie_extractions(timeout_seconds: int = _EXTRACTION_ZOMBIE_TIMEOUT
                 "recovery_reason": f"zombie_reset: stuck in IN_PROGRESS for {minutes:.0f}min",
             })
             recovered += 1
-            logger.info("Reset zombie extraction %s (stuck %.0fmin)", doc_id, minutes)
+            logger.info(
+                "Reset zombie extraction %s (status=%s, stuck %.0fmin)",
+                doc_id, doc.get("status"), minutes,
+            )
         except Exception:
             logger.warning("Failed to reset zombie extraction %s", doc_id, exc_info=True)
     return recovered
+
+
+# ---------------------------------------------------------------------------
+# Periodic zombie sweep
+# ---------------------------------------------------------------------------
+# Zombie recovery at startup catches docs stuck across restarts, but a doc
+# that gets orphaned mid-run (e.g. the worker thread dies or the vLLM call
+# hangs past its timeout) stays flagged ``IN_PROGRESS`` forever because
+# nothing else runs the sweep. For UAT we need a periodic pass so the
+# progress endpoint never shows a doc that no process is working on.
+_SWEEP_INTERVAL_SECONDS = 5 * 60  # wake every 5 min
+_SWEEP_EXTRACTION_TIMEOUT_SECONDS = 10 * 60  # 10 min is ample for a live run
+_SWEEP_TRAINING_TIMEOUT_SECONDS = 30 * 60  # training is heavier; 30 min
+
+_sweep_stop_event: Optional[Any] = None
+_sweep_thread: Optional[Any] = None
+
+
+def _zombie_sweep_loop(stop_event, interval: int, ext_timeout: int, train_timeout: int) -> None:
+    logger.info(
+        "Zombie sweep worker started (interval=%ds, extraction_timeout=%ds, training_timeout=%ds)",
+        interval, ext_timeout, train_timeout,
+    )
+    # Initial short delay so we don't race the startup recovery pass.
+    stop_event.wait(min(interval, 60))
+    while not stop_event.is_set():
+        try:
+            ext_recovered = recover_zombie_extractions(timeout_seconds=ext_timeout)
+            train_recovered = recover_zombie_documents(timeout_seconds=train_timeout)
+            if ext_recovered or train_recovered:
+                logger.info(
+                    "Zombie sweep: reset %d extraction, %d training",
+                    ext_recovered, train_recovered,
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("Zombie sweep iteration failed", exc_info=True)
+        stop_event.wait(interval)
+    logger.info("Zombie sweep worker stopped")
+
+
+def start_zombie_sweep_worker(
+    interval: int = _SWEEP_INTERVAL_SECONDS,
+    extraction_timeout: int = _SWEEP_EXTRACTION_TIMEOUT_SECONDS,
+    training_timeout: int = _SWEEP_TRAINING_TIMEOUT_SECONDS,
+) -> None:
+    """Spin a daemon thread that periodically resets stuck extractions/trainings.
+
+    Idempotent — safe to call multiple times; subsequent calls are no-ops
+    while the worker is already running.
+    """
+    import threading
+
+    global _sweep_stop_event, _sweep_thread
+    if _sweep_thread is not None and _sweep_thread.is_alive():
+        return
+    _sweep_stop_event = threading.Event()
+    _sweep_thread = threading.Thread(
+        target=_zombie_sweep_loop,
+        args=(_sweep_stop_event, interval, extraction_timeout, training_timeout),
+        name="docwain-zombie-sweep",
+        daemon=True,
+    )
+    _sweep_thread.start()
+
+
+def stop_zombie_sweep_worker(timeout: float = 5.0) -> None:
+    """Signal the sweep worker to stop and join briefly."""
+    global _sweep_stop_event, _sweep_thread
+    if _sweep_stop_event is not None:
+        _sweep_stop_event.set()
+    if _sweep_thread is not None:
+        _sweep_thread.join(timeout=timeout)
+    _sweep_thread = None
+    _sweep_stop_event = None
 
 _MISSING = object()
 

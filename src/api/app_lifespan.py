@@ -451,6 +451,17 @@ async def lifespan(app: FastAPI):
         clear_legacy_vetting_metadata()
     except Exception as exc:
         logger.warning("Legacy metadata cleanup skipped: %s", exc)
+
+    # Periodic zombie sweep — started after logging is configured so its
+    # startup + per-sweep log lines are captured. Catches docs orphaned
+    # mid-run (worker crash, hung LLM call, etc.) that the startup-only
+    # recovery pass misses.
+    try:
+        from src.api.document_status import start_zombie_sweep_worker
+        start_zombie_sweep_worker()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Zombie sweep worker failed to start: %s", exc)
+
     logger.info("Startup checks completed")
 
     yield
@@ -463,6 +474,11 @@ async def lifespan(app: FastAPI):
             bg.stop_worker()
     except Exception as exc:
         logger.debug("Failed to stop background analyzer worker during shutdown", exc_info=True)
+    try:
+        from src.api.document_status import stop_zombie_sweep_worker
+        stop_zombie_sweep_worker()
+    except Exception as exc:
+        logger.debug("Failed to stop zombie sweep worker during shutdown", exc_info=True)
     logger.info("DocWain API shutting down")
 
 __all__ = ["initialize_app_state", "lifespan"]
