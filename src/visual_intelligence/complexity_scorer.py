@@ -108,6 +108,17 @@ class ComplexityScorer:
         aggregates per-page signals from ``extracted_doc.tables`` and
         ``extracted_doc.figures``.
         """
+        # Upstream extraction converts ExtractedDocument → plain dict before
+        # downstream stages (see extraction_service._sanitize_raw_text_fields).
+        # The dict form doesn't carry .metrics/.tables/.figures, and the
+        # downstream merger also assumes object attributes, so there's nothing
+        # useful VI can do here — short-circuit cleanly instead of raising.
+        if not hasattr(extracted_doc, "metrics"):
+            logger.debug(
+                "score_document received %s without .metrics — skipping VI",
+                type(extracted_doc).__name__,
+            )
+            return []
         total_pages: int = extracted_doc.metrics.get("total_pages", 0)
         if total_pages == 0:
             logger.warning("score_document called with 0 total_pages")
