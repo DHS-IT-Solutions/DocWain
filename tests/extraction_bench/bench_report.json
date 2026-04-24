@@ -8,7 +8,8 @@
       "hallucination": 0.0,
       "weighted": 1.0
     },
-    "gate_passed": true
+    "gate_passed": true,
+    "path_taken": "native"
   },
   {
     "case": "bench_docx_01",
@@ -19,7 +20,20 @@
       "hallucination": 0.0,
       "weighted": 1.0
     },
-    "gate_passed": true
+    "gate_passed": true,
+    "path_taken": "native"
+  },
+  {
+    "case": "bench_image_01",
+    "scores": {
+      "coverage": 1.0,
+      "fidelity": 1.0,
+      "structure": 1.0,
+      "hallucination": 0.0,
+      "weighted": 1.0
+    },
+    "gate_passed": true,
+    "path_taken": "vision"
   },
   {
     "case": "bench_pdf_01",
@@ -30,7 +44,8 @@
       "hallucination": 0.0,
       "weighted": 1.0
     },
-    "gate_passed": true
+    "gate_passed": true,
+    "path_taken": "native"
   },
   {
     "case": "bench_pptx_01",
@@ -41,7 +56,20 @@
       "hallucination": 0.0,
       "weighted": 1.0
     },
-    "gate_passed": true
+    "gate_passed": true,
+    "path_taken": "native"
+  },
+  {
+    "case": "bench_scan_01",
+    "scores": {
+      "coverage": 1.0,
+      "fidelity": 1.0,
+      "structure": 1.0,
+      "hallucination": 0.0,
+      "weighted": 1.0
+    },
+    "gate_passed": true,
+    "path_taken": "vision"
   },
   {
     "case": "bench_xlsx_01",
@@ -52,6 +80,7 @@
       "hallucination": 0.0,
       "weighted": 1.0
     },
-    "gate_passed": true
+    "gate_passed": true,
+    "path_taken": "native"
   }
 ]

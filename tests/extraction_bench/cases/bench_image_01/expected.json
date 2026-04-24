@@ -1,0 +1,18 @@
+{
+  "format": "image",
+  "path_taken": "vision",
+  "pages": [
+    {
+      "page_num": 1,
+      "blocks": [
+        {
+          "text": "image content via fallback",
+          "block_type": "paragraph"
+        }
+      ],
+      "tables": []
+    }
+  ],
+  "sheets": [],
+  "slides": []
+}

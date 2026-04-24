@@ -157,6 +157,41 @@ def generate_csv_case():
     _write_case("bench_csv_01", ".csv", data, _expected_for_csv(rows))
 
 
+def generate_scanned_pdf_case():
+    """A PDF whose pages have NO text layer — only shapes — simulating a scan."""
+    d = fitz.open()
+    for _ in range(1):
+        p = d.new_page()
+        p.draw_rect(fitz.Rect(72, 72, 400, 400), color=(0.1, 0.1, 0.1))
+    buf = io.BytesIO()
+    d.save(buf)
+    d.close()
+    expected = {
+        "format": "pdf_scanned",
+        "path_taken": "vision",
+        "pages": [{"page_num": 1, "blocks": [{"text": "scanned content via fallback", "block_type": "paragraph"}], "tables": []}],
+        "sheets": [],
+        "slides": [],
+    }
+    _write_case("bench_scan_01", ".pdf", buf.getvalue(), expected)
+
+
+def generate_image_case():
+    """A PNG with a solid background — vision fallback is expected to emit a known text line."""
+    from PIL import Image
+    img = Image.new("RGB", (400, 200), (255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    expected = {
+        "format": "image",
+        "path_taken": "vision",
+        "pages": [{"page_num": 1, "blocks": [{"text": "image content via fallback", "block_type": "paragraph"}], "tables": []}],
+        "sheets": [],
+        "slides": [],
+    }
+    _write_case("bench_image_01", ".png", buf.getvalue(), expected)
+
+
 def main() -> None:
     BENCH_ROOT.mkdir(parents=True, exist_ok=True)
     generate_pdf_case()
@@ -164,6 +199,8 @@ def main() -> None:
     generate_xlsx_case()
     generate_pptx_case()
     generate_csv_case()
+    generate_scanned_pdf_case()
+    generate_image_case()
     print(f"generated fixtures under {BENCH_ROOT}")
 
 
