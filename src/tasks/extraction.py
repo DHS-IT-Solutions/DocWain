@@ -156,13 +156,13 @@ def extract_document(self, document_id: str, subscription_id: str,
                     len(_canonical.pages), len(_canonical.sheets), len(_canonical.slides),
                 )
                 _native_path_taken = True
-                # Build result_dict and summary in the same shape downstream helpers expect.
+                # Build result_dict as a direct ExtractionResult dict (no wrapper key).
+                # subscription_id / profile_id are tenancy fields not on the dataclass;
+                # merge them in as top-level siblings so the blob payload is self-describing.
                 result_dict = {
-                    "document_id": document_id,
+                    **_extraction_json,
                     "subscription_id": subscription_id,
                     "profile_id": profile_id,
-                    "canonical": _extraction_json,
-                    "path_taken": "native",
                 }
                 # Flatten tables for summary count across all pages/sheets/slides
                 _table_count = (
