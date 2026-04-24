@@ -452,6 +452,25 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Legacy metadata cleanup skipped: %s", exc)
 
+    # Clear orphaned batch-extraction state in Redis (locks, starting markers,
+    # rosters) left behind if the previous process was killed mid-batch. Without
+    # this, the next trigger would be rejected with "already_running" for up to
+    # 30 min, and the progress endpoint would briefly show stale "starting"
+    # state until the TTLs expired. Runs after configure_logging so the
+    # "Cleared orphaned batch state" line is captured in journal.
+    try:
+        from src.api.document_status import clear_orphan_batch_state_on_startup
+        cleared = clear_orphan_batch_state_on_startup()
+        if any(cleared.values()):
+            logger.info(
+                "Cleared orphaned batch state: %d locks, %d markers, %d rosters",
+                cleared.get("batch_locks", 0),
+                cleared.get("markers", 0),
+                cleared.get("rosters", 0),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Orphan batch-state cleanup skipped: %s", exc)
+
     # Periodic zombie sweep — started after logging is configured so its
     # startup + per-sweep log lines are captured. Catches docs orphaned
     # mid-run (worker crash, hung LLM call, etc.) that the startup-only

@@ -151,6 +151,46 @@ def clear_batch_starting_marker(subscription_id: str) -> None:
     except Exception:
         pass
 
+
+def clear_orphan_batch_state_on_startup() -> Dict[str, int]:
+    """Drop any batch-extraction state left behind by a previous process.
+
+    When the server is SIGKILL'd or restarted mid-batch, the Redis batch
+    lock (``docwain:batch_extraction:<sub>``), the batch-starting marker
+    (``dw:extraction:batch_start:<sub>``), and the per-profile rosters
+    (``dw:extraction:roster:<profile>``) all persist — the lock blocks
+    the next trigger for up to 30 min, and the marker/roster can show a
+    stale "starting" view on the progress endpoint.
+
+    Called once at application startup, when by definition no batch can
+    be running. Returns the count of each key class dropped for logging.
+    """
+    cleared = {"batch_locks": 0, "markers": 0, "rosters": 0}
+    client = _redis_client_safe()
+    if not client:
+        return cleared
+    try:
+        for pattern, label in (
+            ("docwain:batch_extraction:*", "batch_locks"),
+            ("dw:extraction:batch_start:*", "markers"),
+            ("dw:extraction:roster:*", "rosters"),
+        ):
+            keys = list(client.keys(pattern) or [])
+            if not keys:
+                continue
+            try:
+                client.delete(*keys)
+            except Exception:
+                for k in keys:
+                    try:
+                        client.delete(k)
+                    except Exception:
+                        pass
+            cleared[label] = len(keys)
+    except Exception:
+        logger.debug("Orphan batch-state cleanup failed", exc_info=True)
+    return cleared
+
 def emit_progress(
     document_id: str,
     stage: str,
