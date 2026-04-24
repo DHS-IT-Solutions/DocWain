@@ -125,6 +125,23 @@ class Config:
         TRANSFORMERS_OFFLINE = os.getenv("TRANSFORMERS_OFFLINE", "false").lower() in {"1", "true", "yes", "on"}
         DISABLE_HF = os.getenv("DISABLE_HF", "false").lower() in {"1", "true", "yes", "on"}
         OFFLINE_ONLY = os.getenv("DOCWAIN_OFFLINE_ONLY", "true").lower() in {"1", "true", "yes", "on"}
+        # Gateway routing + identity shim flags (Wave 1)
+        PRIMARY_BACKEND = os.getenv("DOCWAIN_MODEL_PRIMARY_BACKEND", "vllm")
+        IDENTITY_SHIM_ENABLED = os.getenv("DOCWAIN_MODEL_IDENTITY_SHIM_ENABLED", "true").lower() == "true"
+        IDENTITY_SHIM_TEXT = os.getenv(
+            "DOCWAIN_MODEL_IDENTITY_SHIM_TEXT",
+            "You are DocWain, an enterprise document research agent. "
+            "Respond grounded in the provided documents. Be accurate and concise.",
+        )
+
+    class KG:
+        """Knowledge Graph feature flags (Wave 1)."""
+        ENTITY_EXTRACTION_ENABLED = os.getenv("DOCWAIN_KG_ENTITY_EXTRACTION_ENABLED", "true").lower() == "true"
+
+    class Researcher:
+        """Researcher Agent feature flags (Wave 1)."""
+        ENABLED = os.getenv("DOCWAIN_RESEARCHER_ENABLED", "true").lower() == "true"
+        MAX_TOKENS = int(os.getenv("DOCWAIN_RESEARCHER_MAX_TOKENS", "4096"))
 
     class VisionOCR:
         ENABLED = os.getenv("VISION_OCR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
