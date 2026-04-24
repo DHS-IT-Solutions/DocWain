@@ -71,6 +71,41 @@ app.config_from_object({
     "task_send_sent_event": True,
 })
 
+# Weekend Researcher refresh beat schedule (flag-gated).
+def _build_researcher_beat_schedule():
+    try:
+        from src.api.config import Config
+        from celery.schedules import crontab
+        researcher_cfg = getattr(Config, "Researcher", None)
+        if not researcher_cfg or not getattr(researcher_cfg, "WEEKEND_REFRESH_ENABLED", False):
+            return {}
+        cron_expr = getattr(researcher_cfg, "WEEKEND_REFRESH_CRON", "0 3 * * 0")
+        parts = cron_expr.split()
+        if len(parts) != 5:
+            return {}
+        minute, hour, day_of_month, month_of_year, day_of_week = parts
+        return {
+            "researcher-weekly-refresh": {
+                "task": "src.tasks.researcher_refresh.researcher_weekly_refresh",
+                "schedule": crontab(
+                    minute=minute, hour=hour,
+                    day_of_week=day_of_week,
+                    day_of_month=day_of_month,
+                    month_of_year=month_of_year,
+                ),
+                "options": {"queue": "researcher_queue"},
+            }
+        }
+    except Exception:
+        return {}
+
+
+try:
+    app.conf.beat_schedule = _build_researcher_beat_schedule()
+except Exception:
+    pass
+
 app.autodiscover_tasks(["src.tasks.extraction", "src.tasks.screening",
                          "src.tasks.kg", "src.tasks.embedding",
-                         "src.tasks.backfill", "src.tasks.researcher"])
+                         "src.tasks.backfill", "src.tasks.researcher",
+                         "src.tasks.researcher_refresh"])

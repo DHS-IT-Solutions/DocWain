@@ -142,6 +142,10 @@ class Config:
         """Researcher Agent feature flags (Wave 1)."""
         ENABLED = os.getenv("DOCWAIN_RESEARCHER_ENABLED", "true").lower() == "true"
         MAX_TOKENS = int(os.getenv("DOCWAIN_RESEARCHER_MAX_TOKENS", "4096"))
+        # Weekend refresh — default OFF so operators opt in after verifying load
+        WEEKEND_REFRESH_ENABLED = os.getenv("DOCWAIN_RESEARCHER_WEEKEND_REFRESH_ENABLED", "false").lower() == "true"
+        # Crontab string for the beat schedule. Default: Sunday 03:00 UTC.
+        WEEKEND_REFRESH_CRON = os.getenv("DOCWAIN_RESEARCHER_WEEKEND_REFRESH_CRON", "0 3 * * 0")
 
     class VisionOCR:
         ENABLED = os.getenv("VISION_OCR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
