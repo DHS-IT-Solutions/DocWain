@@ -365,8 +365,8 @@ class Config:
     class VLLM:
         """vLLM serving config — Qwen3-14B-AWQ via OpenAI-compatible API."""
         ENABLED = os.getenv("VLLM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-        ENDPOINT = os.getenv("VLLM_ENDPOINT", "http://localhost:8001/v1/chat/completions")
-        MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen3-14B-AWQ")
+        ENDPOINT = os.getenv("VLLM_ENDPOINT", "http://localhost:8100/v1/chat/completions")
+        MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "docwain-fast")
         API_KEY = _secret("VLLM_API_KEY", "")
         TIMEOUT = float(os.getenv("VLLM_TIMEOUT", "30"))
 
