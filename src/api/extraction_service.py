@@ -59,7 +59,16 @@ except Exception as _datahandler_exc:  # noqa: BLE001
     update_layout_graph_metadata = _datahandler_unavailable
     update_pii_stats = _datahandler_unavailable
 from src.api.layout_graph_store import save_layout_graph, save_layout_graph_local
-from src.api.document_status import emit_progress, get_documents_collection, init_document_record, set_error, update_document_fields, update_stage
+from src.api.document_status import (
+    clear_extraction_roster,
+    emit_progress,
+    get_documents_collection,
+    init_document_record,
+    set_error,
+    set_extraction_roster,
+    update_document_fields,
+    update_stage,
+)
 from src.api.pipeline_models import ExtractedDocument
 from src.api.statuses import (
     STATUS_DELETED,
@@ -1787,6 +1796,22 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
         )
         _emit_batch_progress(effective_sub, 0, total, stage="starting")
 
+        # Publish the full doc-id roster per profile so /api/extract/progress
+        # can report the correct total immediately — before the sequential
+        # loop has touched any doc record. Without this the endpoint only
+        # sees the subset of docs the loop has reached and jumps to 100%
+        # as soon as the first one completes.
+        _roster_by_profile: Dict[str, List[str]] = {}
+        for _rdid, _rdinfo in eligible_docs.items():
+            _rprof = str(_rdinfo.get("dataDict", {}).get("profile") or _rdinfo.get("dataDict", {}).get("profile_id") or "")
+            if _rprof:
+                _roster_by_profile.setdefault(_rprof, []).append(str(_rdid))
+        for _prof_id, _ids in _roster_by_profile.items():
+            try:
+                set_extraction_roster(_prof_id, _ids, subscription_id=effective_sub)
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to publish extraction roster for profile %s", _prof_id, exc_info=True)
+
         documents = []
         completed_count = 0
         skipped_count = 0
@@ -1898,6 +1923,17 @@ def extract_documents(subscription_id: Optional[str] = None) -> Dict[str, Any]:
         )
         _emit_batch_progress(effective_sub, len(successful), total,
                               stage="completed")
+
+        # Batch done — drop the roster so the next poll falls back to the
+        # historical view instead of reporting 0 queued / 0 in-flight with
+        # stale totals. Kept for a short grace period so clients polling
+        # right after completion still see 100%.
+        for _prof_id in _roster_by_profile.keys():
+            try:
+                clear_extraction_roster(_prof_id)
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to clear extraction roster for profile %s", _prof_id, exc_info=True)
+
         return {
             "status": "completed",
             "total": total,

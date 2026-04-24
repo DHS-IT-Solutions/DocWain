@@ -23,6 +23,74 @@ logger = get_logger(__name__)
 _PROGRESS_TTL = 3600  # 1 hour
 _PROGRESS_CHANNEL = "dw:training:events"
 
+# Active extraction roster (per profile) — populated at batch start so the
+# progress endpoint knows "N docs are queued for this run" before each one
+# has been touched by the sequential loop.
+_ROSTER_TTL = 2 * 60 * 60  # 2 hours
+_ROSTER_KEY_FMT = "dw:extraction:roster:{profile_id}"
+
+
+def _redis_client_safe():
+    try:
+        from src.api.dw_newron import get_redis_client
+        return get_redis_client()
+    except Exception:
+        return None
+
+
+def set_extraction_roster(profile_id: str, doc_ids: List[str], subscription_id: Optional[str] = None) -> None:
+    """Publish the current extraction batch's doc roster for *profile_id*.
+
+    Called at batch start so ``/api/extract/progress`` can compute totals
+    against the real queue size instead of whatever subset has already been
+    persisted to Mongo.
+    """
+    if not profile_id or not doc_ids:
+        return
+    client = _redis_client_safe()
+    if not client:
+        return
+    try:
+        payload = {
+            "profile_id": profile_id,
+            "subscription_id": subscription_id,
+            "doc_ids": [str(x) for x in doc_ids],
+            "total": len(doc_ids),
+            "started_at": time.time(),
+        }
+        client.setex(_ROSTER_KEY_FMT.format(profile_id=profile_id), _ROSTER_TTL, json.dumps(payload))
+    except Exception:
+        pass
+
+
+def get_extraction_roster(profile_id: str) -> Optional[Dict[str, Any]]:
+    if not profile_id:
+        return None
+    client = _redis_client_safe()
+    if not client:
+        return None
+    try:
+        raw = client.get(_ROSTER_KEY_FMT.format(profile_id=profile_id))
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def clear_extraction_roster(profile_id: str) -> None:
+    if not profile_id:
+        return
+    client = _redis_client_safe()
+    if not client:
+        return
+    try:
+        client.delete(_ROSTER_KEY_FMT.format(profile_id=profile_id))
+    except Exception:
+        pass
+
 def emit_progress(
     document_id: str,
     stage: str,
@@ -285,10 +353,10 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     Failed docs stay in the denominator so a partially-failed batch cannot
     climb to 100% without retry.
 
-    Scope: the batch is anchored on the most recent extraction activity
-    (last ``_BATCH_WINDOW_SECONDS`` around latest started_at / updated_at).
-    Historical docs outside the window remain in the list but are excluded
-    from the aggregate so the progress bar always reflects the current run.
+    Source of truth for the batch total is the Redis roster published by
+    ``extract_documents`` at batch start (``set_extraction_roster``). That
+    way a 10-doc batch reports 10 total from the very first poll, not
+    1 (currently extracting) + whatever the sequential loop has reached.
     """
     from src.utils.logging_utils import get_live_logs
 
@@ -311,32 +379,15 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     ).sort("updated_at", -1))
 
     now = time.time()
+    roster = get_extraction_roster(profile_id)
 
-    # Anchor on the most recent signal of activity: latest extraction
-    # started_at, completed_at, or doc updated_at. That's what defines
-    # "the current batch" — upload → extract → queued-for-screening.
-    anchor_ts: Optional[float] = None
-    any_in_flight = False
-    for doc in docs:
-        extraction = doc.get("extraction") or {}
-        for candidate in (
-            extraction.get("started_at"),
-            extraction.get("completed_at"),
-            doc.get("updated_at"),
-            doc.get("created_at"),
-        ):
-            if isinstance(candidate, (int, float)):
-                if anchor_ts is None or candidate > anchor_ts:
-                    anchor_ts = candidate
-        if _is_extraction_in_flight(doc):
-            any_in_flight = True
-
-    batch_floor = (anchor_ts - _BATCH_WINDOW_SECONDS) if anchor_ts else None
+    # Build quick lookup from doc_id to its record for roster-based classification.
+    doc_by_id: Dict[str, Dict[str, Any]] = {}
+    for d in docs:
+        key = str(d.get("document_id") or d.get("_id"))
+        doc_by_id[key] = d
 
     result_docs = []
-    # Batch-scoped counters. "Queued" = UPLOADED, waiting to be picked up.
-    # "In-flight" = currently extracting. "Completed" = extraction done
-    # (including past-stage docs like SCREENING_COMPLETED / TRAINING_*).
     batch_queued = 0
     batch_in_flight = 0
     batch_completed = 0
@@ -344,15 +395,58 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
     batch_earliest_start: Optional[float] = None
     batch_latest_end: Optional[float] = None
 
+    # --- ROSTER PATH (active batch) ----------------------------------------
+    # If a roster is present, classify each roster doc_id against its Mongo
+    # record relative to the roster.started_at cutoff. A doc is only
+    # "completed for this run" if its extraction.completed_at >= cutoff.
+    roster_ids: Optional[List[str]] = None
+    roster_started_at: Optional[float] = None
+    if roster and isinstance(roster, dict):
+        ids = roster.get("doc_ids") or []
+        if ids:
+            roster_ids = [str(x) for x in ids]
+            ts = roster.get("started_at")
+            roster_started_at = float(ts) if isinstance(ts, (int, float)) else None
+
+    if roster_ids:
+        for doc_id in roster_ids:
+            d = doc_by_id.get(doc_id) or {}
+            extraction = d.get("extraction") or {}
+            start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
+            end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
+            ext_status = extraction.get("status")
+            status = d.get("status", "UNKNOWN")
+            cutoff = roster_started_at or 0
+
+            in_progress_now = ext_status == "IN_PROGRESS" and (start_at or 0) >= cutoff and not (end_at and end_at >= cutoff)
+            completed_now = bool(end_at and end_at >= cutoff and ext_status == "COMPLETED")
+            failed_now = status in _EXTRACT_FAILED_STATUSES and (end_at or 0) >= cutoff
+
+            if completed_now:
+                batch_completed += 1
+            elif failed_now:
+                batch_failed += 1
+            elif in_progress_now:
+                batch_in_flight += 1
+            else:
+                # Roster member that hasn't been touched yet by this run.
+                batch_queued += 1
+
+            if start_at is not None and start_at >= cutoff:
+                if batch_earliest_start is None or start_at < batch_earliest_start:
+                    batch_earliest_start = start_at
+            if end_at is not None and end_at >= cutoff:
+                if batch_latest_end is None or end_at > batch_latest_end:
+                    batch_latest_end = end_at
+
+    # Always build the per-doc list (covers every doc in the profile, not
+    # just the batch — UI renders this as the file table).
     for doc in docs:
         doc_id = str(doc.get("document_id") or doc.get("_id"))
         status = doc.get("status", "UNKNOWN")
-
         extraction = doc.get("extraction") or {}
         start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
         end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
-        updated_at = doc.get("updated_at") if isinstance(doc.get("updated_at"), (int, float)) else None
-        created_at = doc.get("created_at") if isinstance(doc.get("created_at"), (int, float)) else None
 
         ext_in_progress = (
             extraction.get("status") == "IN_PROGRESS"
@@ -371,64 +465,90 @@ def get_profile_extraction_status(profile_id: str) -> Dict[str, Any]:
                 "source": "derived",
             }
 
-        # A doc belongs to the current batch if it had activity inside the
-        # window. Use any of started_at / updated_at / created_at — that way
-        # UPLOADED docs (no started_at yet) still count as "queued for this
-        # batch" if they were uploaded in the same window.
-        latest_signal = max(
-            (ts for ts in (start_at, updated_at, created_at, end_at) if ts is not None),
-            default=None,
-        )
-        in_batch = (
-            ext_in_progress
-            or (batch_floor is not None and latest_signal is not None and latest_signal >= batch_floor)
-        )
-
-        if in_batch:
-            if status == "UPLOADED" and not ext_in_progress:
-                batch_queued += 1
-            elif ext_in_progress or status in _EXTRACT_IN_FLIGHT_STATUSES:
-                batch_in_flight += 1
-            elif status in _EXTRACT_FAILED_STATUSES:
-                batch_failed += 1
-            else:
-                batch_completed += 1
-
-            if start_at is not None:
-                if batch_earliest_start is None or start_at < batch_earliest_start:
-                    batch_earliest_start = start_at
-            if end_at is not None:
-                if batch_latest_end is None or end_at > batch_latest_end:
-                    batch_latest_end = end_at
-
         result_docs.append({
             "document_id": doc_id,
             "document_name": doc.get("source_file", ""),
             "progress": progress,
         })
 
+    # --- FALLBACK PATH (no active roster) ----------------------------------
+    # No roster means no batch is running right now. Fall back to the
+    # time-window heuristic so the UI can still show the last-completed run.
+    if not roster_ids:
+        anchor_ts: Optional[float] = None
+        for doc in docs:
+            extraction = doc.get("extraction") or {}
+            for candidate in (
+                extraction.get("started_at"),
+                extraction.get("completed_at"),
+                doc.get("updated_at"),
+                doc.get("created_at"),
+            ):
+                if isinstance(candidate, (int, float)):
+                    if anchor_ts is None or candidate > anchor_ts:
+                        anchor_ts = candidate
+        batch_floor = (anchor_ts - _BATCH_WINDOW_SECONDS) if anchor_ts else None
+
+        for doc in docs:
+            status = doc.get("status", "UNKNOWN")
+            extraction = doc.get("extraction") or {}
+            start_at = extraction.get("started_at") if isinstance(extraction.get("started_at"), (int, float)) else None
+            end_at = extraction.get("completed_at") if isinstance(extraction.get("completed_at"), (int, float)) else None
+            updated_at = doc.get("updated_at") if isinstance(doc.get("updated_at"), (int, float)) else None
+            created_at = doc.get("created_at") if isinstance(doc.get("created_at"), (int, float)) else None
+
+            ext_in_progress = (
+                extraction.get("status") == "IN_PROGRESS"
+                and start_at is not None
+                and not end_at
+            )
+
+            latest_signal = max(
+                (ts for ts in (start_at, updated_at, created_at, end_at) if ts is not None),
+                default=None,
+            )
+            in_batch = (
+                ext_in_progress
+                or (batch_floor is not None and latest_signal is not None and latest_signal >= batch_floor)
+            )
+
+            if in_batch:
+                if status == "UPLOADED" and not ext_in_progress:
+                    batch_queued += 1
+                elif ext_in_progress or status in _EXTRACT_IN_FLIGHT_STATUSES:
+                    batch_in_flight += 1
+                elif status in _EXTRACT_FAILED_STATUSES:
+                    batch_failed += 1
+                else:
+                    batch_completed += 1
+
+                if start_at is not None:
+                    if batch_earliest_start is None or start_at < batch_earliest_start:
+                        batch_earliest_start = start_at
+                if end_at is not None:
+                    if batch_latest_end is None or end_at > batch_latest_end:
+                        batch_latest_end = end_at
+
     live_logs = get_live_logs(profile_id)
 
     total_docs = batch_queued + batch_in_flight + batch_completed + batch_failed
     if total_docs == 0:
-        # No batch activity — fall back to the raw doc count so the UI shows
-        # something reasonable for a freshly-created profile.
         total_docs = len(result_docs)
 
-    # Doc-count-based progress: 100% = every doc extraction-complete.
-    # Failed docs stay in the denominator so they hold the bar below 100
-    # until the user retries.
     if total_docs > 0:
         overall_progress = round((batch_completed / total_docs) * 100, 1)
     else:
         overall_progress = 0.0
 
-    # Elapsed: from the earliest extraction.started_at in this batch until
-    # now (active run) or latest completed_at (finished run).
     elapsed_seconds: Optional[float] = None
-    if batch_earliest_start:
-        end_ref = now if (any_in_flight or batch_queued or batch_in_flight) else (batch_latest_end or now)
-        elapsed_seconds = round(end_ref - batch_earliest_start, 1)
+    # If a roster is active, anchor elapsed to the roster start so the
+    # timer starts the instant the batch was kicked off, even before the
+    # first doc's extraction.started_at is written.
+    elapsed_start = roster_started_at if roster_ids else batch_earliest_start
+    if elapsed_start:
+        batch_active = bool(batch_queued or batch_in_flight)
+        end_ref = now if batch_active else (batch_latest_end or now)
+        elapsed_seconds = round(end_ref - elapsed_start, 1)
 
     return {
         "documents": result_docs,
