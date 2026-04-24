@@ -1,0 +1,20 @@
+domain: generic
+version: v1
+prompt_fragment: |
+  Treat the document as general content. Extract entities, key facts, and
+  actionable insights without assuming a specific domain.
+key_entities:
+  - person
+  - organization
+  - date
+  - location
+  - amount
+analysis_hints:
+  summary_style: factual
+  insight_depth: medium
+  emphasize: [facts, dates, amounts]
+questions_to_ask:
+  - "What is the main purpose of this document?"
+  - "Who are the key parties or entities involved?"
+  - "What dates or deadlines are mentioned?"
+  - "Are there any specific amounts, values, or metrics?"

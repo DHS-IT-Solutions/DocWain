@@ -608,6 +608,12 @@ class Config:
         EMBEDDING_CONCURRENCY = int(os.getenv("CELERY_EMBEDDING_CONCURRENCY", "2"))
         BACKFILL_CONCURRENCY = int(os.getenv("CELERY_BACKFILL_CONCURRENCY", "4"))
 
+    class DomainAdapters:
+        """Domain adapter framework — Azure Blob YAML loader with TTL cache."""
+        BLOB_PREFIX = os.getenv("DOCWAIN_ADAPTER_BLOB_PREFIX", "sme_adapters")
+        CACHE_TTL_SECONDS = int(os.getenv("DOCWAIN_ADAPTER_CACHE_TTL", "300"))
+        BLOB_CONTAINER = os.getenv("DOCWAIN_ADAPTER_BLOB_CONTAINER", "docwain-configs")
+
     class CloudPlatform:
         """SharePoint + cloud platform integration settings."""
         SHAREPOINT_ENABLED = os.getenv("DOCWAIN_SHAREPOINT_ENABLED", "false").lower() in {"1", "true", "yes", "on"}

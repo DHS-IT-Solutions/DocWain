@@ -1,0 +1,1 @@
+# DocWain domain adapter framework
