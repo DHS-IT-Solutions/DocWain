@@ -159,11 +159,7 @@ def screen_document(self, document_id: str, subscription_id: str,
             len(summary["flags"]),
         )
 
-        # 8. Auto-dispatch KG building task (async, independent)
-        from src.tasks.kg import build_knowledge_graph
-
-        build_knowledge_graph.delay(document_id, subscription_id, profile_id)
-        logger.info("Dispatched KG build task for %s", document_id)
+        # KG dispatch moved to src/api/pipeline_api.py::trigger_embedding (spec: 2026-04-24-kg-training-stage-background-design.md §4.1).
 
     except SoftTimeLimitExceeded:
         duration_seconds = round(time.time() - start_time, 2)
