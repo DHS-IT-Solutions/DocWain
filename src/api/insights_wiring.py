@@ -141,10 +141,20 @@ def _ensure_insights_index_mongo_indexes(coll) -> None:
 def get_insight_store() -> InsightStore:
     global _INSIGHT_STORE
     if _INSIGHT_STORE is None:
-        db = _get_mongo_db()
-        coll = db[_INSIGHTS_INDEX_COLL_NAME]
-        _ensure_insights_index_mongo_indexes(coll)
-        mongo_index = MongoIndexBackend(collection=coll)
+        # Lazy collection resolver — survives transient Mongo connection drops
+        # because the client is re-imported each call. See journal logs from
+        # 2026-04-25: occasional CosmosDB disconnects fall back to localhost
+        # if the module-level client is captured eagerly.
+        def _coll_factory():
+            return _get_mongo_db()[_INSIGHTS_INDEX_COLL_NAME]
+
+        # Best-effort index creation on first init
+        try:
+            _ensure_insights_index_mongo_indexes(_coll_factory())
+        except Exception as exc:
+            logger.warning("index ensure deferred: %s", exc)
+
+        mongo_index = MongoIndexBackend(collection=_coll_factory)
 
         qdrant_client = _get_qdrant_client()
         _ensure_insights_qdrant_collection(qdrant_client)

@@ -27,22 +27,33 @@ class MongoCollection(Protocol):
 
 @dataclass
 class MongoIndexBackend:
-    collection: MongoCollection
+    """Mongo control-plane index backend.
+
+    Accepts either a concrete collection (tests/fakes) or a callable that
+    returns the collection (production — resolves lazily so a transient
+    connection drop is recovered on next call).
+    """
+    collection: Any  # MongoCollection or Callable[[], MongoCollection]
+
+    def _coll(self):
+        c = self.collection
+        if callable(c):
+            return c()
+        return c
 
     def upsert(self, dedup_key: str, doc: Dict[str, Any]) -> None:
-        self.collection.update_one(
+        self._coll().update_one(
             {"dedup_key": dedup_key},
             {"$set": doc},
             upsert=True,
         )
 
     def list(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # Exclude Mongo internals so payload is JSON-serializable
+        coll = self._coll()
         try:
-            cursor = self.collection.find(query, {"_id": 0})
+            cursor = coll.find(query, {"_id": 0})
         except TypeError:
-            # Fakes used in tests don't accept projection
-            cursor = self.collection.find(query)
+            cursor = coll.find(query)
         return list(cursor)
 
 
