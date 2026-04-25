@@ -635,3 +635,33 @@ def build_subagent_prompt(
     parts.append("--- END EVIDENCE ---")
 
     return "\n".join(parts)
+
+
+def compose_response_with_insights(
+    *,
+    base_answer: str,
+    profile_insights,
+    query: str,
+    query_entities,
+) -> str:
+    """Optionally append a 'Related findings' section to the reasoner's answer.
+
+    Per spec Section 10.8 — flag-gated, lookup-only, 50ms budget,
+    no LLM calls beyond what the reasoner already made.
+    """
+    from src.api.config import insight_flag_enabled
+    if not insight_flag_enabled("INSIGHTS_PROACTIVE_INJECTION"):
+        return base_answer
+    from src.generation.insight_injection import (
+        select_insights_for_query,
+        format_related_findings,
+    )
+    selected = select_insights_for_query(
+        query=query,
+        profile_insights=list(profile_insights or []),
+        query_entities=set(query_entities or set()),
+    )
+    suffix = format_related_findings(selected)
+    if not suffix:
+        return base_answer
+    return base_answer + "\n" + suffix
