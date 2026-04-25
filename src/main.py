@@ -1081,6 +1081,27 @@ def ask_question_api(
     except Exception as _viz_exc:
         logger.warning("Visualization enhancement failed: %s", _viz_exc, exc_info=True)
 
+    # Insights Portal v2 — proactive injection (gated by INSIGHTS_PROACTIVE_INJECTION).
+    # Lookup-only against Mongo insights_index; appends a "Related findings" section.
+    try:
+        from src.api.config import insight_flag_enabled
+        if insight_flag_enabled("INSIGHTS_PROACTIVE_INJECTION"):
+            from src.api.insights_wiring import get_insight_store
+            from src.generation.prompts import compose_response_with_insights
+            _store = get_insight_store()
+            _profile_insights = _store.list_for_profile(
+                profile_id=request.profile_id, limit=50,
+            ) if request.profile_id else []
+            base_text = normalized.get("response", "")
+            normalized["response"] = compose_response_with_insights(
+                base_answer=base_text,
+                profile_insights=_profile_insights,
+                query=request.query,
+                query_entities=set(),
+            )
+    except Exception as _inj_exc:
+        logger.warning("proactive injection skipped: %s", _inj_exc)
+
     persisted_session_id = _persist_chat_turn(
         user_id=request.user_id,
         query=request.query,
