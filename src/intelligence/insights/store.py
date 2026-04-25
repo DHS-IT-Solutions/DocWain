@@ -84,6 +84,10 @@ class InsightStore:
             "refreshed_at": insight.refreshed_at,
             "stale": insight.stale,
             "adapter_version": insight.adapter_version,
+            # Headline included in index per Section 10.1 dashboard contract —
+            # short metadata; allows list endpoint + injection to render
+            # without Qdrant roundtrip
+            "headline": insight.headline,
         }
         self._mongo.upsert(dedup_key=dedup_key, doc=index_doc)
 
