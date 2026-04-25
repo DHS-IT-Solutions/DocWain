@@ -24,6 +24,7 @@ from qdrant_client import QdrantClient
 
 from src.api.config import Config
 from src.middleware.correlation import CorrelationIdMiddleware
+from src.middleware.scanner_shield import ScannerShieldMiddleware
 from src.utils.logging_utils import configure_logging
 from src.api.app_lifespan import lifespan
 try:
@@ -175,6 +176,11 @@ app.add_middleware(
 # Add correlation ID middleware for request tracing
 app.add_middleware(CorrelationIdMiddleware)
 
+# Scanner shield runs FIRST (Starlette executes the LAST-registered middleware
+# first on incoming requests). Blocks malicious paths and rate-abusers before
+# any handler dispatch — closest thing to dropping the packet without iptables.
+app.add_middleware(ScannerShieldMiddleware)
+
 api_router.include_router(documents_router, tags=["Documents"])
 api_router.include_router(profiles_router)
 api_router.include_router(profile_docs_router)
@@ -186,6 +192,16 @@ api_router.include_router(debug_router, tags=["Debug"])
 api_router.include_router(health_router)
 api_router.include_router(profile_intelligence_router)
 api_router.include_router(tools_router, tags=["Agents"])
+
+# Insights Portal routers (SP-F) — flag-gated; return 404 when their flag is off
+from src.api.insights_api import insights_router as _insights_router
+from src.api.actions_api import actions_router as _actions_router
+from src.api.visualizations_api import visualizations_router as _visualizations_router
+from src.api.artifacts_api import artifacts_router as _artifacts_router
+api_router.include_router(_insights_router)
+api_router.include_router(_actions_router)
+api_router.include_router(_visualizations_router)
+api_router.include_router(_artifacts_router)
 
 @api_router.get("/agents/capabilities", tags=["Agents"])
 def list_available_agents_with_capabilities():
@@ -454,22 +470,43 @@ def _persist_chat_turn(
     answer_payload: Dict[str, Any],
     session_id: Optional[str],
     new_session: bool,
+    profile_id: Optional[str] = None,
+    subscription_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Persist turn to durable chat history and return effective session_id."""
-    if not user_id:
-        return session_id
-    try:
-        _, active_session_id = add_message_to_history(
-            user_id=user_id,
-            query=query,
-            response=answer_payload,
-            session_id=session_id,
-            new_session=new_session,
-        )
-        return active_session_id or session_id
-    except Exception as exc:
-        logger.debug("Chat history persistence skipped: %s", exc)
-        return session_id
+    """Persist turn to durable chat history and return effective session_id.
+
+    Also (best-effort) appends a row to ``profile_query_log`` so the weekly
+    profile-intelligence refresh can fold ``what users are asking`` back into
+    the report. Logging failures are swallowed — never break /api/ask on it.
+    """
+    active_session_id = session_id
+    if user_id:
+        try:
+            _, active_session_id = add_message_to_history(
+                user_id=user_id,
+                query=query,
+                response=answer_payload,
+                session_id=session_id,
+                new_session=new_session,
+            )
+            active_session_id = active_session_id or session_id
+        except Exception as exc:
+            logger.debug("Chat history persistence skipped: %s", exc)
+
+    if profile_id:
+        try:
+            from src.intelligence.profile_query_log import log_profile_query
+            log_profile_query(
+                profile_id=profile_id,
+                user_id=user_id,
+                query=query,
+                answer_payload=answer_payload,
+                session_id=active_session_id,
+                subscription_id=subscription_id,
+            )
+        except Exception as exc:
+            logger.debug("profile_query_log skipped: %s", exc)
+    return active_session_id
 
 def _normalize_answer(answer):
     """Backward-compatible wrapper around the shared normalizer."""
@@ -969,6 +1006,8 @@ def ask_question_api(
                 answer_payload=answer_payload.model_dump(),
                 session_id=session_id,
                 new_session=bool(request.new_session),
+                profile_id=getattr(request, "profile_id", None),
+                subscription_id=getattr(request, "subscription_id", None),
             )
             return AskResponse(answer=answer_payload, current_session_id=persisted_session_id, debug={})
 
@@ -994,6 +1033,8 @@ def ask_question_api(
             answer_payload=normalized_stream_answer,
             session_id=session_id,
             new_session=bool(request.new_session),
+            profile_id=getattr(request, "profile_id", None),
+            subscription_id=getattr(request, "subscription_id", None),
         )
 
         # Build trailing metadata block with media, sources, session_id
@@ -1046,6 +1087,8 @@ def ask_question_api(
         answer_payload=normalized,
         session_id=session_id,
         new_session=bool(request.new_session),
+        profile_id=getattr(request, "profile_id", None),
+        subscription_id=getattr(request, "subscription_id", None),
     )
     answer_payload = AnswerPayload(**normalized)
     return AskResponse(
