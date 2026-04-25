@@ -153,6 +153,27 @@ class Config:
         # Crontab string for the beat schedule. Default: Sunday 03:00 UTC.
         WEEKEND_REFRESH_CRON = os.getenv("DOCWAIN_RESEARCHER_WEEKEND_REFRESH_CRON", "0 3 * * 0")
 
+    class ProfileIntelligence:
+        """Profile Intelligence feature flags.
+
+        Profile intelligence runs as a parallel Celery task on
+        ``profile_intelligence_queue`` after embedding succeeds, plus a weekly
+        refresh that incorporates user queries + Researcher Agent insights.
+        """
+        ENABLED = os.getenv("DOCWAIN_PROFILE_INTEL_ENABLED", "true").lower() == "true"
+        # Seconds the post-embedding task waits for Qdrant chunks to become queryable.
+        QDRANT_WAIT_SECONDS = float(os.getenv("DOCWAIN_PROFILE_INTEL_QDRANT_WAIT_SECONDS", "20"))
+        # Weekly refresh — default OFF until operator verifies load on the queue.
+        WEEKLY_REFRESH_ENABLED = os.getenv("DOCWAIN_PROFILE_INTEL_WEEKLY_REFRESH_ENABLED", "false").lower() == "true"
+        # Crontab string. Default: Sunday 04:00 UTC (09:30 IST) — non-business hours.
+        WEEKLY_REFRESH_CRON = os.getenv("DOCWAIN_PROFILE_INTEL_WEEKLY_REFRESH_CRON", "0 4 * * 0")
+        # Lookback window for user-query aggregation in the weekly job.
+        QUERY_LOOKBACK_DAYS = int(os.getenv("DOCWAIN_PROFILE_INTEL_QUERY_LOOKBACK_DAYS", "7"))
+        # Cap on top-N user queries the weekly job folds back into the report.
+        TOP_QUERIES = int(os.getenv("DOCWAIN_PROFILE_INTEL_TOP_QUERIES", "20"))
+        # Per-query character cap when persisted into profile_query_log.
+        QUERY_LOG_MAX_LEN = int(os.getenv("DOCWAIN_PROFILE_INTEL_QUERY_LOG_MAX_LEN", "500"))
+
     class VisionOCR:
         ENABLED = os.getenv("VISION_OCR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         MODEL = os.getenv("VISION_OCR_MODEL", "glm-ocr:latest")
@@ -630,3 +651,20 @@ class Config:
         SHAREPOINT_TENANT_ID = os.getenv("DOCWAIN_SHAREPOINT_TENANT_ID", "")
         SHAREPOINT_CLIENT_ID = os.getenv("DOCWAIN_SHAREPOINT_CLIENT_ID", "")
         SHAREPOINT_CLIENT_SECRET = _secret("DOCWAIN_SHAREPOINT_CLIENT_SECRET", "")
+
+
+# Insights Portal feature flag accessor (SP-J.2)
+from src.api.feature_flags import FeatureFlags as _IPFeatureFlags
+from src.api.feature_flags import is_enabled as _ip_flag_is_enabled
+
+_INSIGHT_FLAGS = _IPFeatureFlags()
+
+
+def insight_flag_enabled(name: str) -> bool:
+    """Return True if the named insights-portal feature flag is enabled.
+
+    Reads from environment at call time (no caching) so flags can be
+    flipped without process restart in dev. In prod, flags are set at
+    deploy time via env vars.
+    """
+    return _ip_flag_is_enabled(name, _INSIGHT_FLAGS)

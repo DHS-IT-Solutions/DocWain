@@ -43,3 +43,15 @@ def test_is_enabled_unknown_flag_raises():
     import pytest
     with pytest.raises(KeyError):
         is_enabled("BOGUS_FLAG", FeatureFlags())
+
+
+def test_config_module_exposes_is_enabled():
+    from src.api.config import insight_flag_enabled
+    # All flags default false at module import
+    assert insight_flag_enabled("INSIGHTS_TYPE_ANOMALY_ENABLED") is False
+
+
+def test_config_env_override(monkeypatch):
+    from src.api.config import insight_flag_enabled
+    monkeypatch.setenv("INSIGHTS_TYPE_ANOMALY_ENABLED", "true")
+    assert insight_flag_enabled("INSIGHTS_TYPE_ANOMALY_ENABLED") is True
