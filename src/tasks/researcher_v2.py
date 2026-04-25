@@ -154,3 +154,29 @@ def write_doc_status(
         }},
         upsert=True,
     )
+
+
+# Celery task bindings — registered if Celery app is available
+try:
+    from src.celery_app import app as _celery_app
+
+    @_celery_app.task(name="src.tasks.researcher_v2.run_researcher_v2_for_doc_task", bind=True)
+    def run_researcher_v2_for_doc_task(self, *, document_id, profile_id, subscription_id, document_text, domain_hint="generic"):
+        return run_researcher_v2_for_doc(
+            document_id=document_id,
+            profile_id=profile_id,
+            subscription_id=subscription_id,
+            document_text=document_text,
+            domain_hint=domain_hint,
+        )
+
+    @_celery_app.task(name="src.tasks.researcher_v2.run_researcher_v2_for_profile_task", bind=True)
+    def run_researcher_v2_for_profile_task(self, *, profile_id, subscription_id, documents, domain_hint="generic"):
+        return run_researcher_v2_for_profile(
+            profile_id=profile_id,
+            subscription_id=subscription_id,
+            documents=documents,
+            domain_hint=domain_hint,
+        )
+except Exception as _exc:  # pragma: no cover
+    logger.debug("Celery binding for researcher_v2 deferred: %s", _exc)

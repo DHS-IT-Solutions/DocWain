@@ -66,3 +66,28 @@ def refresh_scheduled_pass(
         domain_hint=domain_hint,
     )
     return {"status": "ok"}
+
+
+# Celery task bindings — registered if Celery app is available
+try:
+    from src.celery_app import app as _celery_app
+
+    @_celery_app.task(name="src.tasks.researcher_v2_refresh.refresh_for_new_doc_task", bind=True)
+    def refresh_for_new_doc_task(self, *, document_id, profile_id, subscription_id, document_text, domain_hint="generic"):
+        return refresh_for_new_doc(
+            document_id=document_id,
+            profile_id=profile_id,
+            subscription_id=subscription_id,
+            document_text=document_text,
+            domain_hint=domain_hint,
+        )
+
+    @_celery_app.task(name="src.tasks.researcher_v2_refresh.refresh_scheduled_pass_task", bind=True)
+    def refresh_scheduled_pass_task(self, *, profile_id, subscription_id, domain_hint="generic"):
+        return refresh_scheduled_pass(
+            profile_id=profile_id,
+            subscription_id=subscription_id,
+            domain_hint=domain_hint,
+        )
+except Exception as _exc:  # pragma: no cover
+    logger.debug("Celery binding for researcher_v2_refresh deferred: %s", _exc)

@@ -491,6 +491,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("Zombie sweep worker failed to start: %s", exc)
 
+    # Insights Portal v2 — wire hooks (idempotent; flags still gate behaviour)
+    try:
+        from src.api.insights_wiring import wire_insights_portal
+        wire_insights_portal()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Insights Portal wiring failed (flags will keep endpoints 404): %s", exc)
+
     logger.info("Startup checks completed")
 
     yield
