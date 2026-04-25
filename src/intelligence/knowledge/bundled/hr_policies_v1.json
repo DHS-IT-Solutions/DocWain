@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "describes": "Common HR policy patterns and terms",
+  "entries": {
+    "ptopolicy": "Paid Time Off — accrual-based or annual-grant time-off policy.",
+    "fmla": "Family and Medical Leave Act — US federal job-protected unpaid leave for qualifying medical/family reasons.",
+    "noncompete": "Non-compete clause — agreement restricting post-employment competition; enforceability varies by jurisdiction.",
+    "atwill": "At-will employment — either party may terminate at any time without cause, subject to law.",
+    "exit_interview": "Exit interview — final discussion with departing employee; commonly captures feedback.",
+    "performance_review": "Performance review — periodic structured feedback session.",
+    "probationary_period": "Probationary period — initial employment phase with typically reduced protection.",
+    "severance": "Severance — payment upon termination, often tied to length of service."
+  }
+}

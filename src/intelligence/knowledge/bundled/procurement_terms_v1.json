@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "describes": "Common procurement / supply-chain terms",
+  "entries": {
+    "rfp": "Request for Proposal — formal solicitation document.",
+    "rfq": "Request for Quotation — invitation for price quotes.",
+    "po": "Purchase Order — buyer's formal commitment to purchase.",
+    "sla": "Service Level Agreement — contractual performance commitment.",
+    "moq": "Minimum Order Quantity — smallest unit count a supplier accepts.",
+    "lead_time": "Lead time — duration from order placement to delivery.",
+    "incoterms": "Incoterms — international commercial terms defining buyer/seller responsibilities.",
+    "vendor_consolidation": "Vendor consolidation — reducing number of suppliers to leverage scale.",
+    "duplicate_vendor": "Duplicate vendor — same supplier registered under multiple records, causing payment fragmentation.",
+    "early_pay_discount": "Early-pay discount — pricing reduction for paying invoices before due date."
+  }
+}

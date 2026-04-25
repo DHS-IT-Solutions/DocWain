@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "describes": "Common insurance policy types, coverage categories, exclusion classes",
+  "entries": {
+    "flood": "Flood damage — typically excluded from standard auto and home policies; requires separate flood insurance.",
+    "earthquake": "Earthquake damage — typically excluded; requires separate earthquake rider.",
+    "comprehensive": "Comprehensive coverage — covers non-collision damage (theft, vandalism, weather).",
+    "collision": "Collision coverage — covers damage from collision with another vehicle or object.",
+    "liability": "Liability coverage — covers damages and injuries to others when policyholder is at fault.",
+    "deductible": "Deductible — the amount the policyholder pays out-of-pocket before the insurer pays.",
+    "premium": "Premium — periodic payment to maintain the policy.",
+    "exclusion": "Exclusion — specific conditions or events the policy does not cover.",
+    "rider": "Rider — supplemental coverage added to a base policy.",
+    "umbrella": "Umbrella policy — extra liability coverage beyond underlying policy limits."
+  }
+}

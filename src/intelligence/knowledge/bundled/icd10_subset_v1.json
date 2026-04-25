@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "describes": "Small subset of ICD-10 codes for common conditions. Augments interpretation; never used to fabricate diagnoses not in the document.",
+  "entries": {
+    "e11": "Type 2 diabetes mellitus.",
+    "i10": "Essential (primary) hypertension.",
+    "j45": "Asthma.",
+    "n18": "Chronic kidney disease.",
+    "k21": "Gastro-esophageal reflux disease (GERD).",
+    "f32": "Major depressive disorder, single episode.",
+    "g43": "Migraine.",
+    "m54": "Dorsalgia (back pain).",
+    "r05": "Cough.",
+    "z00": "Encounter for general examination without complaint, suspected or reported diagnosis."
+  }
+}
