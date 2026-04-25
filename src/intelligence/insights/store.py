@@ -37,7 +37,13 @@ class MongoIndexBackend:
         )
 
     def list(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return list(self.collection.find(query))
+        # Exclude Mongo internals so payload is JSON-serializable
+        try:
+            cursor = self.collection.find(query, {"_id": 0})
+        except TypeError:
+            # Fakes used in tests don't accept projection
+            cursor = self.collection.find(query)
+        return list(cursor)
 
 
 class QdrantBackend(Protocol):
