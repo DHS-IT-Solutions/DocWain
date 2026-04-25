@@ -306,7 +306,8 @@ It NEVER touches `pipeline_status`, `stages.*`, or existing `researcher.*` (v1 f
 - A `KnowledgeProvider` interface loads a KB from Blob, exposes lookup methods (`lookup(term)`, `interpret(value)`).
 - Researcher v2 prompts may reference `{{kb.lookup(...)}}` template directives, resolved before LLM call.
 - KB references in an insight populate `external_kb_refs[]`.
-- **Hard rule:** an insight cannot have `external_kb_refs` without also having `evidence_doc_spans`. Doc evidence is required; KB refs are augmentation.
+- **Hard rule (citation-required).** An insight cannot have `external_kb_refs` without also having `evidence_doc_spans`. Doc evidence is required; KB refs are augmentation.
+- **Hard rule (separation, OQ1).** External references are **cited, not mixed into document-content claims**. The `body` field of an insight contains only statements derivable from `evidence_doc_spans`. KB references appear only in the `external_kb_refs[]` metadata array, intended for the consumer to render distinctly (e.g., "References" footer), never interleaved with body text. Every insight-type prompt explicitly instructs the model to keep KB-derived interpretation out of the body. The InsightStore writer rejects any insight whose body text references KB content the doc-spans don't support.
 - KBs are static, not dynamic. v1 ships small bundled KBs (insurance taxonomy, ICD-10 subset, common HR policies, common procurement terms). Larger / live KBs (drug-interactions, market-policy-prices) are out of scope for v1; declared as future adapter extensions.
 
 ## 9. Continuous Re-analysis (Layer 3)
@@ -384,6 +385,8 @@ Returns the state of continuous-refresh work for the profile: last on-upload ref
 ### 10.8 `/api/ask` proactive injection
 
 Existing endpoint, surface enhanced. After the reasoner produces its answer to the user's question, a post-step pulls top-N insights for the profile (filtered by relevance to the asked entities/topics) and appends a "Related findings" section. The reasoner is NOT replaced. The proactive section is rendered in `src/generation/prompts.py` (per `feedback_prompt_paths.md`); the insight retrieval is lookup-only against `insights_index`.
+
+**Always-on once the flag is enabled (OQ4).** No per-user opt-out in v1. Goal is maximum proactive injection — every answer carries proactive findings whenever relevant insights exist for the profile, subject only to the 50ms / no-LLM injection budget (Section 13.2). Severity filtering (`notice`+) and relevance filtering (must match query entities or topic) are quality guards; they reduce *what* gets injected but never disable the injection step itself.
 
 Behind flag `INSIGHTS_PROACTIVE_INJECTION` — when off, `/api/ask` returns the existing response unchanged.
 
@@ -630,13 +633,13 @@ Each SP has its own gate; SPs A→J in dependency order; K and L touched through
 - **Multi-domain profiles edge cases.** A profile with 3 domains may produce duplicate / overlapping insights. Mitigation: dedup by `dedup_key` in Section 7.2; profile-level passes use dominant or generic adapter.
 - **Silent injection in `/api/ask`.** Bad injection content could degrade chat quality. Mitigation: injection content is severity-filtered (only `notice`+ severity); off behind flag; per-call injection budget (50ms, no LLM); A/B-able.
 
-### 20.2 Open questions for review
+### 20.2 Open questions — resolved 2026-04-25
 
-- **OQ1.** Should `external_kb_refs` ever produce insight content the document does not contain (e.g., "based on ICD-10, this code maps to Type 2 Diabetes")? Spec currently says: KB augments interpretation, never adds new claims. Confirm.
-- **OQ2.** v1 ships side-effect-free actions only. Is the "draft a follow-up letter" action (which produces an artifact, not sends it) acceptable as v1, with sending behind a future flag? Spec currently says yes.
-- **OQ3.** Insights dashboard (`G29`) — is the endpoint shape in Section 10.1 what the consumer (frontend / Teams app) needs? May want to adjust pagination / filtering.
-- **OQ4.** Should `/api/ask` proactive injection respect a user opt-out? Spec currently says no (always on when flag is on); consider per-user preference later.
-- **OQ5.** Watchlist signals (`D20`) — cadence is nightly. Sufficient for medical lab drift / insurance renewal? Or does any watchlist need higher frequency?
+- **OQ1 — RESOLVED.** External references may be cited via `external_kb_refs[]` but **must not be mixed into document-content claims**. The body of an insight contains only document-grounded statements; KB references are separate metadata for the consumer to render distinctly (e.g., as a "References" footer, not interleaved with the body). The LLM prompt for every insight type explicitly instructs separation. The writer enforces structural separation: if the body text contains content not derivable from `evidence_doc_spans`, the insight is rejected.
+- **OQ2 — RESOLVED.** Yes — v1 ships side-effect-free actions only (artifacts, form-fill, plans, in-system reminders). External-side-effect actions (email send, calendar push) are declared in adapter but disabled at runner behind `ACTIONS_EXTERNAL_SIDE_EFFECTS_ENABLED` (off in v1).
+- **OQ3 — RESOLVED.** Dashboard endpoint shape in Section 10.1 stands as drafted.
+- **OQ4 — RESOLVED.** `/api/ask` proactive injection is **always-on once the flag is enabled**. No per-user opt-out in v1. Goal is maximum proactive injection — every answer carries proactive findings whenever relevant insights exist, subject only to the 50ms / no-LLM injection budget (Section 13.2). Severity filtering (`notice`+) is preserved as a quality guard, not as an opt-out.
+- **OQ5 — RESOLVED.** Watchlist cadence stays nightly across all adapter declarations. No watchlist requires higher frequency in v1.
 
 ### 20.3 Out of scope for v1
 
