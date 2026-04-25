@@ -1,0 +1,60 @@
+name: generic
+version: "1.0"
+description: "Domain-agnostic researcher adapter. Always-safe fallback for any document set."
+applies_when:
+  domain_classifier_labels: []
+  doc_type_hints: []
+  keyword_evidence_min: 0
+  keywords: []
+
+researcher:
+  insight_types:
+    anomaly:
+      prompt_template: "prompts/generic_anomaly.md"
+      enabled: true
+    gap:
+      prompt_template: "prompts/generic_gap.md"
+      enabled: true
+    comparison:
+      prompt_template: "prompts/generic_comparison.md"
+      enabled: true
+      requires_min_docs: 2
+    scenario:
+      prompt_template: "prompts/generic_scenario.md"
+      enabled: true
+    trend:
+      prompt_template: "prompts/generic_trend.md"
+      enabled: true
+      requires_min_docs: 2
+    recommendation:
+      prompt_template: "prompts/generic_recommendation.md"
+      enabled: true
+    conflict:
+      prompt_template: "prompts/generic_conflict.md"
+      enabled: true
+      requires_min_docs: 2
+    projection:
+      prompt_template: "prompts/generic_projection.md"
+      enabled: true
+    next_action:
+      prompt_template: "prompts/generic_next_action.md"
+      enabled: true
+
+knowledge:
+  sanctioned_kbs: []
+  citation_rule: "doc_grounded_first"
+
+watchlists: []
+
+actions:
+  - action_id: generic_summary_artifact
+    title: "Generate document set summary"
+    action_type: artifact
+    artifact_template: "templates/generic_summary.md"
+    requires_confirmation: false
+
+visualizations:
+  - viz_id: generic_timeline
+    insight_types: [trend]
+  - viz_id: generic_comparison_table
+    insight_types: [comparison]

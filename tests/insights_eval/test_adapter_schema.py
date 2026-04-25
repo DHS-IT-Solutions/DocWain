@@ -102,3 +102,19 @@ def test_minimal_adapter_only_name():
 def test_invalid_yaml_raises():
     with pytest.raises(ValueError):
         parse_adapter_yaml("not: a: valid: yaml:::")
+
+
+def test_generic_adapter_loads_and_parses():
+    from pathlib import Path
+    p = Path("src/intelligence/adapters/generic.yaml")
+    assert p.exists(), "generic adapter YAML must ship with code"
+    a = parse_adapter_yaml(p.read_text())
+    assert a.name == "generic"
+    expected_types = {
+        "anomaly", "gap", "comparison", "scenario", "trend",
+        "recommendation", "conflict", "projection", "next_action",
+    }
+    assert set(a.researcher.insight_types.keys()) == expected_types
+    for cfg in a.researcher.insight_types.values():
+        assert cfg.enabled is True
+        assert cfg.prompt_template
