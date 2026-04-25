@@ -157,4 +157,26 @@ app.autodiscover_tasks(["src.tasks.extraction", "src.tasks.screening",
                          "src.tasks.backfill", "src.tasks.researcher",
                          "src.tasks.researcher_refresh",
                          "src.tasks.profile_intelligence",
-                         "src.tasks.profile_intelligence_refresh"])
+                         "src.tasks.profile_intelligence_refresh",
+                         # Insights Portal v2
+                         "src.tasks.researcher_v2",
+                         "src.tasks.researcher_v2_refresh"])
+
+
+# Wire Insights Portal hooks at worker startup so resolve_default_* point at
+# real services (Mongo+Qdrant+Neo4j+vLLM gateway). The app process wires them
+# from app_lifespan; the worker process needs its own hook.
+from celery.signals import worker_process_init
+
+
+@worker_process_init.connect
+def _wire_insights_portal_in_worker(**_kwargs):
+    try:
+        from src.api.insights_wiring import wire_insights_portal
+        wire_insights_portal()
+    except Exception as exc:  # noqa: BLE001
+        # Non-fatal — researcher_v2 tasks will short-circuit on flag check anyway
+        import logging
+        logging.getLogger(__name__).warning(
+            "Insights Portal wiring failed in worker: %s", exc
+        )
