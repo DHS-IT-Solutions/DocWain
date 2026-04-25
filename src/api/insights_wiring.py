@@ -123,11 +123,28 @@ def get_adapter_store() -> AdapterStore:
     return _ADAPTER_STORE
 
 
+def _ensure_insights_index_mongo_indexes(coll) -> None:
+    """Create indexes on the Mongo insights_index for lookup paths.
+
+    Idempotent — Mongo's create_index is no-op if index already exists.
+    """
+    try:
+        coll.create_index("dedup_key", unique=True, background=True)
+        coll.create_index("profile_id", background=True)
+        coll.create_index([("profile_id", 1), ("severity", 1)], background=True)
+        coll.create_index([("profile_id", 1), ("refreshed_at", -1)], background=True)
+        coll.create_index("insight_id", background=True)
+    except Exception as exc:
+        logger.warning("ensure_insights_index_mongo_indexes failed: %s", exc)
+
+
 def get_insight_store() -> InsightStore:
     global _INSIGHT_STORE
     if _INSIGHT_STORE is None:
         db = _get_mongo_db()
-        mongo_index = MongoIndexBackend(collection=db[_INSIGHTS_INDEX_COLL_NAME])
+        coll = db[_INSIGHTS_INDEX_COLL_NAME]
+        _ensure_insights_index_mongo_indexes(coll)
+        mongo_index = MongoIndexBackend(collection=coll)
 
         qdrant_client = _get_qdrant_client()
         _ensure_insights_qdrant_collection(qdrant_client)

@@ -1088,9 +1088,14 @@ def ask_question_api(
         if insight_flag_enabled("INSIGHTS_PROACTIVE_INJECTION"):
             from src.api.insights_wiring import get_insight_store
             from src.generation.prompts import compose_response_with_insights
+            # Limit to 15 — top severity-and-recency ordered candidates.
+            # 5 will be selected after relevance filter; 15 keeps the Mongo
+            # roundtrip small without starving the selector.
             _store = get_insight_store()
             _profile_insights = _store.list_for_profile(
-                profile_id=request.profile_id, limit=50,
+                profile_id=request.profile_id,
+                severities=["notice", "warn", "critical"],
+                limit=15,
             ) if request.profile_id else []
             base_text = normalized.get("response", "")
             normalized["response"] = compose_response_with_insights(
