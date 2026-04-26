@@ -20,6 +20,13 @@ SYSTEM_PROMPT = (
     "metadata, but never mixed into 'body'.\n"
     "(3) Every insight requires at least one entry in 'evidence_doc_spans'.\n"
     "(4) Quote the supporting text verbatim in each span.\n"
+    "(5) When the prompt's domain-focus uses placeholder variables "
+    "like $X, $Y, $N, X months, etc., DO NOT echo them. Replace each "
+    "with a concrete value computed or extracted from the document. "
+    "If a value cannot be computed from document content, omit that "
+    "scenario entirely rather than emit a placeholder. Insight bodies "
+    "with templated placeholders ($X, $Y, $W, N months, X by Y date) "
+    "are unacceptable.\n"
 )
 
 
