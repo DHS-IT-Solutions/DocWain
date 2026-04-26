@@ -1018,6 +1018,29 @@ def ask_question_api(
     if want_stream:
         normalized_stream_answer = normalize_answer(result.answer)
 
+        # Insights Portal v2 — proactive injection in the streaming path too.
+        # Mirrors the non-stream injection at line ~1083.
+        try:
+            from src.api.config import insight_flag_enabled
+            if insight_flag_enabled("INSIGHTS_PROACTIVE_INJECTION"):
+                from src.api.insights_wiring import get_insight_store
+                from src.generation.prompts import compose_response_with_insights
+                _store = get_insight_store()
+                _profile_insights = _store.list_for_profile(
+                    profile_id=request.profile_id,
+                    severities=["notice", "warn", "critical"],
+                    limit=15,
+                ) if request.profile_id else []
+                _base = normalized_stream_answer.get("response", "")
+                normalized_stream_answer["response"] = compose_response_with_insights(
+                    base_answer=_base,
+                    profile_insights=_profile_insights,
+                    query=request.query,
+                    query_entities=set(),
+                )
+        except Exception as _inj_exc:
+            logger.warning("stream proactive injection skipped: %s", _inj_exc)
+
         # Run visualization on the completed answer before streaming
         try:
             from src.visualization.enhancer import enhance_with_visualization

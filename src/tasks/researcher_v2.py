@@ -97,13 +97,23 @@ def run_researcher_v2_for_doc(
     adapter = resolve_default_adapter(domain=domain, subscription_id=subscription_id)
     store = resolve_default_store()
     llm_call = resolve_default_llm()
-    written = 0
-    for itype in enabled:
-        if itype not in adapter.researcher.insight_types:
-            continue
-        if itype in _PROFILE_TYPES:
-            continue
-        result = run_per_doc_insight_pass(DocPassInputs(
+
+    # Filter to per-doc types this adapter declares
+    per_doc_types = [
+        t for t in enabled
+        if t in adapter.researcher.insight_types and t not in _PROFILE_TYPES
+    ]
+    if not per_doc_types:
+        return {"status": "ok", "written": 0}
+
+    # Parallel mode (gated). vLLM batches concurrent requests internally,
+    # so all per-type LLM calls fan out and complete in roughly the time
+    # of one. Cap concurrency to avoid overwhelming small-GPU deployments.
+    parallel = insight_flag_enabled("INSIGHTS_RESEARCHER_PARALLEL_ENABLED")
+    max_workers = min(len(per_doc_types), 8)
+
+    def _one_pass(itype: str):
+        return run_per_doc_insight_pass(DocPassInputs(
             adapter=adapter,
             insight_type=itype,
             document_id=document_id,
@@ -113,6 +123,26 @@ def run_researcher_v2_for_doc(
             kb_provider=None,
             llm_call=llm_call,
         ))
+
+    pass_results = []
+    if parallel and max_workers > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(_one_pass, t): t for t in per_doc_types}
+            for fut in as_completed(futures):
+                try:
+                    pass_results.append(fut.result())
+                except Exception as exc:
+                    logger.warning("per-type pass failed: %s", exc)
+    else:
+        for t in per_doc_types:
+            try:
+                pass_results.append(_one_pass(t))
+            except Exception as exc:
+                logger.warning("per-type pass failed: %s", exc)
+
+    written = 0
+    for result in pass_results:
         for insight in result.insights:
             try:
                 store.write(insight)

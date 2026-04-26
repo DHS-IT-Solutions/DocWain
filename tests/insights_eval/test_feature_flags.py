@@ -1,7 +1,7 @@
 from src.api.feature_flags import FeatureFlags, is_enabled, FLAG_NAMES
 
 
-def test_all_25_flags_registered():
+def test_all_26_flags_registered():
     expected = {
         "INSIGHTS_TYPE_ANOMALY_ENABLED",
         "INSIGHTS_TYPE_GAP_ENABLED",
@@ -29,6 +29,7 @@ def test_all_25_flags_registered():
         "ADAPTER_GENERIC_FALLBACK_ENABLED",
         "VIZ_ENABLED",
         "INSIGHTS_DASHBOARD_ENABLED",
+        "INSIGHTS_RESEARCHER_PARALLEL_ENABLED",
     }
     assert set(FLAG_NAMES) == expected
 
