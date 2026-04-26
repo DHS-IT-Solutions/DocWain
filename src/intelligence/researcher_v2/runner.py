@@ -60,6 +60,7 @@ def run_per_doc_insight_pass(inp: DocPassInputs) -> DocPassResult:
         domain_name=inp.adapter.name,
         document_text=inp.document_text,
         kb_context=kb_context,
+        domain_focus=cfg.domain_focus,
     )
     try:
         raw = inp.llm_call(system=SYSTEM_PROMPT, user=user_prompt)

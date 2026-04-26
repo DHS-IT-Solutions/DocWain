@@ -1,0 +1,137 @@
+name: procurement
+version: "1.0"
+description: "Procurement docs — RFPs, RFQs, POs, vendor contracts, SLAs, invoices. Reasons about cost optimization, vendor risk, SLA breach exposure, payment-terms leverage."
+
+applies_when:
+  domain_classifier_labels: [procurement, supply_chain, vendor]
+  doc_type_hints: [rfp, rfq, purchase_order, vendor_contract, sla, invoice, msa]
+  keyword_evidence_min: 3
+  keywords:
+    - vendor
+    - supplier
+    - purchase order
+    - rfp
+    - rfq
+    - sla
+    - moq
+    - lead time
+    - net 30
+    - incoterms
+    - early-pay discount
+
+researcher:
+  insight_types:
+    anomaly:
+      enabled: true
+      domain_focus: |
+        Procurement anomalies:
+        - SLA targets unusually tight (>99.9% uptime with no carve-outs is anomalous)
+        - Penalty clauses missing from SLA documents
+        - Net-payment terms outside industry norm (Net 90+ unusual; Net 0 indicates upfront required)
+        - MOQ that doesn't match historical buying volume
+        - Lead time > 90 days for commodity items
+        - Single-source language without business-continuity clause
+        - Auto-renewal hidden in long T&Cs
+    gap:
+      enabled: true
+      domain_focus: |
+        Procurement gaps:
+        - No price-protection / MFN clause in long-term contracts
+        - Missing termination-for-convenience option
+        - No data-protection / DPA addendum when vendor handles PII
+        - No insurance-certificate requirement on vendor
+        - No business-continuity / disaster-recovery clause
+        - Missing escalation-tier definitions in SLA
+    comparison:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Vendor and contract comparisons:
+        - Unit pricing across vendors for the same SKU/service
+        - Lead-time comparisons for the same item
+        - Payment-terms favorability (Net days, early-pay discounts)
+        - SLA strictness and penalty matching
+        - Total-cost-of-ownership vs unit-cost
+        - Same-vendor multi-contract: single vendor lock-in risk
+    scenario:
+      enabled: true
+      domain_focus: |
+        Procurement scenarios:
+        - "If vendor misses SLA by N points, penalty = $X per stated terms"
+        - "If we exercise MFN clause, expected price reduction = $Y"
+        - "If we consolidate volume to single vendor, volume-discount tier engages at $Z"
+        - "If we delay payment to capture early-pay discount lapse, net cost = $W"
+    trend:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Procurement trends:
+        - Unit price trajectory across renewals (% per year)
+        - Lead-time creep
+        - SLA-actual delivery against SLA-target
+        - Spend concentration trends (top vendor share over time)
+    recommendation:
+      enabled: true
+      domain_focus: |
+        Procurement recommendations:
+        - "Negotiate Net X to Y given current cash-conversion-cycle"
+        - "Consolidate vendors A, B, C — duplicate registration found"
+        - "Capture early-pay discount of N% — annualized savings $X"
+        - "Renegotiate SLA penalty to reflect actual breach frequency"
+        - "Add MFN / price-protection in upcoming renewal"
+    conflict:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Procurement document conflicts:
+        - PO references unit price different from MSA
+        - Invoice doesn't match PO (quantity, price, or total)
+        - SLA referenced in MSA missing from agreement
+        - Conflicting incoterms across documents in same shipment
+    projection:
+      enabled: true
+      domain_focus: |
+        Procurement projections:
+        - Annual spend at current run-rate
+        - Cumulative cost at renewal vs. switch-to-alternate
+        - SLA penalty exposure at current breach rate
+    next_action:
+      enabled: true
+      domain_focus: |
+        Procurement next actions:
+        - Contract renewal-notice deadline (often 60-90 days before term end)
+        - Auto-renewal opt-out window
+        - Quarterly business review scheduled
+        - Volume-discount tier-up opportunity
+        - Invoice-due dates with early-pay-discount cutoff
+
+knowledge:
+  sanctioned_kbs:
+    - kb_id: procurement_terms_v1
+      ref: "blob://kbs/procurement_terms_v1.json"
+      describes: "Procurement / supply-chain terminology — for interpretation only."
+  citation_rule: "doc_grounded_first"
+
+watchlists:
+  - id: contract_renewal_window
+    description: "Contract renewal notice window opening soon"
+    eval: "expr:doc.renewal_notice_date - now < 90d"
+    fires_insight_type: next_action
+
+actions:
+  - action_id: generate_vendor_scorecard
+    title: "Generate vendor scorecard"
+    action_type: artifact
+    artifact_template: "procurement/vendor_scorecard.md"
+    requires_confirmation: false
+  - action_id: generate_renegotiation_brief
+    title: "Generate renegotiation brief"
+    action_type: artifact
+    artifact_template: "procurement/renegotiation_brief.md"
+    requires_confirmation: false
+
+visualizations:
+  - viz_id: spend_concentration_chart
+    insight_types: [trend, comparison]
+  - viz_id: vendor_comparison_table
+    insight_types: [comparison]

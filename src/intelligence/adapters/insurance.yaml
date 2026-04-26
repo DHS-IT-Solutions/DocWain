@@ -1,0 +1,157 @@
+name: insurance
+version: "1.0"
+description: "Insurance policies, claims, certificates, endorsements. Reasons about coverage adequacy, exclusion gaps, premium-coverage tradeoffs, claim risk."
+
+applies_when:
+  domain_classifier_labels: [insurance, policy]
+  doc_type_hints: [policy_document, certificate_of_insurance, claim_form, endorsement]
+  keyword_evidence_min: 3
+  keywords:
+    - policyholder
+    - deductible
+    - premium
+    - sum insured
+    - coverage
+    - exclusion
+    - liability limit
+    - rider
+    - endorsement
+    - claim
+    - underwriter
+
+researcher:
+  insight_types:
+    anomaly:
+      enabled: true
+      domain_focus: |
+        Insurance anomalies to surface (when the document text supports them):
+        - Liability limits below $100,000 (state-recommended minimum in most US jurisdictions) — call out exposure: "personal-asset risk on collisions exceeding $X"
+        - Sum insured well below replacement cost on property/auto policies
+        - Premium-coverage mismatch (high premium for narrow coverage, or vice versa — both are anomalous)
+        - Endorsements that contradict the main policy (rider says X, base policy excludes X)
+        - Excessive deductible relative to premium (deductible >50% of premium typically anomalous)
+        - Effective dates already expired or with <30 days to renewal
+        - Claim history concentrated in last 12 months (frequency indicator)
+        - Named-perils policy where all-perils would normally apply
+    gap:
+      enabled: true
+      domain_focus: |
+        Coverage gaps to identify (only when the document content lets you see the absence):
+        - Auto without uninsured-motorist coverage in states where it's optional but recommended
+        - Property without flood (in flood-prone area inferred from address) or earthquake riders
+        - No umbrella/excess-liability policy when underlying limits are at low levels
+        - Personal articles (jewelry, electronics) without scheduled coverage
+        - Business policies without cyber, EPLI, or D&O when description suggests exposure
+        - Health policies without out-of-network coverage when the network is narrow
+        - Life/disability mismatches with stated dependents/income
+        Be explicit: "policy DOES NOT mention X" — do not assume absence; cite the specific section where it would appear.
+    comparison:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Cross-policy comparison points:
+        - Premium delta vs coverage delta (is the more expensive policy actually buying more coverage)
+        - Deductible-to-premium ratio across policies
+        - Exclusion overlap (which exclusions appear in all vs only some)
+        - Effective-date and renewal-date staggering (annual vs multi-year, all-at-once vs spread)
+        - Same insurer concentration (single-insurer risk if all policies are from same carrier)
+        - Coverage type ladder: e.g. auto liability $100K, umbrella $1M, personal $5M — does the ladder make sense?
+        Quote both documents in spans; compare numbers verbatim.
+    scenario:
+      enabled: true
+      domain_focus: |
+        Scenario reasoning the document content supports:
+        - "If a covered event of $X occurs, deductible eats $Y, policy pays $Z" — concrete dollar math from stated terms
+        - "If exclusion E triggers (e.g. flood, earthquake, intentional act), policy pays $0 — out-of-pocket exposure $W"
+        - "If renewal lapses, retroactive coverage gap of D days creates uninsured exposure"
+        - "If claim count exceeds N in T months, surcharge / non-renewal risk per stated terms"
+        Always ground in policy terms; never invent dollar amounts not in the document.
+    trend:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Trends across dated documents (declarations, renewals, claims):
+        - Premium trajectory over time (% per year)
+        - Coverage limit trajectory (going up, flat, or down vs inflation)
+        - Deductible changes (often a leading indicator of insurer-side risk reassessment)
+        - Claim frequency / severity over time
+        - Endorsement adds vs removals
+        Mark anomalies in the trend (sudden 30%+ premium spike, unexplained limit reductions).
+    recommendation:
+      enabled: true
+      domain_focus: |
+        Actionable insurance recommendations grounded in document content:
+        - "Increase liability to $X to align with state recommendation" (cite the current limit)
+        - "Add umbrella policy of $Y given underlying limits and stated assets/income"
+        - "Schedule personal articles rider for items >$Z mentioned"
+        - "Switch to comprehensive from named-perils given property characteristics"
+        - "Bundle home + auto with same insurer — cite the multi-policy discount terms in the document"
+        - "Review beneficiaries on life policy" (when designation is stale or missing)
+        Each recommendation must be supported by something the doc actually says.
+    conflict:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Conflicts between insurance documents:
+        - Endorsement clause contradicts a base-policy exclusion
+        - Declarations page says X covered, exclusions list says X excluded
+        - Beneficiary on life policy A contradicts trust/will document B
+        - Coordinated benefits across health policies overlap or leave gaps
+        - Auto and umbrella policies disagree on liability ladder
+        Quote both sides verbatim; show the contradiction.
+    projection:
+      enabled: true
+      domain_focus: |
+        Projections from document data:
+        - Next renewal premium estimate from premium trajectory + claim experience
+        - Out-of-pocket exposure under named scenarios (collision at policy limit, total loss, etc.)
+        - Lifetime cost of policy continuation vs. switch
+        - Risk score implications (e.g. if claims continue at current rate, surcharge probability)
+        Use only numbers and rates the document provides or that can be computed from them.
+    next_action:
+      enabled: true
+      domain_focus: |
+        Time-sensitive insurance next steps:
+        - Renewal due in <60 days — gather quotes from competitors
+        - Claim deadline (notice-of-loss windows are typically 30/60/90 days)
+        - Endorsement expiration on a key rider
+        - SR-22/FR-44 or other state-required filing maintenance
+        - Premium audit window for business policies
+        Severity = warn or critical when within 14 days; notice for 14-60; info beyond.
+
+knowledge:
+  sanctioned_kbs:
+    - kb_id: insurance_taxonomy_v1
+      ref: "blob://kbs/insurance_taxonomy_v1.json"
+      describes: "Common insurance policy types, coverage categories, exclusion classes — for INTERPRETATION ONLY, never fabricate facts."
+  citation_rule: "doc_grounded_first"
+
+watchlists:
+  - id: renewal_due
+    description: "Policy renewal date within 60 days"
+    eval: "expr:doc.policy_end_date - now < 60d"
+    fires_insight_type: next_action
+
+actions:
+  - action_id: generate_coverage_summary
+    title: "Generate coverage summary PDF"
+    action_type: artifact
+    artifact_template: "insurance/coverage_summary.md"
+    requires_confirmation: false
+  - action_id: draft_claim_letter
+    title: "Draft claim notice letter"
+    action_type: artifact
+    artifact_template: "insurance/claim_letter.md"
+    requires_confirmation: false
+  - action_id: schedule_renewal_review
+    title: "Schedule renewal review reminder"
+    action_type: reminder
+    requires_confirmation: false
+
+visualizations:
+  - viz_id: coverage_comparison_table
+    insight_types: [comparison]
+  - viz_id: premium_timeline
+    insight_types: [trend]
+  - viz_id: policy_renewal_timeline
+    insight_types: [next_action]

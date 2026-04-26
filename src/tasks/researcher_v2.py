@@ -62,6 +62,26 @@ def _enabled_types(types: List[str]) -> List[str]:
     return [t for t in types if insight_flag_enabled(_TYPE_FLAGS.get(t, ""))]
 
 
+def _resolve_domain(*, document_text: str, hint: str) -> str:
+    """Choose the adapter domain.
+
+    If hint is anything other than "generic" or empty, honour it. Otherwise
+    auto-detect via the existing classifier (gated by ADAPTER_AUTO_DETECT_ENABLED).
+    Falls back to "generic" on any classifier failure or low confidence.
+    """
+    if hint and hint != "generic":
+        return hint
+    if not insight_flag_enabled("ADAPTER_AUTO_DETECT_ENABLED"):
+        return "generic"
+    try:
+        from src.intelligence.adapters.detect import detect_domain
+        result = detect_domain(document_text)
+        return result.domain  # already falls back to "generic" on low confidence
+    except Exception as exc:
+        logger.debug("auto-detect skipped: %s", exc)
+        return "generic"
+
+
 def run_researcher_v2_for_doc(
     *,
     document_id: str,
@@ -73,7 +93,8 @@ def run_researcher_v2_for_doc(
     enabled = _enabled_types(list(_TYPE_FLAGS.keys()))
     if not enabled:
         return {"status": "skipped_flag_off"}
-    adapter = resolve_default_adapter(domain=domain_hint, subscription_id=subscription_id)
+    domain = _resolve_domain(document_text=document_text, hint=domain_hint)
+    adapter = resolve_default_adapter(domain=domain, subscription_id=subscription_id)
     store = resolve_default_store()
     llm_call = resolve_default_llm()
     written = 0

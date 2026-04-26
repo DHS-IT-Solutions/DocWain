@@ -45,6 +45,7 @@ def build_typed_insight_prompt(
     domain_name: str,
     document_text: str,
     kb_context: str = "",
+    domain_focus: str = "",
 ) -> str:
     if insight_type not in INSIGHT_TYPES:
         raise ValueError(f"unknown insight_type: {insight_type}")
@@ -55,10 +56,16 @@ def build_typed_insight_prompt(
         if kb_context
         else ""
     )
+    domain_block = (
+        f"\nDomain-specific focus areas:\n{domain_focus}\n"
+        if domain_focus
+        else ""
+    )
     return (
         f"Domain: {domain_name}\n"
         f"Insight type to produce: {insight_type}\n"
         f"Guidance: {guidance}\n"
+        f"{domain_block}"
         f"{kb_block}\n"
         f"Document text:\n\n{truncated}\n\n"
         "Return JSON with this shape (no prose, no markdown fences):\n"

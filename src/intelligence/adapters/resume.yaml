@@ -1,0 +1,120 @@
+name: resume
+version: "1.0"
+description: "Candidate resumes / CVs. Reasons about role-fit, experience gaps, salary expectations, interview-prep priorities."
+
+applies_when:
+  domain_classifier_labels: [resume, cv, candidate]
+  doc_type_hints: [resume, cv, cover_letter, application]
+  keyword_evidence_min: 3
+  keywords:
+    - experience
+    - education
+    - skills
+    - summary
+    - certification
+    - employment
+    - candidate
+
+researcher:
+  insight_types:
+    anomaly:
+      enabled: true
+      domain_focus: |
+        Resume anomalies:
+        - Employment gaps > 6 months not explained
+        - Job tenure pattern unusually short (avg <12 months) — flight-risk signal
+        - Title trajectory inconsistent (lateral moves at senior levels can indicate org issues)
+        - Skill claims not backed by experience entries
+        - Education claim that doesn't match typical attainment for stated experience
+        - Date inconsistencies (overlapping employment, undated entries, future dates)
+        - Generic / over-broad skill list (red flag — depth uncertain)
+    gap:
+      enabled: true
+      domain_focus: |
+        Resume gaps relative to typical role expectations:
+        - Missing certifications expected for stated role/level (no AWS for senior cloud engineer claim, no PMP for senior PM claim)
+        - No recent experience in core stated technology
+        - No leadership / cross-functional examples for senior-level claim
+        - No metrics / quantified achievements
+        - No publications / open source for research-role claim
+        Frame as "consider asking about" rather than "candidate is unqualified."
+    comparison:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Cross-candidate comparisons (when multiple resumes loaded):
+        - Years of experience in core stack
+        - Industry-relevance match
+        - Title trajectory and progression speed
+        - Education / certification stack
+        - Published work / portfolio depth
+        Be objective; do not infer demographic attributes.
+    scenario:
+      enabled: true
+      domain_focus: |
+        Hiring scenarios:
+        - "Given experience X, expected ramp-up time for role Y is Z months"
+        - "Salary expectation likely in range $A-$B based on stated compensation history (if present)"
+        - "Required skill gap at hire: K — interview / assessment plan should cover"
+    trend:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Trends within a single resume (career trajectory):
+        - Career velocity (years to each promotion)
+        - Industry / domain moves
+        - Technology shifts (where the candidate's skills moved)
+    recommendation:
+      enabled: true
+      domain_focus: |
+        Hiring-process recommendations:
+        - "Probe specifically on X (skill claimed but no project / certification visible)"
+        - "Reference check should verify Y (claim that's hard to validate from doc)"
+        - "Technical interview emphasis on Z given role requirements vs resume gap"
+        Always frame as decision support; never make hire/no-hire recommendations.
+    conflict:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Resume conflicts:
+        - Resume vs cover letter inconsistencies
+        - Multiple resume versions with different titles/dates for same employment
+        - LinkedIn-implied claims vs resume claims (when both in doc set)
+    projection:
+      enabled: true
+      domain_focus: |
+        Career-projection style observations the resume content supports:
+        - "Trajectory suggests next-level role within X years if continuing pattern"
+        - "Skill progression is in/out of pace with stated experience level"
+    next_action:
+      enabled: true
+      domain_focus: |
+        Recruiting next steps:
+        - Schedule technical interview / system-design round
+        - Reference check on stated employer X
+        - Background-check window
+        - Offer decision deadline implied by competing offers (if mentioned)
+
+knowledge:
+  sanctioned_kbs: []
+  citation_rule: "doc_grounded_first"
+
+watchlists: []
+
+actions:
+  - action_id: generate_interview_brief
+    title: "Generate interview prep brief"
+    action_type: artifact
+    artifact_template: "resume/interview_brief.md"
+    requires_confirmation: false
+  - action_id: generate_skills_assessment_plan
+    title: "Generate skills-assessment plan"
+    action_type: artifact
+    artifact_template: "resume/skills_assessment_plan.md"
+    requires_confirmation: false
+
+visualizations:
+  - viz_id: career_timeline
+    insight_types: [trend, next_action]
+  - viz_id: skills_radar
+    insight_types: [comparison]

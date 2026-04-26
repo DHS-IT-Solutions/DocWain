@@ -48,6 +48,12 @@ class RepoAdapterBackend:
 
     _MAPPINGS = {
         "sme_adapters/global/generic.yaml": "src/intelligence/adapters/generic.yaml",
+        "sme_adapters/global/insurance.yaml": "src/intelligence/adapters/insurance.yaml",
+        "sme_adapters/global/medical.yaml": "src/intelligence/adapters/medical.yaml",
+        "sme_adapters/global/hr.yaml": "src/intelligence/adapters/hr.yaml",
+        "sme_adapters/global/procurement.yaml": "src/intelligence/adapters/procurement.yaml",
+        "sme_adapters/global/contract.yaml": "src/intelligence/adapters/contract.yaml",
+        "sme_adapters/global/resume.yaml": "src/intelligence/adapters/resume.yaml",
     }
 
     def get_text(self, key: str) -> str:

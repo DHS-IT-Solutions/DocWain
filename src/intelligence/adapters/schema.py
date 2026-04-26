@@ -24,6 +24,12 @@ class InsightTypeConfig:
     prompt_template: str = ""
     enabled: bool = True
     requires_min_docs: int = 1
+    # Free-form domain-specific guidance the researcher LLM sees on top
+    # of the generic per-type guidance. This is where "awe factor" lives —
+    # an insurance adapter teaches the model about liability minimums,
+    # umbrella riders, exclusion classes; medical teaches about lab range
+    # interpretation, drug interactions; etc.
+    domain_focus: str = ""
 
 
 @dataclass
@@ -101,6 +107,7 @@ def parse_adapter_yaml(text: str) -> Adapter:
             prompt_template=str(v.get("prompt_template") or ""),
             enabled=bool(v.get("enabled", True)),
             requires_min_docs=int(v.get("requires_min_docs") or 1),
+            domain_focus=str(v.get("domain_focus") or ""),
         )
         for name, v in (r.get("insight_types") or {}).items()
     }

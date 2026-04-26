@@ -1,0 +1,146 @@
+name: medical
+version: "1.0"
+description: "Medical records, lab reports, clinical notes, prescriptions, imaging reports. Reasons about clinical anomalies, drug interactions, follow-up needs, condition trajectories."
+
+applies_when:
+  domain_classifier_labels: [medical, clinical, healthcare]
+  doc_type_hints: [medical_record, lab_report, prescription, clinical_note, imaging_report, discharge_summary]
+  keyword_evidence_min: 3
+  keywords:
+    - patient
+    - diagnosis
+    - prescription
+    - medication
+    - dosage
+    - vitals
+    - lab
+    - mrn
+    - icd
+    - allergies
+    - chief complaint
+    - assessment
+
+researcher:
+  insight_types:
+    anomaly:
+      enabled: true
+      domain_focus: |
+        Clinical anomalies to surface (only if document text supports them — never fabricate clinical claims):
+        - Lab values clearly outside normal reference range (cite the value AND the range from the doc itself)
+        - Vital signs trending toward concern (BP > 140/90, HR > 100 or <50 at rest, SpO2 <92%, T > 100.4F)
+        - Medication-medication risk indicators when both appear in the doc (e.g. warfarin + NSAID — bleeding risk)
+        - Prescription dose outside typical ranges for the listed condition
+        - Allergy listed AND a contraindicated medication prescribed (PRIORITY: warn or critical severity)
+        - Missing follow-up timing on chronic conditions (diabetes A1C, hypertension, CKD)
+        - Symptom-medication mismatch (drug listed but no matching diagnosis)
+    gap:
+      enabled: true
+      domain_focus: |
+        Care gaps based on document content:
+        - Chronic condition listed but no follow-up date scheduled
+        - Lab order placed but no result documented
+        - Specialist referral implied but not made
+        - Vaccination history missing standard items for the patient's age/condition
+        - No advance directive / DNR mentioned for high-risk patients
+        - Medication reconciliation not done at care transitions
+        Cite the explicit absence — do not assume what's missing without basis.
+    comparison:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Cross-visit / cross-provider comparisons:
+        - Medication regimen changes across visits — additions, dose changes, discontinuations
+        - Lab value progression over time (BP, A1C, lipids, eGFR)
+        - Diagnosis additions or removals
+        - Provider-to-provider plan-of-care consistency
+    scenario:
+      enabled: true
+      domain_focus: |
+        Clinically grounded scenarios:
+        - "If A1C continues current trajectory, projected to reach X by Y date" (only with multiple data points)
+        - "Combination of medication X + condition Y suggests monitoring need for Z" (only if the doc lists all)
+        - "Renal function declining; if eGFR continues, dose adjustment needed for X medication"
+        Be conservative; clinical scenarios must be doc-grounded.
+    trend:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Trends across dated medical documents:
+        - Vital sign progressions (BP, HR, weight, glucose)
+        - Lab marker trajectories (A1C, LDL, eGFR, hemoglobin)
+        - Symptom frequency and severity
+        - Medication adherence indicators (refill timing if visible)
+        Flag concerning trajectories with clinical significance language ("worsening", "improving", "stable") only when the data supports it.
+    recommendation:
+      enabled: true
+      domain_focus: |
+        Recommendations grounded in clinical content:
+        - Follow-up labs at recommended interval per current guidelines for the listed condition
+        - Specialist referral when document hints suggest it (e.g. recurring chest pain → cardiology)
+        - Medication review when polypharmacy is evident (>5 active medications)
+        - Lifestyle interventions tied to specific listed risk factors
+        Use cautious language; this is decision support, not diagnosis. Never recommend specific drug doses.
+    conflict:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Medical record conflicts:
+        - Allergy in one record contradicts medication in another (HIGH PRIORITY)
+        - Diagnoses that contradict (one record says diabetic, another says non-diabetic)
+        - Medication dose contradictions across providers
+        - Conflicting clinical impressions of the same finding
+        These are patient-safety insights — severity should reflect that.
+    projection:
+      enabled: true
+      domain_focus: |
+        Conservative projections:
+        - Next-window labs (e.g. "A1C due in ~3 months per current schedule")
+        - Disease-progression markers if document timeline supports it
+        - Follow-up cadence implied by condition severity
+    next_action:
+      enabled: true
+      domain_focus: |
+        Time-sensitive medical next steps:
+        - Upcoming appointments mentioned in the document
+        - Lab work due (cite the order or last-done date + interval)
+        - Prescription refill window
+        - Imaging follow-up dates
+        - Vaccine due dates
+        Severity scaled to clinical urgency.
+
+knowledge:
+  sanctioned_kbs:
+    - kb_id: icd10_subset_v1
+      ref: "blob://kbs/icd10_subset_v1.json"
+      describes: "ICD-10 codes for common conditions — for interpretation only, never to fabricate diagnoses not in the document."
+  citation_rule: "doc_grounded_first"
+
+watchlists:
+  - id: lab_overdue
+    description: "Lab work due within 14 days"
+    eval: "expr:doc.next_lab_date - now < 14d"
+    fires_insight_type: next_action
+  - id: appointment_imminent
+    description: "Appointment in next 7 days"
+    eval: "expr:doc.next_appointment_date - now < 7d"
+    fires_insight_type: next_action
+
+actions:
+  - action_id: generate_clinical_summary
+    title: "Generate clinical summary for specialist"
+    action_type: artifact
+    artifact_template: "medical/specialist_summary.md"
+    requires_confirmation: false
+  - action_id: medication_list
+    title: "Generate current medication list"
+    action_type: artifact
+    artifact_template: "medical/medication_list.md"
+    requires_confirmation: false
+
+visualizations:
+  - viz_id: vitals_timeline
+    insight_types: [trend]
+  - viz_id: lab_progression_chart
+    insight_types: [trend]
+  - viz_id: medication_history_table
+    insight_types: [comparison]

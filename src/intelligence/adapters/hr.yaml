@@ -1,0 +1,142 @@
+name: hr
+version: "1.0"
+description: "HR documents, employment contracts, performance reviews, compensation letters, policy handbooks. Reasons about employment terms, compliance, attrition risk, equity vesting."
+
+applies_when:
+  domain_classifier_labels: [hr, human_resources, employment]
+  doc_type_hints: [employment_contract, offer_letter, performance_review, policy_handbook, compensation_letter, exit_interview, severance_agreement]
+  keyword_evidence_min: 3
+  keywords:
+    - employee
+    - employer
+    - salary
+    - compensation
+    - pto
+    - performance
+    - probationary
+    - severance
+    - non-compete
+    - at-will
+    - ptopolicy
+
+researcher:
+  insight_types:
+    anomaly:
+      enabled: true
+      domain_focus: |
+        HR document anomalies:
+        - Compensation outside typical band for the listed role/level/region (only if document mentions a band)
+        - Missing or outdated review cycle for the period
+        - Probationary period exceeding 12 months (jurisdiction-dependent — cite if doc mentions)
+        - Non-compete clause durations or geographic scope likely unenforceable in stated jurisdiction
+        - Missing at-will language where required by US state law (cite the state in the doc)
+        - PTO accrual rate inconsistent with stated tenure
+        - Stock vesting cliffs/schedules that don't match the employee's hire date
+    gap:
+      enabled: true
+      domain_focus: |
+        HR document gaps:
+        - Missing severance or notice provisions in employment contract
+        - No NDA / IP-assignment clause (or only one-way)
+        - No clear termination causes / dispute-resolution clause
+        - Missing benefits enumeration (medical, dental, vision, retirement)
+        - No equity vesting acceleration on change-of-control
+        - Annual-review schedule not defined
+        - Performance-improvement plan referenced but not attached
+    comparison:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Cross-document HR comparisons:
+        - Offer-letter terms vs final employment contract (look for promised but missing benefits)
+        - Pay band consistency across employees in the same role
+        - Severance-formula consistency across the company
+        - Policy-version drift between handbook revisions
+    scenario:
+      enabled: true
+      domain_focus: |
+        HR scenarios with concrete consequences:
+        - "If termination occurs before X date, vested equity = Y shares at strike $Z"
+        - "If employee invokes severance, total liability = N months base = $X"
+        - "If non-compete violated, stated remedies are A, B, C"
+        - "If review cycle X completed satisfactorily, eligible for stated bonus Y"
+    trend:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        HR trends:
+        - Compensation progression (base, bonus, equity over years)
+        - Performance-review-score trajectory
+        - PTO-balance trajectory (chronically high may indicate burnout risk; chronically zero may indicate over-utilization)
+        - Promotion cadence
+    recommendation:
+      enabled: true
+      domain_focus: |
+        HR recommendations grounded in document content:
+        - "Review compensation against external benchmark — current is X, role typically Y"
+        - "Trigger 90-day review (probationary period ends N days from hire date)"
+        - "Update non-compete to enforceable scope in stated jurisdiction"
+        - "Add change-of-control acceleration to equity grant"
+        - "Schedule equity vesting milestone meeting (cliff date approaching)"
+    conflict:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        HR document conflicts:
+        - Offer letter promises X benefit; employment contract excludes it
+        - Handbook v3 contradicts v2 on PTO policy
+        - Title in offer letter different from title in payroll record
+        - Reporting-line contradictions across docs
+    projection:
+      enabled: true
+      domain_focus: |
+        HR projections:
+        - Total comp over next vesting cliffs (assuming no role change)
+        - Severance liability if termination occurs at named windows
+        - PTO balance projection given current accrual + usage rate
+    next_action:
+      enabled: true
+      domain_focus: |
+        HR next actions:
+        - Annual review window opening / closing
+        - Probationary period end date (decision required)
+        - Equity vesting cliff or milestone date
+        - Benefits open-enrollment window
+        - Performance-improvement-plan checkpoint
+        - Contract renewal date
+        Severity scaled to days remaining.
+
+knowledge:
+  sanctioned_kbs:
+    - kb_id: hr_policies_v1
+      ref: "blob://kbs/hr_policies_v1.json"
+      describes: "Common HR policy patterns — for interpretation only."
+  citation_rule: "doc_grounded_first"
+
+watchlists:
+  - id: review_due
+    description: "Annual review due in 30 days"
+    eval: "expr:doc.next_review_date - now < 30d"
+    fires_insight_type: next_action
+  - id: probation_end
+    description: "Probationary period ending in 14 days"
+    eval: "expr:doc.probation_end_date - now < 14d"
+    fires_insight_type: next_action
+
+actions:
+  - action_id: generate_compensation_summary
+    title: "Generate total compensation summary"
+    action_type: artifact
+    artifact_template: "hr/compensation_summary.md"
+    requires_confirmation: false
+  - action_id: draft_offer_letter
+    title: "Draft offer letter from template"
+    action_type: artifact
+    artifact_template: "hr/offer_letter.md"
+    requires_confirmation: false
+
+visualizations:
+  - viz_id: compensation_progression_chart
+    insight_types: [trend]
+  - viz_id: tenure_milestones_timeline
+    insight_types: [next_action, trend]

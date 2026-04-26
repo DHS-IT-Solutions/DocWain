@@ -1,0 +1,140 @@
+name: contract
+version: "1.0"
+description: "General contracts — service agreements, MSAs, NDAs, license agreements, partnership terms. Reasons about risk allocation, IP, termination, dispute resolution."
+
+applies_when:
+  domain_classifier_labels: [contract, agreement, legal]
+  doc_type_hints: [service_agreement, msa, nda, license_agreement, partnership_agreement, sow]
+  keyword_evidence_min: 3
+  keywords:
+    - parties
+    - effective date
+    - termination
+    - indemnification
+    - confidentiality
+    - governing law
+    - dispute resolution
+    - intellectual property
+    - warranty
+    - force majeure
+    - assignment
+    - amendment
+
+researcher:
+  insight_types:
+    anomaly:
+      enabled: true
+      domain_focus: |
+        Contract anomalies:
+        - One-sided indemnification (only one party indemnifies the other)
+        - Liability cap absent OR set absurdly low (less than fees paid)
+        - Auto-renewal with no opt-out window (or extremely short)
+        - Governing-law in unusual jurisdiction relative to parties' locations
+        - IP ownership clauses where work-for-hire intent unclear
+        - Termination-for-convenience absent for service contracts
+        - Confidentiality term excessive (>5 years for non-trade-secret)
+        - Non-compete / non-solicit overly broad in scope or duration
+        - Force-majeure missing in long-duration contracts
+    gap:
+      enabled: true
+      domain_focus: |
+        Contract gaps:
+        - No data-processing addendum when vendor handles personal data
+        - No insurance-coverage requirement on counterparty
+        - Missing audit-rights clause
+        - No assignment / change-of-control provisions
+        - Subcontractor flow-down language missing
+        - Survival clauses missing or unclear
+        - No defined acceptance criteria for deliverables
+    comparison:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Contract comparison:
+        - Same-counterparty across contracts: terms drift over time
+        - Standard-form vs negotiated: which clauses moved
+        - Master vs SOW: SOW carving back from MSA
+        - Version-to-version: redline-style summary of substantive changes
+        - Sister-deals: terms favorability comparison
+    scenario:
+      enabled: true
+      domain_focus: |
+        Contract scenarios with concrete consequences:
+        - "If we breach Section X, remedies under Section Y are A, B, C"
+        - "If counterparty breaches SLA Z, our remedies are limited to N"
+        - "If contract auto-renews, total commitment over next term = $W"
+        - "If we exit early, termination-for-convenience cost = $V"
+        - "If IP dispute arises, indemnification cap = $U"
+    trend:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Contract trends:
+        - Pricing escalation across renewals
+        - Term-length progression (shorter = more flexible; longer = more locked)
+        - Rights granted vs withdrawn each amendment
+        - Liability cap progression
+    recommendation:
+      enabled: true
+      domain_focus: |
+        Contract recommendations:
+        - "Add mutual indemnification (current is one-sided per Section X)"
+        - "Cap liability at trailing 12-months fees minimum"
+        - "Add termination-for-convenience with 30-day notice"
+        - "Negotiate IP retention for our pre-existing materials"
+        - "Insert MFN clause given multi-customer exposure"
+    conflict:
+      enabled: true
+      requires_min_docs: 2
+      domain_focus: |
+        Contract conflicts:
+        - MSA Section X and SOW Section Y disagree on Z
+        - Exhibit A pricing differs from main-body pricing
+        - Confidentiality vs publication-rights clauses contradict
+        - Multiple amendments stack inconsistently
+        - Definitions used inconsistently across sections
+    projection:
+      enabled: true
+      domain_focus: |
+        Contract projections:
+        - Total cost over current term plus auto-renewals (if any)
+        - Liability-cap exposure if disputes arise
+        - Compliance obligations totaling over term
+    next_action:
+      enabled: true
+      domain_focus: |
+        Contract next actions:
+        - Renewal-notice deadline (drives renegotiate-or-let-it-renew decision)
+        - Audit-rights window opening
+        - Performance-review milestone per contract
+        - Survival-clause obligations after termination
+        - Amendment-effective date
+        Severity scaled by deadline proximity.
+
+knowledge:
+  sanctioned_kbs: []
+  citation_rule: "doc_grounded_first"
+
+watchlists:
+  - id: renewal_notice_window
+    description: "Contract renewal-notice window opening"
+    eval: "expr:doc.renewal_notice_date - now < 90d"
+    fires_insight_type: next_action
+
+actions:
+  - action_id: generate_clause_summary
+    title: "Generate clause-by-clause summary"
+    action_type: artifact
+    artifact_template: "contract/clause_summary.md"
+    requires_confirmation: false
+  - action_id: generate_redline_brief
+    title: "Generate redline negotiation brief"
+    action_type: artifact
+    artifact_template: "contract/redline_brief.md"
+    requires_confirmation: false
+
+visualizations:
+  - viz_id: contract_term_timeline
+    insight_types: [next_action, trend]
+  - viz_id: clause_comparison_table
+    insight_types: [comparison]

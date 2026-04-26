@@ -63,6 +63,7 @@ def run_profile_pass(inp: ProfilePassInputs) -> ProfilePassResult:
         domain_name=inp.adapter.name,
         document_text=_join_docs(inp.documents),
         kb_context="",
+        domain_focus=cfg.domain_focus,
     )
     try:
         raw = inp.llm_call(system=SYSTEM_PROMPT, user=user_prompt)
