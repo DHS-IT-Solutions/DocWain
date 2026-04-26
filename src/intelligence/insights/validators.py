@@ -33,16 +33,26 @@ def _tokens(text: str) -> set:
     return set(words)
 
 
-_OVERLAP_THRESHOLD = 0.4
+import os
+
+# Overlap threshold for the body-grounding rule. Calibrated:
+#   0.40 = strict (rejects natural interpretive language like "this value
+#          is relevant to the analysis" alongside grounded facts)
+#   0.25 = pragmatic (catches fabrication — wholly invented bodies have
+#          near-zero overlap — while letting the model write specific,
+#          grounded prose with normal connective vocabulary)
+# OQ1 separation rule is still preserved: external KB content goes to
+# external_kb_refs[]. The validator catches "body claims invented from
+# nowhere" but not "body that adds connective tissue around quoted facts."
+_OVERLAP_THRESHOLD = float(os.environ.get("INSIGHTS_BODY_OVERLAP_THRESHOLD") or 0.25)
 
 
 def require_body_grounded(insight: Insight) -> None:
     """Reject insights whose body introduces content not in evidence_doc_spans.
 
-    Heuristic — counts overlap of meaningful tokens between body and
-    concatenated quotes. ≥40% body tokens must appear in quotes.
-    Per spec Section 8 (OQ1): KB-derived content goes to external_kb_refs,
-    never into body text.
+    Heuristic — counts overlap of meaningful tokens (≥4 chars) between
+    body and concatenated quotes. Body must share at least
+    INSIGHTS_BODY_OVERLAP_THRESHOLD fraction of tokens with the quotes.
     """
     body_tokens = _tokens(insight.body)
     if not body_tokens:
