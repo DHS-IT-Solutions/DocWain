@@ -127,7 +127,30 @@ Apply at every LLM call site. Pre-validate; if clamped value <= 0, truncate the 
 | 2 | 05:56 | **High** | gateway/api.py:126 (no normalize call) | OPEN — fix queued | Screening category not normalised; "AI Authorship", "All" fail |
 | 3 | 07:03 | **Critical for 16 GB swap** | llm/clients.py (no max_tokens clamp) | OPEN — must-fix-before-swap | vLLM context overflow on long prompts |
 | 4 | 07:24 | High | embedding_service (concurrent attempts + lease) | OPEN — fix queued | Doc marked EMBEDDING_FAILED while fallback actually succeeded |
+| 5 | 08:37 | High | dataHandler.create_mongo_client (5s ssTimeout) | OPEN — fix queued | CosmosDB transient drops bubble as 500s on legacy endpoints (v1 intelligence) |
 | _ | _ | _ | _ | _ | (more issues appended below as the monitor surfaces them) |
+
+---
+
+## Issue #5 — CosmosDB transient timeouts surface as 500s on user-facing endpoints
+
+**First seen:** 2026-04-27 08:37:48 UTC; recurring **11 times in last 10 min**
+**User-visible symptom:** UAT tester hits `GET /api/profiles/{id}/intelligence` (the existing v1 endpoint), gets 500 with `ServerSelectionTimeoutError`. Refresh succeeds because the connection is back by then. Confusing UX.
+
+**Root cause:** `dataHandler.py:285` creates `MongoClient(primary_uri, serverSelectionTimeoutMS=5000)`. The 5 s budget is too aggressive for a globally-distributed CosmosDB cluster that occasionally takes 7–10 s to recover from a topology change. PyMongo gives up, the legacy endpoint bubbles the exception.
+
+**Why my recent fix doesn't help here:** I added a lazy collection resolver to `MongoIndexBackend` (Insights Portal, Issue #5 from yesterday) so the v2 endpoints survive these drops. The v1 `/api/profiles/{id}/intelligence` endpoint still uses the eager module-level `db = mongoClient[Config.MongoDB.DB]` from `dataHandler.py:314`, with no lazy re-resolve and no retry.
+
+**Severity:** **High.** UAT testers see random 500s on the intelligence endpoint. The pattern is "every ~minute, a few requests fail; later requests succeed." Mongo health endpoint stays green because it uses a different short-lived ping.
+
+**Proposed fixes (deferred — needs restart):**
+1. **Quick mitigation:** raise `serverSelectionTimeoutMS` from 5000 → 20000 to absorb topology-change windows. One-line change in `dataHandler.py:285`.
+2. **Per-endpoint retry:** wrap the legacy intelligence endpoint in a 1-retry-with-backoff decorator (200 ms/500 ms), so a transient drop doesn't surface to the user.
+3. **Long-term:** apply the lazy-resolver pattern (used in Insights Portal v2) to all dataHandler accessors so module-level captured clients can be refreshed transparently.
+
+**Workaround for UAT testers right now:**
+- If a profile-intelligence call returns 500, **refresh the page once** — the next call almost always succeeds (the cluster recovers in <10 s).
+- The Insights Portal v2 dashboard at `/api/profiles/v2/{id}/insights` is more resilient (lazy resolver was added yesterday) and tends to absorb these blips invisibly.
 
 ---
 
