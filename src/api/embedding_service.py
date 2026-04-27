@@ -97,6 +97,41 @@ except ImportError:
 
 logger = get_logger(__name__)
 
+
+def _dispatch_profile_intelligence_task(doc_id: str, profile_id: str, subscription_id: str) -> None:
+    """Dispatch profile intelligence onto its own Celery queue.
+
+    Replaces the old in-process daemon thread. Runs in parallel to the
+    embedding worker, never blocks the hot path, eliminates the post-upsert
+    Qdrant visibility race, and is retryable / observable.
+    Falls back to the synchronous import only if Celery dispatch fails (e.g.
+    Redis broker unavailable in a dev shell), preserving prior behaviour.
+    """
+    if not (doc_id and profile_id and subscription_id):
+        return
+    try:
+        from src.tasks.profile_intelligence import generate_profile_intelligence_task
+        generate_profile_intelligence_task.delay(doc_id, profile_id, subscription_id)
+        logger.info("Dispatched profile_intelligence task for %s", doc_id)
+        return
+    except Exception as exc:
+        logger.warning(
+            "Profile intelligence Celery dispatch failed for %s; falling back inline: %s",
+            doc_id, exc,
+        )
+    try:
+        from src.intelligence.profile_intelligence import generate_profile_intelligence
+        import threading as _threading
+        _threading.Thread(
+            target=generate_profile_intelligence,
+            args=(doc_id, profile_id, subscription_id),
+            daemon=True,
+            name=f"profile-intel-{doc_id[:12]}",
+        ).start()
+    except Exception:
+        logger.debug("Profile intelligence trigger skipped", exc_info=True)
+
+
 COMPLETED_STATUSES = {
     STATUS_EMBEDDING_COMPLETED,
     STATUS_TRAINING_COMPLETED,
@@ -2067,20 +2102,25 @@ def _process_blob(
         if not lease_id:
             if telemetry:
                 telemetry.increment("embed_pickles_lease_conflict_total")
-            # Reset stuck documents so they can be retried
+            # UAT Issue #4 fix (2026-04-27): when the lease retries exhaust,
+            # ANOTHER worker has been holding the lease and is actively
+            # processing this doc. The previous code marked the doc
+            # STATUS_TRAINING_FAILED here, racing the successful worker and
+            # leaving valid embeddings flagged as failed.
+            #
+            # Correct behaviour: yield silently. The other worker will set
+            # the terminal status (COMPLETED on success, FAILED on real
+            # failure). We only return a SKIPPED telemetry signal — no
+            # status write that could overwrite the other worker's success.
             _lease_doc_id = result.get("document_id")
-            if _lease_doc_id:
-                try:
-                    _lease_record = get_document_record(_lease_doc_id) or {}
-                    if _lease_record.get("status") == STATUS_TRAINING_STARTED:
-                        _safe_set_document_status(_lease_doc_id, STATUS_TRAINING_FAILED,
-                                                  "lease_conflict_after_retries",
-                                                  error_summary="lease_conflict")
-                except Exception:  # noqa: BLE001
-                    pass
+            logger.info(
+                "embed lease yielded for doc=%s — another worker holds the lease and is processing; "
+                "this attempt will not write status",
+                _lease_doc_id,
+            )
             result["status"] = "SKIPPED"
             result["error"] = "lease_conflict"
-            result["failed_reason"] = "lease_conflict"
+            result["failed_reason"] = "yielded_to_other_worker"
             return result
         if telemetry:
             telemetry.increment("embed_pickles_leased_total")
@@ -2402,18 +2442,8 @@ def _process_blob(
                 },
             )
             _set_document_status(doc_id, STATUS_TRAINING_COMPLETED, extra_fields=_training_success_fields())
-            # Profile intelligence: auto-generate insights (background, non-blocking)
-            try:
-                from src.intelligence.profile_intelligence import generate_profile_intelligence
-                import threading as _threading
-                _threading.Thread(
-                    target=generate_profile_intelligence,
-                    args=(doc_id, profile_id, subscription_id),
-                    daemon=True,
-                    name=f"profile-intel-{doc_id[:12]}",
-                ).start()
-            except Exception:
-                logger.debug("Profile intelligence trigger skipped", exc_info=True)
+            # Profile intelligence: parallel backend process on dedicated queue
+            _dispatch_profile_intelligence_task(doc_id, profile_id, subscription_id)
             deleted = False
             logger.info("Preserving pickle for %s after embedding (cleanup disabled)", doc_id)
             if telemetry:
@@ -2980,18 +3010,8 @@ def _process_blob(
             logger.warning("[DOC_INTELLIGENCE] Failed for %s: %s", doc_id, _di_exc)
 
         _set_document_status(doc_id, STATUS_TRAINING_COMPLETED, extra_fields=_training_success_fields())
-        # Profile intelligence: auto-generate insights (background, non-blocking)
-        try:
-            from src.intelligence.profile_intelligence import generate_profile_intelligence
-            import threading as _threading
-            _threading.Thread(
-                target=generate_profile_intelligence,
-                args=(doc_id, profile_id, subscription_id),
-                daemon=True,
-                name=f"profile-intel-{doc_id[:12]}",
-            ).start()
-        except Exception:
-            logger.debug("Profile intelligence trigger skipped", exc_info=True)
+        # Profile intelligence: parallel backend process on dedicated queue
+        _dispatch_profile_intelligence_task(doc_id, profile_id, subscription_id)
         emit_progress(doc_id, "completed", 1.0,
                       f"Training completed — {total_upserted} chunks stored",
                       extra={"chunks_stored": total_upserted, "collection": collection_name})
@@ -3754,18 +3774,8 @@ def _process_local_document(
             logger.warning("[DOC_INTELLIGENCE] Failed for %s: %s", document_id, _di_exc)
 
         _set_document_status(document_id, STATUS_TRAINING_COMPLETED, extra_fields=_training_success_fields())
-        # Profile intelligence: auto-generate insights (background, non-blocking)
-        try:
-            from src.intelligence.profile_intelligence import generate_profile_intelligence
-            import threading as _threading
-            _threading.Thread(
-                target=generate_profile_intelligence,
-                args=(document_id, profile_id, subscription_id),
-                daemon=True,
-                name=f"profile-intel-{document_id[:12]}",
-            ).start()
-        except Exception:
-            logger.debug("Profile intelligence trigger skipped", exc_info=True)
+        # Profile intelligence: parallel backend process on dedicated queue
+        _dispatch_profile_intelligence_task(document_id, profile_id, subscription_id)
         emit_progress(document_id, "completed", 1.0,
                       f"Training completed — {total_upserted} chunks stored",
                       extra={"chunks_stored": total_upserted, "collection": collection_name})
