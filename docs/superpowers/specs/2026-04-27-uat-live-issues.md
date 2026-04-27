@@ -152,6 +152,8 @@ Apply at every LLM call site. Pre-validate; if clamped value <= 0, truncate the 
 - If a profile-intelligence call returns 500, **refresh the page once** — the next call almost always succeeds (the cluster recovers in <10 s).
 - The Insights Portal v2 dashboard at `/api/profiles/v2/{id}/insights` is more resilient (lazy resolver was added yesterday) and tends to absorb these blips invisibly.
 
+**Scope update 13:36 UTC:** This same Mongo-timeout class is also firing inside the Celery `profile_intelligence` task (not just the API endpoint). Example: `Profile intelligence: failed for doc=69ef6402... profile=69ef1d72...`. Background-task failures are **silent** to the UAT user — the profile they uploaded will sit without an intelligence report until somebody re-dispatches the task. **Recovery action for ops:** monitor `/api/profiles/{profile_id}/intelligence` for `status=pending` longer than 5 minutes and re-trigger via `POST /api/profiles/{profile_id}/intelligence/regenerate` (the existing endpoint at `src/api/profile_intelligence_api.py:49`). The fix is the same as #5's: raise `serverSelectionTimeoutMS` and add task-level retry.
+
 ---
 
 ## Issue #4 — Race condition: embedding marked FAILED when fallback succeeded
