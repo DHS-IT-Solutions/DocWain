@@ -126,7 +126,56 @@ Apply at every LLM call site. Pre-validate; if clamped value <= 0, truncate the 
 | 1 | 05:18 | Medium | dataHandler.delete_embeddings:1298 | OPEN — fix queued | DELETE /embeddings 500 on collection-missing |
 | 2 | 05:56 | **High** | gateway/api.py:126 (no normalize call) | OPEN — fix queued | Screening category not normalised; "AI Authorship", "All" fail |
 | 3 | 07:03 | **Critical for 16 GB swap** | llm/clients.py (no max_tokens clamp) | OPEN — must-fix-before-swap | vLLM context overflow on long prompts |
+| 4 | 07:24 | High | embedding_service (concurrent attempts + lease) | OPEN — fix queued | Doc marked EMBEDDING_FAILED while fallback actually succeeded |
 | _ | _ | _ | _ | _ | (more issues appended below as the monitor surfaces them) |
+
+---
+
+## Issue #4 — Race condition: embedding marked FAILED when fallback succeeded
+
+**First seen:** 2026-04-27 07:24:55 UTC (doc `69ef0e63af9231725f586a58`, "complete-health-insurance-brochure.pdf")
+**User-visible symptom:** UAT tester sees status = `EMBEDDING_FAILED` on a doc that actually has clean extraction (45,080 chars, 199 expected chunks); they retry or assume bad doc.
+
+**Timeline (reconstructed from logs):**
+```
+07:24:23  embedding attempt #1 starts (request_id=75f7d150)
+07:24:24  attempt #1 downloads pickle (230,931 bytes)
+07:24:25  status → EMBEDDING_IN_PROGRESS
+07:24:27  attempt #1 detects incomplete pickle (coverage 0.39); kicks source-file fallback
+07:24:47  attempt #2 starts (request_id=7f347169) — RACE
+07:24:47  attempt #2 hits Lease conflict, retries
+07:24:54  attempt #1 finishes fallback, saves versioned blob (lease unavailable; uses versioned write)
+07:24:55  attempt #1 fallback assessment: coverage=1.0, total_chars=45080  ← SUCCESS
+07:24:55  status → EMBEDDING_FAILED                                       ← but marked failed
+07:24:55  attempt #1 logs "embedding end status=SKIPPED"
+07:25:02  pre-check shows expected_chunks=199 (extraction is fine)
+```
+
+**Root cause:** Two concurrent embedding attempts trigger on the same doc (likely an over-eager retry or duplicate Celery dispatch). Attempt #2 contends for the blob lease while attempt #1 is mid-fallback. The lease-conflict path in attempt #2 ends up writing the FAILED status even though attempt #1's fallback completed successfully. Read the chain:
+- `embedding_service.py` retries on lease conflict (3 attempts × backoff 1s/2s/4s)
+- After retries it gives up and marks the doc EMBEDDING_FAILED
+- But the *first* concurrent invocation already produced a clean fallback artifact and the doc is actually embeddable
+
+**Severity:** **High** for UAT — false-failure UX, will cause testers to discard valid documents.
+
+**Proposed fix (deferred — needs restart):**
+Two options:
+1. **Idempotency guard:** at task entry, check if status is already `EMBEDDING_IN_PROGRESS` and bail (don't re-dispatch). Eliminates the race entirely.
+2. **Lease-loser path:** when attempt #2 gives up on the lease, treat it as "another worker is handling it" → log + return without setting any failure status. The other worker will set the final status.
+
+Option 2 is safer for UAT-day; Option 1 should also be applied to prevent the race in the first place.
+
+```python
+# Sketch in src/api/embedding_service.py near line where Lease conflict gives up:
+except LeaseConflict:
+    logger.info("doc=%s embedding handled by another worker; this attempt yields", doc_id)
+    return {"status": "yielded", "reason": "lease_owned_by_other_worker"}
+    # do NOT call _set_status(doc_id, "EMBEDDING_FAILED")
+```
+
+**Workaround for UAT testers right now:**
+- Doc is recoverable. Check status — if `EMBEDDING_FAILED` AND extraction looks clean (coverage=1.0 in logs), retry the embedding via `POST /api/documents/embed`. Or wait — the second attempt may have set the bad status even though the first succeeded; a fresh embed call should pick up cleanly.
+- Tester-facing message could be: "If a doc shows EMBEDDING_FAILED but you can see chunks/extraction is fine, click retry once. The pipeline is recovering."
 
 ---
 
