@@ -209,3 +209,139 @@ except LeaseConflict:
 - One UAT tester (20.31.70.131) actively testing batch operations (~22 docs in a tight window).
 - Recent successful calls also visible in journal: `POST /api/gateway/screen → 200 (27.7s)` — screening is working.
 - Tester's batch of doc IDs (69eb1797…, 69eb1798…) suggests fresh upload + bulk processing flow.
+
+---
+
+# Findings reported by testers (consolidated 2026-04-27)
+
+Source files reviewed:
+- `Contracts- Observations and Defects(Testcase).csv` — 21 contract extraction tests (10/8/3 pass/fail/blank)
+- `Docwain_test(Sheet1).csv` — 4 cross-cutting defects (consolidated)
+- `Docwain_test_1.xlsx` — 10 health-insurance tests (3 pass, 7 fail) + 21 contract tests
+- `Docwain Testing Feedback.docx` — observations from 6 testers (Anmol, Pavithra, Rajasekar, Rajesh, Avyaktha, Sreekanth)
+
+---
+
+## Issue #6 — Multi-document tagging / screening sync gap (4 testers, highest-frequency)
+
+**Reported by:** Anmol, Avyaktha, Rajasekar, Rajesh — independently
+**User-visible symptom:** docs upload + tag, but only some appear in downstream surfaces:
+- Right-side document list shows fewer docs than uploaded (Anmol: 3 uploaded, 1 visible)
+- Screening module misses recently-added docs (Avyaktha: Offboarding worked, then Flexible Working + Resignation Letter "do not appear in screening interface")
+- Tag-and-Train shows only 1 doc out of 11 (Rajasekar)
+- Screening Reports tab empty even though screening_status=COMPLETED (Rajesh)
+
+**Likely root cause:** correlates with **Issue #4** (race-condition marking docs `EMBEDDING_FAILED` while fallback succeeded) — affected docs are completed in some collections but missing from screening/tag-train indexes. May also involve Mongo write-during-timeout (#5).
+**Severity:** **Highest of tester-reported set** — blocks core multi-doc workflows.
+
+## Issue #7 — Premium table / chart extraction failure on health-insurance docs
+
+**Reported by:** Health-insurance UAT (`Docwain_test_1.xlsx`)
+**User-visible symptom:** 7 of 10 tests fail because DocWain claims premium amounts are not in the document, when they are. Examples:
+- "give me details of the premium in health shield plan" → "premium details are absent"
+- "highest and lowest premium for plan health shield" → "Premium is not quantified" (expected: 7393 & 274287)
+- "premium range for >80 years if sum insured 500000" → "no premium calculations" (expected: 76523, 143880)
+- "analyse the premium chart" → "documents do not contain a premium chart" (it does)
+- "compare plans … less premium for age <40" → "Wrong result with dollars" (currency confusion)
+
+**Likely root cause:** premium data is in a **table image / multi-column scanned grid** that the current extraction pipeline misses (page-level OCR doesn't structure the grid). Once extraction misses it, retrieval can't find it; the LLM correctly says "not in evidence."
+**Severity:** **High** — entire premium-related Q&A surface unusable for insurance docs.
+
+## Issue #8 — Confident hallucination on contract field values (CRITICAL — wrong with citation)
+
+**Reported by:** Contracts UAT
+**User-visible symptom:** DocWain returns well-formatted, citation-backed answers that are factually wrong:
+
+| Doc | Field | DocWain returned | Actual |
+|---|---|---|---|
+| VEND004 | Material | "MAT 003 — Dairy Supply" with "extracted directly from source" | MAT001 Frozen Foods |
+| VEND004 | Payment terms | "Net 30 days, Code 0001 … confirmed in SOURCE-1" | Net 45 days, Code 0002 |
+| VEND004 | Signature date | "Supplier signature date: 01/12/2025 (from SOURCE-1)" | Field literally contains "Sales Director" |
+
+**Root cause:** model picks up similar-looking nearby spans when the actual field has unexpected content. The body-grounding validator catches *fabricated* claims but not *misquoted* spans — model IS quoting, just the wrong source segment.
+**Severity:** **Critical** — wrong values delivered with confidence and citation prose; users won't catch it.
+
+## Issue #9 — Cross-document / cross-source retrieval drops sources
+
+**Reported by:** Anmol ("Multi-Document Retrieval"), Contracts UAT (Tests 16, 17, 18, 20)
+**User-visible symptom:** two sub-cases:
+- **Multi-doc same-profile:** "When asked about employee wellbeing and flexibility, [the bot] only referenced the Flexible Work Policy and ignored the Sick Leave Policy."
+- **Cross-source:** comparing a contract doc with `sap_store_contracts` (structured source) — DocWain can't join.
+
+**Likely root cause:** retrieval `top_k` is too small or biased toward one doc source; AND when DocWain *does* retrieve from multiple, prompt size hits **Issue #3** (32K overflow) and gets truncated, dropping later docs.
+**Severity:** **High** — breaks the "research portal" multi-doc reasoning promise.
+
+## Issue #10 — Conflict identified but not resolved
+
+**Reported by:** `Docwain_test(Sheet1).csv`, Contracts Test 8 (VEND003 material consistency)
+**User-visible symptom:** DocWain finds two conflicting statements, presents both side-by-side, and stops there — no judgment, no resolution:
+- Sick Leave vs Offboarding: "Sick Leave Policy says unused sick leave is not paid out, while Offboarding Checklist suggests it may be included in final pay. The bot listed both without clarification."
+- VEND003: returned "Goods means … Fresh Vegetables — MAT003" *and* "Material: MAT003 — Dairy Supply" verbatim, without flagging the contradiction.
+
+**Likely root cause:** the chat reasoner's prompt has no "find contradictions" step. The Insights Portal v2 *has* a `conflict` insight type that does this — but `/api/ask` doesn't surface those persisted conflict insights.
+**Severity:** **High for trust** — users may act on the wrong half of a conflict.
+
+## Issue #11 — Consistency-check / "validate" prompts don't engage defect-detection mode
+
+**Reported by:** Contracts UAT (Tests 7, 12)
+**User-visible symptom:** prompts beginning "Validate …" or "Check if … is correct" elicit a quote-and-confirm response, not a defect-search:
+- Test 7 (VEND002 signature block): expected to flag that signature says "VEND001 Ltd" in a VEND002 contract. DocWain returned "all fields match the source" (the printed value matches itself; the model didn't compare against the contract's own header).
+- Test 12 (VEND004 signature date): expected to flag that the date field contains "Sales Director" (wrong type). DocWain made up "01/12/2025 from SOURCE-1."
+**Severity:** Medium (sibling to #8; prompt-mode root cause).
+
+## Issue #12 — Chat history not filtered by profile
+
+**Reported by:** Anmol (Problem 5)
+**User-visible symptom:** "After choosing the profile in chat history it is showing all the chats of my id irrespective of the profile."
+**Severity:** Medium — usability, not data integrity.
+
+## Issue #13 — Visualizations / charts disappear in chat history
+
+**Reported by:** `Docwain_test(Sheet1).csv` row 4, Anmol's table comment, health-insurance Test 3 ("visualisation is not relevant")
+**User-visible symptom:** charts render in-session but vanish on revisit. When they do render, sometimes irrelevant or wrong-currency.
+**Severity:** Medium — demo polish; trust hit when wrong currency.
+
+## Issue #14 — "View Report" button broken / Screening Reports tab empty
+
+**Reported by:** Anmol (Problem 4), Rajesh
+**User-visible symptom:** two adjacent bugs:
+- Anmol: clicking "view report" doesn't work
+- Rajesh: tab itself is empty for a doc whose status reads "Screening Completed"
+
+**Likely root cause:** could be the same as #6 (sync gap) hitting the report query path — the screening result row exists but is keyed differently from how the UI queries it.
+**Severity:** Medium.
+
+## Issue #15 — No loading / progress indicator during long operations
+
+**Reported by:** Anmol (Problem 2)
+**User-visible symptom:** "There should be some animation like loading/processing so that the end user is aware that the process is running in background not getting stuck and also if possible it should display estimated time based on the file size or number of files to upload."
+**Severity:** Medium — UX trust.
+
+## Issue #16 — Document overview is too generic
+
+**Reported by:** Health-insurance Test 10
+**User-visible symptom:** "It gives just a generic idea of the document with very less information." Expected plan names / specific numerics.
+**Severity:** Medium — first-contact experience for a new doc set is shallow.
+
+---
+
+## Consolidated tracker — all 16 issues
+
+| # | Severity | Source | Status | Component | Title |
+|---|---|---|---|---|---|
+| 1 | Medium | log | OPEN | dataHandler.delete_embeddings:1298 | DELETE /embeddings 500 on collection-missing |
+| 2 | High | log | OPEN | gateway/api.py:126 | Screening category not normalised |
+| 3 | **Critical for swap** | log | OPEN | llm/clients.py | vLLM context overflow on long prompts |
+| 4 | High | log | OPEN | embedding_service (race) | Doc EMBEDDING_FAILED while fallback succeeded |
+| 5 | High | log | OPEN | dataHandler (5s ssTimeout) | CosmosDB transient drops surface as 500 |
+| 6 | **Highest of tester reports** | tester ×4 | OPEN | embedding/screening sync | Multi-doc tag/sync gap |
+| 7 | High | tester | OPEN | extraction (table layer) | Premium tables not extracted (insurance) |
+| 8 | **Critical** | tester | OPEN | extraction precision + reasoner | Confident hallucination on contract values |
+| 9 | High | tester | OPEN | retrieval top_k + ctx clamp | Multi-doc retrieval drops sources |
+| 10 | High | tester | OPEN | reasoner prompt | Conflict identified but not resolved |
+| 11 | Medium | tester | OPEN | reasoner prompt | "Validate" prompts don't engage defect mode |
+| 12 | Medium | tester | OPEN | UI / chat history | Chat history not filtered by profile |
+| 13 | Medium | tester | OPEN | UI / visualizations | Charts vanish in history; wrong currency |
+| 14 | Medium | tester | OPEN | UI / screening reports | View Report button doesn't open |
+| 15 | Medium | tester | OPEN | UI / progress indicator | No loading animation / ETA |
+| 16 | Medium | tester | OPEN | reasoner prompt — overview | Document overview too generic |
