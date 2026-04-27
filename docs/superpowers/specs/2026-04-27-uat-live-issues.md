@@ -77,12 +77,55 @@ And/or add `"ai_authorship": "AI Authorship Likelihood"` as an alias in the tool
 
 ---
 
+## Issue #3 — vLLM context overflow: prompts can exceed `max_model_len` (CRITICAL for 16 GB swap)
+
+**First seen:** 2026-04-27 07:03:06 UTC; recurring (3+ instances in 3 s window from correlation `58cfc0b`)
+**User-visible symptom:** `/api/ask` (or any LLM-bearing path) fails after several retries with `HTTP Error 400: Bad Request` propagated from vLLM.
+
+**Concrete error from vLLM:**
+```
+vllm.exceptions.VLLMValidationError:
+  This model's maximum context length is 32768 tokens.
+  However, you requested 15360 output tokens and your prompt contains
+  at least 17409 input tokens, for a total of at least 32769 tokens.
+```
+
+Off by exactly 1 token. App-side log: `src.llm.clients - All local LLM retry attempts failed`.
+
+**Root cause:** Upstream prompt construction does not budget input + output against `max_model_len`. Specifically:
+- Reasoner/researcher build prompts that grow with document size, RAG context, KG context, and conversation history.
+- `max_tokens` defaults are static (apparently 15,360 in this case — very generous).
+- No dynamic clamping like `max_tokens = min(requested, max_model_len - input_tokens - safety_margin)`.
+
+**Severity:** **HIGH today, CRITICAL after 16 GB GPU swap.**
+- Today: occurs on a small fraction of requests with very large input contexts.
+- Post-swap: `max-model-len=8192` (per AWQ runbook). ANY request with >7K total tokens would fail. That's *most* multi-doc queries.
+
+**Proposed fix (deferred — needs restart):**
+Add an `_clamp_max_tokens` helper in `src/llm/clients.py` that computes the safe ceiling per call:
+```python
+def _clamp_max_tokens(prompt_tokens: int, requested: int, *, ctx_window: int, safety: int = 64) -> int:
+    available = max(0, ctx_window - prompt_tokens - safety)
+    return min(requested, available)
+```
+Apply at every LLM call site. Pre-validate; if clamped value <= 0, truncate the prompt at the upstream retrieval / RAG budget before sending.
+
+**Workaround for UAT testers right now:**
+- Avoid asking questions about extremely long single-document profiles. Multi-doc + long retrieval contexts are the trigger.
+- Re-asking the same question often succeeds because the conversation history / RAG hits a different size on retry.
+- The Insights Portal v2 dashboard / endpoints are unaffected — they don't invoke the LLM at query time.
+
+**Pre-swap action item (must address before 16 GB go-live):** before flipping the systemd unit to the 16 GB profile, ship Issue #3 fix. Otherwise the swap will degrade quality severely.
+
+---
+
 ## Issue tracker (live)
 
 | # | First seen | Severity | Component | Status | Title |
 |---|---|---|---|---|---|
 | 1 | 05:18 | Medium | dataHandler.delete_embeddings:1298 | OPEN — fix queued | DELETE /embeddings 500 on collection-missing |
 | 2 | 05:56 | **High** | gateway/api.py:126 (no normalize call) | OPEN — fix queued | Screening category not normalised; "AI Authorship", "All" fail |
+| 3 | 07:03 | **Critical for 16 GB swap** | llm/clients.py (no max_tokens clamp) | OPEN — must-fix-before-swap | vLLM context overflow on long prompts |
 | _ | _ | _ | _ | _ | (more issues appended below as the monitor surfaces them) |
 
 ---
