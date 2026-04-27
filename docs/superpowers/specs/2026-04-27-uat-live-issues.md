@@ -36,12 +36,54 @@ if "doesn't exist" in error_msg or "does not exist" in error_msg or "not found" 
 
 ---
 
+## Issue #2 — Screening category names not normalised before reaching engine (consolidates #2 & #3)
+
+**First seen:** 2026-04-27 05:56:35 UTC; recurring (3+ instances seen in 60 s window)
+**User-visible symptom:** UAT tester hits `POST /api/gateway/screen` with any of these category strings — all fail with `ValueError("No screening tools found for category '<X>'")`:
+- `category="AI Authorship"` → expected canonical name (per `src/intelligence/usage_help.py:388`); fails because tool's `category` attribute is `"AI Authorship Likelihood"`
+- `category="All"` (capital A) → fails because the `_resolve_tools_for_category` path checks for lowercase `"all"`; the executor's `if category == "all"` short-circuit at `unified_executor.py:266` is also case-sensitive
+
+**Root cause (single):** `src/gateway/api.py:126` passes `request.category` directly to the executor without calling `normalize_categories` from `src/screening/helpers.py:48`. That normaliser already does:
+- `lower().strip().replace(" ", "_").replace("-", "_")`
+- maps `"AI Authorship"` → `"ai_authorship"`, recognises `"All"` → `"all"`
+- raises `ValueError("Unsupported category 'X'")` for unknowns
+
+It is implemented but **never called** by the gateway. Without it, raw user input like `"AI Authorship"` and `"All"` passes through to a case-sensitive lookup.
+
+**Severity:** **HIGH for UAT.** All non-lowercase / non-snake_case category requests fail. Affects every UAT tester running the standard screening UI which sends human-readable category names.
+
+**Proposed fix (deferred — needs restart):**
+Two complementary changes:
+1. Wire `normalize_categories` in `src/gateway/api.py`:
+```python
+# Before passing to executor:
+from src.screening.helpers import normalize_categories
+normalized_cats = normalize_categories(request.category)
+result = await _executor.execute_screening(
+    categories=normalized_cats,
+    ...
+)
+```
+2. Align the AI Authorship tool's category attribute with the canonical name:
+```python
+# src/screening/tools/ai_authorship.py:13
+category = "AI Authorship"   # was: "AI Authorship Likelihood"
+```
+And/or add `"ai_authorship": "AI Authorship Likelihood"` as an alias in the tool resolver.
+
+**Workaround for UAT testers right now:**
+- For "All" → send `category="all"` (lowercase) or `category="run"`
+- For "AI Authorship" → send `category="AI Authorship Likelihood"` verbatim, or temporarily skip and continue with PII / Readability / Plagiarism / Bias / Compliance / Integrity.
+
+---
+
 ## Issue tracker (live)
 
 | # | First seen | Severity | Component | Status | Title |
 |---|---|---|---|---|---|
-| 1 | 05:18 | Medium | dataHandler.delete_embeddings | OPEN — fix queued | DELETE /embeddings 500 on collection-missing |
-| _ | _ | _ | _ | _ | (more issues will be appended below as the monitor surfaces them) |
+| 1 | 05:18 | Medium | dataHandler.delete_embeddings:1298 | OPEN — fix queued | DELETE /embeddings 500 on collection-missing |
+| 2 | 05:56 | **High** | gateway/api.py:126 (no normalize call) | OPEN — fix queued | Screening category not normalised; "AI Authorship", "All" fail |
+| _ | _ | _ | _ | _ | (more issues appended below as the monitor surfaces them) |
 
 ---
 
