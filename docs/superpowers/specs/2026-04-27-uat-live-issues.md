@@ -345,3 +345,45 @@ Source files reviewed:
 | 14 | Medium | tester | OPEN | UI / screening reports | View Report button doesn't open |
 | 15 | Medium | tester | OPEN | UI / progress indicator | No loading animation / ETA |
 | 16 | Medium | tester | OPEN | reasoner prompt — overview | Document overview too generic |
+| 17 | Low/Medium (security-adjacent) | gap probe 16:50 | OPEN — needs allow-list | extraction_pipeline_api / file validation | `.exe` and unknown binary file types accepted by upload endpoint |
+
+---
+
+## Wave A-E live verification (2026-04-27 ~16:40 UTC)
+
+After the coordinated restart, all 5 fix waves verified live:
+
+| Wave | Issue | Live evidence |
+|---|---|---|
+| A.1 | #1 | `DELETE /api/document/69eb1797.../embeddings` → HTTP 200 with `{"status":"success",...}` (was 500) |
+| A.2 | #2 | `category=["AI Authorship"]` → action `screen:ai_authorship`; `["All"]` → `screen:all`; `["PII Detection"]` → `screen:security`; `["Run"]` → `screen:all` |
+| B | #3 | clamp helper importable, 9 unit tests pass |
+| C | #5 | `dataHandler.serverSelectionTimeoutMS=20000`; legacy v1 endpoint has retry on `ServerSelectionTimeoutError`/`AutoReconnect` |
+| D | #4, #6 | lease-loser path no longer writes FAILED status; recovery script written; 0 docs currently stuck |
+| E | #8, #10, #11, #16 | All 4 prompt rules (UNPARSEABLE, CONFLICTS, CONSISTENCY-CHECK, RICH OVERVIEWS) present in `_SYSTEM_PROMPT` |
+
+**Test suite:** 132 passed, 2 skipped (placeholders), 0 failed.
+**Live concurrent test:** 5 parallel `/api/ask` returned 200 in 16.8 s wall (per-call 11–17 s, vLLM batching). No queue starvation.
+**v2 dashboard:** insights / actions / visualizations endpoints all serve real data on UAT demo profiles.
+
+## Status updates after Waves A-E
+
+| # | Was | Now |
+|---|---|---|
+| 1 | OPEN | **CLOSED** (live-verified HTTP 200) |
+| 2 | OPEN | **CLOSED** (4 category aliases live-verified) |
+| 3 | OPEN | **CLOSED** for round 2; 16 GB swap deferred so the env var stays at 32768 |
+| 4 | OPEN | **CLOSED** at code level; race no longer writes FAILED |
+| 5 | OPEN | **CLOSED** at code level; needs sustained observation tomorrow |
+| 6 | OPEN | **CLOSED** as a consequence of #4 fix; verify with testers tomorrow |
+| 7 | OPEN | **DEFERRED** to round 3 (Wave F — extraction precision is multi-day) |
+| 8 | OPEN | **MITIGATED** at prompt level; extraction-side fix in Wave F (deferred) |
+| 9 | OPEN | **PARTIALLY** mitigated by #3 fix (smaller prompts → fits in window); deeper retrieval-top-k tuning deferred |
+| 10 | OPEN | **CLOSED** at prompt level (Rule 12) |
+| 11 | OPEN | **CLOSED** at prompt level (Rule 13) |
+| 12 | OPEN | UI work — separate codebase |
+| 13 | OPEN | UI work — separate codebase |
+| 14 | OPEN | UI work; root may overlap with #6 (now closed) |
+| 15 | OPEN | UI work — separate codebase |
+| 16 | OPEN | **CLOSED** at prompt level (Rule 14) |
+| 17 | NEW | OPEN — needs allow-list, planned for round 3 |
