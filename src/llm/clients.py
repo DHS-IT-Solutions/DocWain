@@ -21,6 +21,95 @@ from urllib.error import HTTPError, URLError
 
 logger = get_logger(__name__)
 
+
+# ── Prompt size clamp (UAT Issue #3, 2026-04-27) ───────────────────
+#
+# vLLM raises VLLMValidationError when prompt_tokens + max_tokens > max_model_len.
+# Today's window is 32768; on a 16 GB GPU it would drop to 8192. Without
+# pre-clamp, oversized prompts surface as 400 Bad Request to the user.
+#
+# Strategy: count prompt tokens via tiktoken if available (cl100k_base is a
+# good approximation across modern transformer models); fall back to a
+# 4-chars-per-token heuristic. Clamp `max_tokens` to leave room. If the prompt
+# alone already exceeds the window, raise PromptTooLargeError so callers can
+# truncate retrieval/RAG inputs upstream rather than send a doomed request.
+
+class PromptTooLargeError(Exception):
+    """Raised when a prompt cannot fit in the model context window even with
+    max_tokens reduced to a minimum. Callers should narrow the prompt
+    (truncate retrieval, drop history) and retry."""
+
+    def __init__(self, prompt_tokens: int, ctx_window: int, min_output_tokens: int):
+        self.prompt_tokens = prompt_tokens
+        self.ctx_window = ctx_window
+        self.min_output_tokens = min_output_tokens
+        super().__init__(
+            f"prompt requires {prompt_tokens} tokens; window is {ctx_window} "
+            f"(need at least {min_output_tokens} for output)"
+        )
+
+
+_TIKTOKEN_ENCODER = None
+
+
+def _get_tiktoken_encoder():
+    global _TIKTOKEN_ENCODER
+    if _TIKTOKEN_ENCODER is False:
+        return None
+    if _TIKTOKEN_ENCODER is None:
+        try:
+            import tiktoken
+            _TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _TIKTOKEN_ENCODER = False
+            return None
+    return _TIKTOKEN_ENCODER
+
+
+def estimate_prompt_tokens(text: str) -> int:
+    """Estimate token count for `text`. Uses tiktoken when available;
+    falls back to a 4-chars-per-token heuristic."""
+    if not text:
+        return 0
+    enc = _get_tiktoken_encoder()
+    if enc is not None:
+        try:
+            return len(enc.encode(text, disallowed_special=()))
+        except Exception:
+            pass
+    return max(1, len(text) // 4)
+
+
+def clamp_max_tokens(
+    *,
+    prompt: str,
+    requested: int,
+    ctx_window: int = 32768,
+    safety: int = 256,
+    min_output: int = 64,
+) -> int:
+    """Clamp `requested` max_tokens so prompt + output fits in `ctx_window`
+    minus a safety margin. Raise PromptTooLargeError if even `min_output`
+    can't be honoured.
+
+    Args:
+        prompt: the full prompt text that will be sent to the model.
+        requested: caller's desired max_tokens (can be very generous).
+        ctx_window: model's max context length. Read from env LLM_CTX_WINDOW
+            in production so we don't have to redeploy on a model swap.
+        safety: tokens reserved for tokeniser disagreement + role tokens.
+        min_output: floor; below this we fail loud rather than emit empty.
+    """
+    prompt_tokens = estimate_prompt_tokens(prompt)
+    available = ctx_window - prompt_tokens - safety
+    if available < min_output:
+        raise PromptTooLargeError(
+            prompt_tokens=prompt_tokens, ctx_window=ctx_window,
+            min_output_tokens=min_output,
+        )
+    return min(requested, available)
+
+
 # ── Lazy imports from dw_newron to avoid circular deps ─────────────
 
 def _get_metrics_store():
@@ -837,6 +926,26 @@ class OpenAICompatibleClient:
             )
         call_temp = kwargs.get("temperature", self.temperature)
         call_max_tokens = kwargs.get("max_tokens", self.max_tokens)
+
+        # Clamp max_tokens against the model context window to prevent
+        # vLLM VLLMValidationError on oversized prompts (UAT Issue #3).
+        # ctx_window is configurable via LOCAL_LLM_CTX_WINDOW; default 32768
+        # matches today's max-model-len. Drop to 8192 on the 16 GB profile.
+        ctx_window = int(os.getenv("LOCAL_LLM_CTX_WINDOW", "32768"))
+        try:
+            call_max_tokens = clamp_max_tokens(
+                prompt=prompt,
+                requested=int(call_max_tokens),
+                ctx_window=ctx_window,
+            )
+        except PromptTooLargeError as exc:
+            logger.warning(
+                "Prompt too large for ctx_window=%d (prompt_tokens~%d); "
+                "caller must shorten retrieval/RAG and retry. %s",
+                ctx_window, exc.prompt_tokens, exc,
+            )
+            raise
+
         payload = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
