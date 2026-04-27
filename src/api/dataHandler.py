@@ -282,7 +282,7 @@ def create_mongo_client():
     fallback_uri = getattr(Config.MongoDB, "FALLBACK_URI", None)
     client = None
     try:
-        client = MongoClient(primary_uri, serverSelectionTimeoutMS=5000)
+        client = MongoClient(primary_uri, serverSelectionTimeoutMS=20000)
         try:
             client.admin.command("ping")
             logger.info(f"Connected to MongoDB primary URI: {primary_uri}")
@@ -294,7 +294,7 @@ def create_mongo_client():
 
     if fallback_uri and fallback_uri != primary_uri:
         try:
-            fallback_client = MongoClient(fallback_uri, serverSelectionTimeoutMS=5000)
+            fallback_client = MongoClient(fallback_uri, serverSelectionTimeoutMS=20000)
             try:
                 fallback_client.admin.command("ping")
                 logger.info(f"Connected to MongoDB fallback URI: {fallback_uri}")
@@ -308,7 +308,7 @@ def create_mongo_client():
         logger.warning("Using MongoClient without verified connectivity")
         return client
     logger.error("Unable to create MongoClient; falling back to localhost without ping")
-    return MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)
+    return MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=20000)
 
 mongoClient = create_mongo_client()
 db = mongoClient[Config.MongoDB.DB]

@@ -6,6 +6,9 @@ from fastapi import APIRouter, HTTPException, Query
 
 from src.utils.logging_utils import get_logger
 
+# Manual regenerate is intentionally synchronous over the same Celery task so
+# the UI can fire-and-forget; no separate code path means no schema drift.
+
 logger = get_logger(__name__)
 
 profile_intelligence_router = APIRouter(prefix="/profiles", tags=["Profile Intelligence"])
@@ -19,28 +22,119 @@ async def get_profile_intelligence(profile_id: str):
     - Profile overview (summary, key metrics, overall insights)
     - Per-document briefs (key facts, entities, insights per document)
     - Cross-document analysis (comparisons, trends, anomalies, rankings)
+
+    UAT Issue #5 (2026-04-27): use the shared dataHandler db (which has
+    a 20s serverSelectionTimeout and survives transient CosmosDB topology
+    drops) and add a single retry on ServerSelectionTimeoutError so a
+    transient drop doesn't propagate as 500 to the user.
     """
-    from pymongo import MongoClient
-    from src.api.config import Config
+    import time
+    from pymongo.errors import ServerSelectionTimeoutError, AutoReconnect
+    from src.api.dataHandler import db
 
-    client = MongoClient(Config.MongoDB.URI, serverSelectionTimeoutMS=5000)
-    db = client[Config.MongoDB.DB]
-    report = db["profile_intelligence"].find_one(
-        {"profile_id": profile_id},
-        {"_id": 0},
-    )
+    last_exc = None
+    for attempt in range(2):  # initial + 1 retry
+        try:
+            report = db["profile_intelligence"].find_one(
+                {"profile_id": profile_id},
+                {"_id": 0},
+            )
+            if not report:
+                return {
+                    "profile_id": profile_id,
+                    "status": "pending",
+                    "message": "No intelligence report yet. Reports generate automatically after documents complete processing.",
+                    "profile_overview": None,
+                    "document_briefs": [],
+                    "cross_document_analysis": None,
+                }
+            return report
+        except (ServerSelectionTimeoutError, AutoReconnect) as exc:
+            last_exc = exc
+            logger.warning(
+                "Mongo timeout on profile_intelligence (attempt %d/2): %s",
+                attempt + 1, exc,
+            )
+            if attempt == 0:
+                time.sleep(0.3)  # short backoff; cluster usually recovers
+                continue
+            # Both attempts failed — return a friendly 503 instead of 500
+            raise HTTPException(
+                status_code=503,
+                detail="Profile intelligence is temporarily unavailable. Please retry in a moment.",
+            )
 
-    if not report:
-        return {
-            "profile_id": profile_id,
-            "status": "pending",
-            "message": "No intelligence report yet. Reports generate automatically after documents complete processing.",
-            "profile_overview": None,
-            "document_briefs": [],
-            "cross_document_analysis": None,
-        }
 
-    return report
+@profile_intelligence_router.post(
+    "/{profile_id}/intelligence/regenerate",
+    summary="Force-regenerate profile intelligence for every doc in the profile",
+)
+async def regenerate_profile_intelligence_api(
+    profile_id: str,
+    subscription_id: Optional[str] = Query(None, description="Optional subscription scope"),
+    force: bool = Query(False, description="Rebuild every brief (true) vs only insufficient ones (false)"),
+    sync: bool = Query(False, description="Run inline (true) vs dispatch to Celery (false)"),
+):
+    """Force a fresh profile-intelligence build.
+
+    Default (``sync=false``) dispatches one Celery task per document onto the
+    ``profile_intelligence_queue`` and returns immediately with the count.
+    ``sync=true`` runs the regeneration inline — useful for ad-hoc fixes from
+    a shell, but blocking from the API process.
+    """
+    if sync:
+        try:
+            from src.intelligence.profile_intelligence import regenerate_profile_intelligence
+            return regenerate_profile_intelligence(profile_id, subscription_id, force=bool(force))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"regenerate failed: {exc}")
+
+    from src.api.document_status import get_documents_collection
+    docs_col = get_documents_collection()
+    if docs_col is None:
+        raise HTTPException(status_code=503, detail="documents collection unavailable")
+    q: Dict[str, Any] = {
+        "profile_id": profile_id,
+        "status": {"$in": [
+            "EMBEDDING_COMPLETED",
+            "TRAINING_COMPLETED",
+            "TRAINING_PARTIALLY_COMPLETED",
+            "SCREENING_COMPLETED",
+            "UNDER_REVIEW",
+        ]},
+    }
+    if subscription_id:
+        q["subscription_id"] = subscription_id
+    docs = list(docs_col.find(q, {"document_id": 1, "subscription_id": 1}))
+
+    try:
+        from src.tasks.profile_intelligence import generate_profile_intelligence_task
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"profile_intelligence task unavailable: {exc}")
+
+    dispatched = 0
+    skipped = 0
+    for d in docs:
+        doc_id = d.get("document_id")
+        sub = d.get("subscription_id") or subscription_id
+        if not doc_id or not sub:
+            skipped += 1
+            continue
+        try:
+            generate_profile_intelligence_task.delay(doc_id, profile_id, sub)
+            dispatched += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("regenerate dispatch failed for %s: %s", doc_id, exc)
+            skipped += 1
+
+    return {
+        "profile_id": profile_id,
+        "subscription_id": subscription_id,
+        "scanned": len(docs),
+        "dispatched": dispatched,
+        "skipped": skipped,
+        "force": bool(force),
+    }
 
 
 @profile_intelligence_router.post(
