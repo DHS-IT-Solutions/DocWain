@@ -45,13 +45,38 @@ _ALLOWED_CATEGORIES = {
     "all",
 }
 
+# Aliases that resolve to canonical category keys. Added 2026-04-27 (UAT Issue #2)
+# so human-readable inputs like "AI Authorship Likelihood", "Run", "PII Detection"
+# don't error out at the gateway. Map all to lowercase snake_case canonical names.
+_CATEGORY_ALIASES = {
+    "ai_authorship_likelihood": "ai_authorship",
+    "ai_authorship_detection": "ai_authorship",
+    "pii": "security",
+    "pii_detection": "security",
+    "plagiarism": "quality",
+    "bias": "quality",
+    "bias_detection": "quality",
+    "readability": "language",
+    "run": "all",
+    "everything": "all",
+}
+
+
 def normalize_categories(raw_categories: Optional[List[str]]) -> List[str]:
-    """Normalize and validate screening category names."""
+    """Normalize and validate screening category names.
+
+    Accepts human-readable forms ("AI Authorship", "All", "PII Detection")
+    and snake_case forms ("ai_authorship", "all"). Unknown values raise
+    ValueError (which the gateway translates to 400 — never a 500).
+    """
     if not raw_categories:
         return ["all"]
     normalized = []
     for cat in raw_categories:
         key = cat.strip().lower().replace(" ", "_").replace("-", "_")
+        # Apply alias map first
+        if key in _CATEGORY_ALIASES:
+            key = _CATEGORY_ALIASES[key]
         if key == "ai_authorship":
             normalized.append("ai_authorship")
         elif key in _ALLOWED_CATEGORIES:

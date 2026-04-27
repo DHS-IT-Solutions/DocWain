@@ -5,7 +5,7 @@ from src.utils.logging_utils import get_logger
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .unified_executor import ScreeningExecutor
@@ -117,13 +117,24 @@ async def screen_documents(
     # Resolve profile/subscription from session headers
     ctx = _resolve_session_context(x_session_id, x_subscription_id)
 
+    # Normalise category names BEFORE downstream lookup. Without this, human-readable
+    # forms like "AI Authorship" or "All" (capital A) reach the engine's case-sensitive
+    # CATEGORY_TOOL_MAP and fail with "No screening tools found for category 'X'".
+    # The normaliser is implemented in src/screening/helpers.py:48 but was previously
+    # not invoked here. Fixed 2026-04-27 (UAT Issue #2).
+    from src.screening.helpers import normalize_categories
+    try:
+        normalized_cats = normalize_categories(request.category)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     # For batch ("run"), build profile_ids from session context
     profile_ids: Optional[List[str]] = None
-    if "run" in request.category and ctx["profile_id"]:
+    if "run" in normalized_cats and ctx["profile_id"]:
         profile_ids = [ctx["profile_id"]]
 
     result = await _executor.execute_screening(
-        categories=request.category,
+        categories=normalized_cats,
         doc_ids=request.doc_ids,
         profile_ids=profile_ids,
         options={},

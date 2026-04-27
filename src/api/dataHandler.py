@@ -1295,7 +1295,17 @@ def delete_embeddings(subscription_id: str, profile_id: str, document_id: str):
 
     except Exception as e:
         error_msg = str(e)
-        if "doesn't exist" in error_msg or "not found" in error_msg.lower() or "Not Found" in error_msg:
+        # Treat collection-missing as success (intent: there are no embeddings to delete).
+        # Qdrant's actual error string is "collection does not exist" (no apostrophe);
+        # Mongo / other clients may emit other forms. Normalise via lower-case substring
+        # checks across the common variants.
+        em_lower = error_msg.lower()
+        if (
+            "doesn't exist" in error_msg
+            or "does not exist" in em_lower
+            or "not found" in em_lower
+            or "no such collection" in em_lower
+        ):
             logger.debug("[DELETE_EMBEDDINGS] Collection not found (no embeddings to delete) for doc=%s", document_id)
             return {"status": "ok", "message": "no embeddings to delete", "document_id": document_id}
         logger.error("[DELETE_EMBEDDINGS] Failed for doc=%s: %s", document_id, error_msg)
